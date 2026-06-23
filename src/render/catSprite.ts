@@ -2,6 +2,8 @@
  * Послойная сборка котика из фенотипа (плейсхолдер-арт на Pixi Graphics).
  * Стиль: милый, крупные глаза, псевдо-3D объём через мягкие тени/блики (AO).
  * Две позы: 'sit' (сидит спереди) и 'hang' (вис за шкирку).
+ * Половой диморфизм: самец крупнее, шире морда, щёки-jowls и грозные брови;
+ * самка мельче, мягче, с ресничками.
  * На Этапе 3 слои заменятся ИИ-спрайтами, но структура и логика
  * «фенотип → внешний вид» сохранится.
  */
@@ -13,6 +15,7 @@ import {
 } from './palette.js';
 
 export type CatPose = 'sit' | 'hang';
+export type CatSex = 'male' | 'female';
 
 interface CatColors {
   body: number;
@@ -39,6 +42,24 @@ function volEllipse(cx: number, cy: number, hw: number, hh: number, color: numbe
   return g;
 }
 
+/**
+ * Мягкий пушистый контур (длинная шерсть) вокруг эллипса.
+ * Рисуется ПОЗАДИ заливки, чтобы тафты шерсти выглядывали по краю тела.
+ * Не остроконечная «звезда»: много мелких тафт малой амплитуды.
+ */
+function furFringe(cx: number, cy: number, hw: number, hh: number, color: number, tuft = 12): Graphics {
+  const g = new Graphics();
+  const n = 44;
+  const pts: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const out = i % 2 === 0 ? tuft : tuft * 0.25;
+    pts.push(cx + Math.cos(a) * (hw + out), cy + Math.sin(a) * (hh + out));
+  }
+  g.poly(pts).fill(color);
+  return g;
+}
+
 /** Большой выразительный глаз. */
 function drawEye(cx: number, cy: number, iris: number): Graphics {
   const g = new Graphics();
@@ -53,9 +74,9 @@ function drawEye(cx: number, cy: number, iris: number): Graphics {
 }
 
 /** Ухо в локальных координатах головы (центр головы = 0,0). */
-function drawEar(side: -1 | 1, shape: Phenotype['earShape'], fur: number): Graphics {
+function drawEar(side: -1 | 1, shape: Phenotype['earShape'], fur: number, spread = 38): Graphics {
   const g = new Graphics();
-  const x = side * 38;
+  const x = side * spread;
   const inner = mix(SKIN_PINK, fur, 0.3);
   if (shape === 'fold') {
     g.poly([x - 22, -44, x + 22, -44, x + side * 6, -20]).fill(fur);
@@ -122,9 +143,15 @@ function drawWhiteSpotting(amount: number, cx: number, cy: number, hw: number, h
 }
 
 /** Голова с ушами, глазами и мордой. Локальный центр головы = (0,0). */
-function buildHead(p: Phenotype, c: CatColors): Container {
+function buildHead(p: Phenotype, c: CatColors, sex: CatSex): Container {
   const h = new Container();
-  h.addChild(volEllipse(0, 0, 56, 54, c.body));
+  const long = p.coatLength === 'long';
+  const male = sex === 'male';
+  const hw = male ? 62 : 54;  // самец — шире
+  const hh = male ? 50 : 54;  // самец — ниже/тяжелее, самка — округлее
+
+  if (long) h.addChild(furFringe(0, 0, hw, hh, lighten(c.body, 0.12), 12));
+  h.addChild(volEllipse(0, 0, hw, hh, c.body));
 
   if (p.pointed) {
     const m = new Graphics();
@@ -132,8 +159,20 @@ function buildHead(p: Phenotype, c: CatColors): Container {
     h.addChild(m);
   }
 
-  h.addChild(drawEar(-1, p.earShape, c.point));
-  h.addChild(drawEar(1, p.earShape, c.point));
+  const earSpread = male ? 44 : 38;
+  h.addChild(drawEar(-1, p.earShape, c.point, earSpread));
+  h.addChild(drawEar(1, p.earShape, c.point, earSpread));
+
+  // самец: тяжёлые щёки-jowls (как у взрослого кота-производителя)
+  if (male) {
+    const j = new Graphics();
+    for (const sx of [-1, 1] as const) {
+      j.ellipse(sx * 48, 24, 20, 16).fill(c.body);
+      j.ellipse(sx * 48, 28, 15, 9).fill({ color: 0x000000, alpha: 0.08 });
+      j.ellipse(sx * 52, 18, 8, 6).fill({ color: 0xffffff, alpha: 0.12 });
+    }
+    h.addChild(j);
+  }
 
   if (!p.white && p.pattern) {
     const m = new Graphics();
@@ -147,58 +186,75 @@ function buildHead(p: Phenotype, c: CatColors): Container {
   const iris = eyeColor(p.eyeColor);
   eyes.addChild(drawEye(-24, -6, iris));
   eyes.addChild(drawEye(24, -6, p.oddEyed ? eyeColor('copper') : iris));
+  // самка: реснички во внешних уголках (моргают вместе с глазами)
+  if (!male) {
+    const l = new Graphics();
+    for (const sx of [-1, 1] as const) {
+      const ex = sx * 24;
+      l.moveTo(ex + sx * 20, -12); l.lineTo(ex + sx * 32, -18);
+      l.moveTo(ex + sx * 21, -7); l.lineTo(ex + sx * 34, -10);
+    }
+    l.stroke({ width: 2.5, color: 0x3a2f2a, cap: 'round' });
+    eyes.addChild(l);
+  }
   h.addChild(eyes);
+
+  // самец: грозные брови (наклон к центру вниз)
+  if (male) {
+    const b = new Graphics();
+    b.moveTo(-42, -40); b.lineTo(-12, -30);
+    b.moveTo(42, -40); b.lineTo(12, -30);
+    b.stroke({ width: 6, color: darken(c.point, 0.35), cap: 'round' });
+    h.addChild(b);
+  }
 
   h.addChild(drawFace());
   return h;
 }
 
 /** Поза «сидит спереди». */
-function buildSit(p: Phenotype, c: CatColors): Container {
+function buildSit(p: Phenotype, c: CatColors, sex: CatSex): Container {
   const root = new Container();
+  const long = p.coatLength === 'long';
+  const bw = sex === 'male' ? 62 : 54; // самец — массивнее
+  const bh = 64;
 
   const shadow = new Graphics();
-  shadow.ellipse(0, 140, 72, 16).fill({ color: 0x000000, alpha: 0.12 });
+  shadow.ellipse(0, 140, bw * 1.24, 16).fill({ color: 0x000000, alpha: 0.12 });
   root.addChild(shadow);
 
+  // хвост рисуем СЗАДИ (слева): при флипе по X он всегда трейлит за движением
   const tail = new Graphics();
-  tail.moveTo(46, 100);
-  tail.quadraticCurveTo(122, 74, 106, 10);
-  tail.stroke({ width: p.coatLength === 'long' ? 34 : 24, color: c.point, cap: 'round' });
+  tail.moveTo(-bw * 0.8, 100);
+  tail.quadraticCurveTo(-bw * 2.0, 74, -bw * 1.78, 10);
+  tail.stroke({ width: long ? 34 : 24, color: c.point, cap: 'round' });
   root.addChild(tail);
 
-  if (p.coatLength === 'long') {
-    const ruff = new Graphics();
-    const pts: number[] = [];
-    const N = 22;
-    for (let i = 0; i < N; i++) {
-      const a = (i / N) * Math.PI * 2;
-      const r = 76 + (i % 2 === 0 ? 10 : -2);
-      pts.push(Math.cos(a) * r, -28 + Math.sin(a) * r);
-    }
-    ruff.poly(pts).fill(lighten(c.body, 0.12));
-    root.addChild(ruff);
-  }
+  if (long) root.addChild(furFringe(0, 74, bw, bh, lighten(c.body, 0.1)));
 
-  root.addChild(volEllipse(0, 74, 58, 64, c.body));            // тело
+  root.addChild(volEllipse(0, 74, bw, bh, c.body));            // тело
   const paws = new Graphics();
-  paws.ellipse(-26, 122, 18, 14).fill(c.body);
-  paws.ellipse(26, 122, 18, 14).fill(c.body);
-  paws.ellipse(-26, 122, 18, 14).fill({ color: 0xffffff, alpha: 0.12 });
+  for (const sx of [-1, 1] as const) paws.ellipse(sx * bw * 0.45, 122, 18, 14).fill(c.body);
+  paws.ellipse(-bw * 0.45, 122, 18, 14).fill({ color: 0xffffff, alpha: 0.12 });
   root.addChild(paws);
 
-  if (!p.white && p.pattern) root.addChild(drawBodyPattern(p, c, 0, 74, 58, 64));
-  if (!p.white) root.addChild(drawWhiteSpotting(p.whiteAmount, 0, 74, 58, 64));
+  if (!p.white && p.pattern) root.addChild(drawBodyPattern(p, c, 0, 74, bw, bh));
+  if (!p.white) root.addChild(drawWhiteSpotting(p.whiteAmount, 0, 74, bw, bh));
 
-  const head = buildHead(p, c);
+  // длинная шерсть: пушистый воротник на груди (вместо «звезды» на голове)
+  if (long) root.addChild(furFringe(0, 30, bw * 0.95, 28, lighten(c.body, 0.14), 16));
+
+  const head = buildHead(p, c, sex);
   head.position.set(0, -34);
   root.addChild(head);
   return root;
 }
 
 /** Поза «вис за шкирку»: тело вытянуто вниз, лапки и хвост свисают. */
-function buildHang(p: Phenotype, c: CatColors): Container {
+function buildHang(p: Phenotype, c: CatColors, sex: CatSex): Container {
   const root = new Container();
+  const long = p.coatLength === 'long';
+  const bw = sex === 'male' ? 46 : 40;
 
   // «защип» шкирки сверху (где держит рука)
   const scruff = new Graphics();
@@ -207,38 +263,39 @@ function buildHang(p: Phenotype, c: CatColors): Container {
 
   // хвост свисает
   const tail = new Graphics();
-  tail.moveTo(26, 70);
-  tail.quadraticCurveTo(54, 130, 40, 188);
-  tail.stroke({ width: p.coatLength === 'long' ? 30 : 22, color: c.point, cap: 'round' });
+  tail.moveTo(bw * 0.6, 70);
+  tail.quadraticCurveTo(bw * 1.3, 130, bw * 0.9, 188);
+  tail.stroke({ width: long ? 30 : 22, color: c.point, cap: 'round' });
   root.addChild(tail);
 
   // передние лапки болтаются
   const legs = new Graphics();
-  for (const sx of [-24, 24]) {
+  for (const sx of [-bw * 0.55, bw * 0.55]) {
     legs.roundRect(sx - 9, 56, 18, 78, 9).fill(c.body);
     legs.circle(sx, 138, 12).fill(c.body);
   }
   root.addChild(legs);
 
+  if (long) root.addChild(furFringe(0, 52, bw, 82, lighten(c.body, 0.1), 10));
   // вытянутое тело
-  root.addChild(volEllipse(0, 52, 42, 82, c.body));
+  root.addChild(volEllipse(0, 52, bw, 82, c.body));
   // задние лапки внизу
   const back = new Graphics();
   back.ellipse(-15, 150, 14, 12).fill(c.body);
   back.ellipse(15, 150, 14, 12).fill(c.body);
   root.addChild(back);
 
-  if (!p.white && p.pattern) root.addChild(drawBodyPattern(p, c, 0, 52, 42, 82));
-  if (!p.white) root.addChild(drawWhiteSpotting(p.whiteAmount, 0, 52, 42, 82));
+  if (!p.white && p.pattern) root.addChild(drawBodyPattern(p, c, 0, 52, bw, 82));
+  if (!p.white) root.addChild(drawWhiteSpotting(p.whiteAmount, 0, 52, bw, 82));
 
-  const head = buildHead(p, c);
+  const head = buildHead(p, c, sex);
   head.position.set(0, -56);
   root.addChild(head);
   return root;
 }
 
 /** Собирает котика в заданной позе. Глаза доступны как getChildByLabel('eyes', true). */
-export function buildCat(p: Phenotype, pose: CatPose = 'sit'): Container {
+export function buildCat(p: Phenotype, pose: CatPose = 'sit', sex: CatSex = 'female'): Container {
   const c = resolveColors(p);
-  return pose === 'hang' ? buildHang(p, c) : buildSit(p, c);
+  return pose === 'hang' ? buildHang(p, c, sex) : buildSit(p, c, sex);
 }

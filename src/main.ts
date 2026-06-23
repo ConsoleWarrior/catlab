@@ -102,8 +102,9 @@ async function main() {
     return t;
   }
 
-  function makeEntry(g: Genotype, x: number, homeY: number, scale: number, name: string): Entry {
-    const view = buildCat(expressPhenotype(g), 'sit');
+  function makeEntry(g: Genotype, x: number, homeY: number, baseScale: number, name: string): Entry {
+    const scale = baseScale * (g.sex === 'male' ? 1.12 : 0.9); // самец крупнее самки
+    const view = buildCat(expressPhenotype(g), 'sit', g.sex);
     view.scale.set(scale);
     view.position.set(x, homeY);
     view.eventMode = 'static';
@@ -163,7 +164,7 @@ async function main() {
     entry.dragging = true;
     entry.view.visible = false;
     entry.label.visible = false;
-    const view = buildCat(expressPhenotype(entry.g), 'hang');
+    const view = buildCat(expressPhenotype(entry.g), 'hang', entry.g.sex);
     view.scale.set(entry.scale);
     view.pivot.set(0, -104); // держим за «шкирку» (верхняя точка)
     view.position.set(e.global.x, e.global.y);
@@ -214,7 +215,8 @@ async function main() {
     const W = app.screen.width, H = app.screen.height;
     const textures: Texture[] = [];
     for (let i = 0; i < 16; i++) {
-      const c = buildCat(expressPhenotype(randomCat(rng)));
+      const gc = randomCat(rng);
+      const c = buildCat(expressPhenotype(gc), 'sit', gc.sex);
       textures.push(app.renderer.generateTexture(c));
       c.destroy({ children: true });
     }
