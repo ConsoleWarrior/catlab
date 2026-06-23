@@ -9,21 +9,23 @@ import {
   Application, Container, Graphics, Rectangle,
 } from 'pixi.js';
 import type { Text, Texture, FederatedPointerEvent } from 'pixi.js';
-import { makeRng, randomCat } from '../genetics/index.js';
+import { makeRng, randomCat, expressPhenotype } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
+import { buildCat } from '../render/catSprite.js';
 import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
   passiveRatePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
 } from '../game/index.js';
+import { isBusy } from '../game/index.js';
 import type { Cat, GameState } from '../game/index.js';
-import type { Room, UiContext } from './context.js';
+import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture } from './catTextures.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
-import { buildCatMenu, buildOrdersPanel, buildHelpPanel } from './overlays.js';
+import { buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
 
@@ -40,6 +42,7 @@ export class Game implements UiContext {
   private readonly world = new Container();
   private readonly hud = new Container();
   private readonly nav = new Container();
+  private readonly dragLayer = new Container();
   private readonly overlayLayer = new Container();
   private readonly toastBox = new Container();
   private rooms: Room[] = [];
@@ -51,6 +54,10 @@ export class Game implements UiContext {
   private dragging = false;
   private startPx = 0;
   private startWorldX = 0;
+
+  // взятие котика за шкирку
+  private pendingGrab: { opts: GrabOpts; sx: number; sy: number } | null = null;
+  private grab: { opts: GrabOpts; sprite: Container; x: number; y: number; px: number } | null = null;
 
   // HUD-ссылки
   private coinsT!: Text;
@@ -82,7 +89,7 @@ export class Game implements UiContext {
     this.loadState(reset);
 
     this.app.stage.eventMode = 'static';
-    this.app.stage.addChild(this.world, this.hud, this.nav, this.overlayLayer, this.toastBox);
+    this.app.stage.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox);
 
     this.layout();
     this.installInput();
@@ -105,6 +112,7 @@ export class Game implements UiContext {
         closeOverlay: () => this.closeOverlay(),
         give: (c = 5000, x = 50, d = 500) => { this.state.coins += c; this.state.crystals += x; this.state.dna += d; this.commit(); },
         demo: () => this.demo(),
+        demoGrab: () => this.demoGrab(),
         save: () => this.save(),
       };
     }
@@ -133,6 +141,20 @@ export class Game implements UiContext {
       }
     }
     this.commit();
+  }
+
+  /** DEV: показать котика «на весу» по центру (для скриншота взятия за шкирку). */
+  private demoGrab(): void {
+    const cat = this.state.cats.find((c) => c.location === 'nursery' && !isBusy(this.state, c.id));
+    if (!cat) return;
+    const cx = this.roomW / 2;
+    const cy = this.roomH / 2;
+    this.pendingGrab = {
+      opts: { cat, displayH: 130, hide: () => {}, show: () => {}, onTap: () => {}, onDrop: () => {} },
+      sx: cx, sy: cy,
+    };
+    this.beginGrab({ global: { x: cx, y: cy } } as FederatedPointerEvent);
+    if (this.grab) { this.grab.x = cx; this.grab.y = cy - 30; }
   }
 
   // --- состояние ---
@@ -216,6 +238,40 @@ export class Game implements UiContext {
   openHelp(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildHelpPanel(this, close));
+  }
+
+  openUpgrades(title: string, ids: string[]): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildUpgradesPanel(this, title, ids, close));
+  }
+
+  startGrab(opts: GrabOpts, e: FederatedPointerEvent): void {
+    if (this.overlayOpen) return;
+    this.pendingGrab = { opts, sx: e.global.x, sy: e.global.y };
+  }
+
+  private beginGrab(e: FederatedPointerEvent): void {
+    if (!this.pendingGrab) return;
+    const opts = this.pendingGrab.opts;
+    opts.hide();
+    const hang = buildCat(expressPhenotype(opts.cat.genotype), 'hang', opts.cat.genotype.sex);
+    const s = (opts.displayH * 1.6) / Math.max(1, hang.height);
+    hang.scale.set(s);
+    hang.pivot.set(0, -104);
+    hang.position.set(e.global.x, e.global.y);
+    this.dragLayer.addChild(hang);
+    this.grab = { opts, sprite: hang, x: e.global.x, y: e.global.y, px: e.global.x };
+    this.app.canvas.style.cursor = 'grabbing';
+  }
+
+  private endGrab(): void {
+    if (!this.grab) return;
+    const gx = this.grab.x;
+    this.grab.sprite.destroy({ children: true });
+    this.grab.opts.show();
+    this.grab.opts.onDrop(gx);
+    this.grab = null;
+    this.app.canvas.style.cursor = 'default';
   }
 
   // --- раскладка ---
@@ -393,27 +449,37 @@ export class Game implements UiContext {
 
   private installInput(): void {
     this.app.stage.on('pointerdown', (e: FederatedPointerEvent) => {
-      if (this.overlayOpen) return;
+      if (this.overlayOpen || this.pendingGrab) return; // котика берём — комнату не свайпим
       this.pointerActive = true;
       this.dragging = false;
       this.startPx = e.global.x;
       this.startWorldX = this.world.x;
     });
     this.app.stage.on('pointermove', (e: FederatedPointerEvent) => {
-      if (!this.pointerActive || this.overlayOpen) return;
-      const dx = e.global.x - this.startPx;
-      if (Math.abs(dx) > 10) this.dragging = true;
+      if (this.overlayOpen) return;
+      // взятие котика за шкирку (приоритетнее свайпа)
+      if (this.pendingGrab && !this.grab) {
+        const dx = e.global.x - this.pendingGrab.sx;
+        const dy = e.global.y - this.pendingGrab.sy;
+        if (dx * dx + dy * dy > 64) this.beginGrab(e);
+      }
+      if (this.grab) { this.grab.x = e.global.x; this.grab.y = e.global.y; return; }
+      // свайп комнат
+      if (!this.pointerActive) return;
+      const sdx = e.global.x - this.startPx;
+      if (Math.abs(sdx) > 10) this.dragging = true;
       if (this.dragging) {
         const minX = -(this.rooms.length - 1) * this.roomW;
-        this.world.x = Math.max(minX, Math.min(0, this.startWorldX + dx));
+        this.world.x = Math.max(minX, Math.min(0, this.startWorldX + sdx));
       }
     });
-    const up = (e: FederatedPointerEvent): void => {
+    const up = (): void => {
+      if (this.grab) { this.endGrab(); this.pendingGrab = null; return; }
+      if (this.pendingGrab) { this.pendingGrab.opts.onTap(); this.pendingGrab = null; return; }
       if (!this.pointerActive) return;
       this.pointerActive = false;
       if (!this.dragging) return;
       const moved = this.startWorldX - this.world.x; // >0 — свайп влево (к следующей)
-      void e;
       if (Math.abs(moved) > this.roomW * 0.18) this.goRoom(this.currentRoom + Math.sign(moved));
       else this.goRoom(this.currentRoom);
       this.dragging = false;
@@ -432,7 +498,17 @@ export class Game implements UiContext {
       else this.world.x = this.targetX;
     }
 
-    // таймеры текущей комнаты
+    // котик на весу: следование с инерцией + раскачивание
+    if (this.grab) {
+      const v = this.grab.sprite;
+      v.x += (this.grab.x - v.x) * Math.min(1, dt * 14);
+      v.y += (this.grab.y - v.y) * Math.min(1, dt * 14);
+      const vx = v.x - this.grab.px;
+      this.grab.px = v.x;
+      v.rotation += (Math.max(-0.5, Math.min(0.5, -vx * 0.03)) - v.rotation) * Math.min(1, dt * 10);
+    }
+
+    // таймеры/анимация текущей комнаты
     this.rooms[this.currentRoom]?.tick?.(dt);
 
     // пассивный доход (живое накопление)

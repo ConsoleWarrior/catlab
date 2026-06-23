@@ -48,6 +48,13 @@ async function shoot(browser, { width, height, prefix }) {
   await page.waitForTimeout(450);
   await page.screenshot({ path: `${OUT}/${prefix}-help.png` });
 
+  // котик «на весу» (взятие за шкирку)
+  await page.evaluate(() => { window.__game.closeOverlay(); window.__game.goRoom(1); });
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.__game.demoGrab());
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${OUT}/${prefix}-grab.png` });
+
   const fps = await page.evaluate(() => Math.round(window.__game.app.ticker.FPS));
   console.log(`${prefix} ${width}x${height} FPS:`, fps);
   await ctx.close();

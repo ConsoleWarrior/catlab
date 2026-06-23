@@ -12,6 +12,7 @@ import {
 import type { UiContext } from './context.js';
 import { Button, COLORS, FONT, label, panel, stars } from './theme.js';
 import { describeCat, catTraits, describeReq } from './describe.js';
+import { upgradeButton } from './upgradeButton.js';
 
 const ANALYZE_COST = ANALYZE_DNA_COST;
 
@@ -22,6 +23,40 @@ function rewardText(r: { coins: number; crystals: number; dna: number; reputatio
   if (r.dna) p.push(`🧬${r.dna}`);
   if (r.reputation) p.push(`⭐${r.reputation}`);
   return p.join('  ');
+}
+
+/** Оверлей улучшений комнаты (список апгрейдов). Перерисовывается после покупки. */
+export function buildUpgradesPanel(
+  ctx: UiContext, title: string, ids: string[], close: () => void,
+): Container {
+  const W = Math.min(ctx.roomW - 40, 460);
+  const root = new Container();
+
+  const render = (): void => {
+    root.removeChildren();
+    const titleT = label(title, 20, COLORS.ink, '800');
+    titleT.position.set(W / 2, 30);
+    let y = 60;
+    const items: Container[] = [titleT];
+    for (const id of ids) {
+      const b = upgradeButton(ctx, id, W - 48);
+      const orig = b.onTap;
+      b.onTap = () => { orig?.(); render(); }; // обновить стоимости после покупки
+      b.position.set(W / 2, y + 26);
+      items.push(b);
+      y += 60;
+    }
+    const closeBtn = new Button({ text: 'Закрыть', w: 180, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+    closeBtn.position.set(W / 2, y + 24);
+    closeBtn.onTap = close;
+    items.push(closeBtn);
+
+    const H = y + 56;
+    root.addChild(panel(W, H, COLORS.hud, 18), ...items);
+  };
+
+  render();
+  return root;
 }
 
 /** Оверлей-инструкция «Как играть». */

@@ -1,17 +1,28 @@
 /**
- * Комната «Приют»: котики-метисы ждут, пока их пристроят «в добрые руки».
- * Тап по коту → меню (пристроить → 💰+🧬 / вернуть в питомник).
+ * Комната «Приют»: котики-метисы ХОДЯТ по полу и ждут, пока их пристроят
+ * «в добрые руки». Тап по котику → меню (пристроить → 💰+🧬 / вернуть).
+ * Можно взять за шкирку и потаскать. Улучшения — в оверлее ⚙️.
  */
 
+import { Container } from 'pixi.js';
 import { catsIn, shelterCapacity } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { COLORS, centerRow, label } from '../theme.js';
-import { layoutCatGrid } from '../catCard.js';
-import { upgradeButton } from '../upgradeButton.js';
+import { Button, COLORS, label } from '../theme.js';
+import { createLivingFloor } from '../livingFloor.js';
 
 export function createShelter(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'shelter', '🏠 Приют');
+  const floorLayer = new Container();
+  shell.container.addChild(floorLayer);
+
+  const baseline = ctx.roomH - 78;
+  const bandTop = ctx.topInset + 96;
+  const floor = createLivingFloor(
+    ctx, floorLayer,
+    { x: 24, y: bandTop, w: ctx.roomW - 48, h: Math.max(80, baseline - bandTop) },
+    () => catsIn(ctx.state, 'shelter'),
+  );
 
   function refresh(): void {
     shell.body.removeChildren();
@@ -19,24 +30,23 @@ export function createShelter(ctx: UiContext): Room {
     const cap = shelterCapacity(ctx.state);
 
     const info = label(
-      `${cats.length}/${cap} котиков ждут добрые руки   ·   пристрой → 💰 + 🧬`,
+      `${cats.length}/${cap} котиков ждут добрые руки   ·   тапни → пристроить (💰 + 🧬)`,
       15, COLORS.ink, '700',
     );
     info.anchor.set(0, 0.5);
-    info.position.set(2, 12);
+    info.position.set(2, 14);
     shell.body.addChild(info);
 
-    const gridTop = 34;
-    const gridH = shell.contentH - gridTop - 66;
-    layoutCatGrid(ctx, shell.body, cats, 0, gridTop, shell.contentW, gridH);
+    const gear = new Button({ text: '⚙️ Улучшить', w: 140, h: 40, color: COLORS.secondary, fontSize: 14 });
+    gear.position.set(shell.contentW - 78, 16);
+    gear.onTap = () => ctx.openUpgrades('🏠 Улучшения приюта', ['shelterCap', 'connections', 'biobank']);
+    shell.body.addChild(gear);
 
-    const bw = Math.min(240, (shell.contentW - 28) / 3);
-    const b1 = upgradeButton(ctx, 'shelterCap', bw);
-    const b2 = upgradeButton(ctx, 'connections', bw);
-    const b3 = upgradeButton(ctx, 'biobank', bw);
-    centerRow([b1, b2, b3], shell.contentH - 28, shell.contentW);
-    shell.body.addChild(b1, b2, b3);
+    floor.refresh();
   }
 
-  return { id: 'shelter', title: '🏠 Приют', container: shell.container, refresh };
+  return {
+    id: 'shelter', title: '🏠 Приют', container: shell.container,
+    refresh, tick: (dt) => floor.tick(dt),
+  };
 }

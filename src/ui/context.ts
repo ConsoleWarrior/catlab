@@ -3,9 +3,19 @@
  * Game реализует UiContext и передаёт себя фабрикам комнат — без циклов.
  */
 
-import type { Application, Container, Texture } from 'pixi.js';
+import type { Application, Container, Texture, FederatedPointerEvent } from 'pixi.js';
 import type { Rng } from '../genetics/index.js';
 import type { Cat, GameState } from '../game/index.js';
+
+/** Параметры взятия котика «за шкирку» (живой котик в комнате). */
+export interface GrabOpts {
+  cat: Cat;
+  displayH: number;          // экранная высота котика (для позы виса)
+  hide(): void;              // спрятать наземного котика на время виса
+  show(): void;              // вернуть котика
+  onTap(): void;             // тап без перетаскивания → меню кота
+  onDrop(globalX: number): void; // отпустили → приземлить по X
+}
 
 export interface Room {
   id: string;
@@ -39,4 +49,7 @@ export interface UiContext {
   goRoom(index: number): void;
   openCatMenu(cat: Cat): void;
   openOrders(): void;
+  openUpgrades(title: string, ids: string[]): void;
+  /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
+  startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;
 }
