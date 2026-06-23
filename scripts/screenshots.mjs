@@ -1,16 +1,25 @@
 /**
- * Скриншоты прототипа через headless Edge (playwright-core, без скачивания Chromium).
- * Запуск: подними `npm run preview` (или dev), затем:
- *   OUT=путь BASE=http://127.0.0.1:4173 node scripts/screenshots.mjs
+ * Скриншоты игрового UI (Этап 4) через headless Edge (playwright-core).
+ * Снимает 4 комнаты + панель заказов. Нужен DEV-сервер (window.__game есть
+ * только в dev-сборке). Запуск:
+ *   npm run dev -- --port 5199 --strictPort   (в фоне)
+ *   OUT=screens BASE=http://localhost:5199 node scripts/screenshots.mjs
  */
 import { chromium } from 'playwright-core';
 import { mkdirSync } from 'node:fs';
 
 const OUT = process.env.OUT || 'screens';
-const BASE = process.env.BASE || 'http://127.0.0.1:4173';
+const BASE = process.env.BASE || 'http://localhost:5199';
 const EDGE = process.env.EDGE
   || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
 mkdirSync(OUT, { recursive: true });
+
+const ROOMS = [
+  ['01-incubator', 0],
+  ['02-nursery', 1],
+  ['03-shelter', 2],
+  ['04-genolab', 3],
+];
 
 const run = async () => {
   const browser = await chromium.launch({ executablePath: EDGE, headless: true });
@@ -22,31 +31,31 @@ const run = async () => {
   page.on('console', (m) => console.log('PAGE:', m.type(), m.text()));
   page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
 
-  const W = 1280, H = 800;
-  await page.goto(BASE, { waitUntil: 'load' });
+  // ?reset — свежее состояние без сохранения
+  await page.goto(`${BASE}/?reset`, { waitUntil: 'load' });
   await page.waitForSelector('canvas', { timeout: 15000 });
-  await page.waitForTimeout(700);
-  await page.screenshot({ path: `${OUT}/01-start.png` });
+  await page.waitForFunction(() => window.__game?.app, null, { timeout: 15000 });
+  await page.waitForTimeout(800); // прогрев
 
-  // взять «маму» за шкирку и подержать на весу (поза hang)
-  await page.mouse.move(W * 0.30, H * 0.32);
-  await page.mouse.down();
-  await page.mouse.move(W * 0.5, H * 0.5, { steps: 10 });
-  await page.waitForTimeout(450);
-  await page.screenshot({ path: `${OUT}/04-hang.png` });
-  await page.mouse.up();
+  // наполняем сцену котами и активной вязкой
+  await page.evaluate(() => window.__game.demo());
   await page.waitForTimeout(500);
 
-  await page.click('#btn-breed');
-  await page.waitForTimeout(800);
-  await page.screenshot({ path: `${OUT}/02-kitten.png` });
+  for (const [name, idx] of ROOMS) {
+    await page.evaluate((i) => window.__game.goRoom(i), idx);
+    await page.waitForTimeout(700); // доезд + перерисовка
+    await page.screenshot({ path: `${OUT}/${name}.png` });
+  }
 
-  await page.click('#btn-stress');
-  await page.waitForTimeout(1800);
-  await page.screenshot({ path: `${OUT}/03-stress.png` });
+  // панель заказов поверх питомника
+  await page.evaluate(() => window.__game.goRoom(1));
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.__game.openOrders());
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${OUT}/05-orders.png` });
 
-  const fps = await page.evaluate(() => document.getElementById('fps')?.textContent);
-  console.log('FPS readout:', fps);
+  const fps = await page.evaluate(() => Math.round(window.__game.app.ticker.FPS));
+  console.log('FPS:', fps);
 
   await browser.close();
 };

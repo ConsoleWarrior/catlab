@@ -3,6 +3,7 @@
 export * from './types.js';
 export {
   SAVE_VERSION, TIER_VALUE, UPGRADES, GENES, BASE_GENES, levelForReputation,
+  ANALYZE_DNA_COST,
 } from './config.js';
 export type { UpgradeDef, GeneDef } from './config.js';
 export {
