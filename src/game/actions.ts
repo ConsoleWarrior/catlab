@@ -3,7 +3,7 @@
  * Время передаётся параметром `now` (тестируемо), RNG — параметром. См. GAME.md §10.
  */
 
-import { breed, isLethal } from '../genetics/index.js';
+import { breed, isLethal, simpleCat } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
@@ -105,6 +105,18 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     events.push({ slotIndex: i, kitten, stillborn: false });
   }
   return events;
+}
+
+/** Купить простого кота в питомник (первый бесплатно, если котов нет). */
+export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: Cat }> {
+  if (E.catsIn(state, 'nursery').length >= E.nurseryCapacity(state)) {
+    return { ok: false, reason: 'нет места в питомнике' };
+  }
+  const cost = E.buyCatCost(state);
+  if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
+  const cat = E.makeCatInstance(state, simpleCat(rng), now, 'nursery');
+  state.cats.push(cat);
+  return { ok: true, cat };
 }
 
 // --- Комнаты ---

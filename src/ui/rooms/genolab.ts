@@ -7,7 +7,7 @@ import { Container, Graphics } from 'pixi.js';
 import { GENES, unlockGene } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { Button, COLORS, label, panel } from '../theme.js';
+import { Button, COLORS, centerRow, label, panel } from '../theme.js';
 import { upgradeButton } from '../upgradeButton.js';
 
 export function createGenolab(ctx: UiContext): Room {
@@ -73,13 +73,11 @@ export function createGenolab(ctx: UiContext): Room {
     }
 
     // апгрейды
-    const b1 = upgradeButton(ctx, 'mutation', 230);
-    const b2 = upgradeButton(ctx, 'selection', 230);
-    const b3 = upgradeButton(ctx, 'eliteFund', 230);
-    const cx = shell.contentW / 2;
-    b1.position.set(cx - 244, shell.contentH - 28);
-    b2.position.set(cx, shell.contentH - 28);
-    b3.position.set(cx + 244, shell.contentH - 28);
+    const bw = Math.min(230, (shell.contentW - 28) / 3);
+    const b1 = upgradeButton(ctx, 'mutation', bw);
+    const b2 = upgradeButton(ctx, 'selection', bw);
+    const b3 = upgradeButton(ctx, 'eliteFund', bw);
+    centerRow([b1, b2, b3], shell.contentH - 28, shell.contentW);
     shell.body.addChild(b1, b2, b3);
   }
 

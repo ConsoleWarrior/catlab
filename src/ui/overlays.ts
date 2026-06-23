@@ -3,14 +3,14 @@
  * Возвращают Container с панелью; центрирование и затемнение — на Game.
  */
 
-import { Container } from 'pixi.js';
+import { Container, Text } from 'pixi.js';
 import type { Cat } from '../game/index.js';
 import {
   isBusy, adoptReward, adoptCat, moveCat, analyzeCat, claimOrder, matchesOrder,
   ANALYZE_DNA_COST,
 } from '../game/index.js';
 import type { UiContext } from './context.js';
-import { Button, COLORS, label, panel, stars } from './theme.js';
+import { Button, COLORS, FONT, label, panel, stars } from './theme.js';
 import { describeCat, catTraits, describeReq } from './describe.js';
 
 const ANALYZE_COST = ANALYZE_DNA_COST;
@@ -22,6 +22,50 @@ function rewardText(r: { coins: number; crystals: number; dna: number; reputatio
   if (r.dna) p.push(`🧬${r.dna}`);
   if (r.reputation) p.push(`⭐${r.reputation}`);
   return p.join('  ');
+}
+
+/** Оверлей-инструкция «Как играть». */
+export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
+  const W = Math.min(ctx.roomW - 40, 640);
+  const pad = 24;
+  const root = new Container();
+
+  const steps = [
+    '🧬 Вязка. В Питомнике тапни котика → «Выбрать для вязки» (нужны ♀ и ♂). Затем в Инкубаторе нажми «Свести» и дождись таймера — родится котёнок.',
+    '🏆 Питомник. Ценные коты приносят пассивный доход 💰/мин. Тап по коту открывает меню действий.',
+    '🏠 Приют. Обычных котиков пристраивай «в добрые руки» — получишь 💰 и 🧬 ДНК.',
+    '🔬 Генолаб. Трать 🧬 ДНК на новые гены — больше окрасов и заказов.',
+    '📋 Заказы. Выведи кота нужного окраса под заказ → 💰, 💎 и репутация. Репутация повышает уровень лаборатории.',
+    '🛒 Нет котиков? В Питомнике купи простого. Если котов нет совсем — первый бесплатно.',
+    '👆 Листай комнаты свайпом ← → или стрелками по бокам.',
+  ];
+
+  const title = label('🐾 Как играть', 22, COLORS.ink, '800');
+  let y = 58;
+  const texts: Text[] = [];
+  for (const s of steps) {
+    const t = new Text({
+      text: s,
+      style: {
+        fontFamily: FONT, fontSize: 15, fontWeight: '600', fill: COLORS.ink,
+        wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 21, align: 'left',
+      },
+    });
+    t.anchor.set(0, 0);
+    t.position.set(pad, y);
+    texts.push(t);
+    y += t.height + 11;
+  }
+
+  const closeBtn = new Button({ text: 'Понятно!', w: 200, h: 46, color: COLORS.primary, fontSize: 16 });
+  closeBtn.position.set(W / 2, y + 28);
+  closeBtn.onTap = close;
+
+  const H = y + 58;
+  root.addChild(panel(W, H, COLORS.hud, 18));
+  title.position.set(W / 2, 32);
+  root.addChild(title, ...texts, closeBtn);
+  return root;
 }
 
 /** Меню действий над котом. */

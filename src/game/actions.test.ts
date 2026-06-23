@@ -3,8 +3,9 @@ import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, startBreeding, collectReady, adoptCat, moveCat,
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
-  passiveRatePerMin, offlineCapMin,
+  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost,
 } from './index.js';
+import { STARTER_CAT_COST } from './config.js';
 import type { GameState } from './index.js';
 
 function pair(s: GameState) {
@@ -87,6 +88,41 @@ describe('комнаты', () => {
     const cat = s.cats[0]!;
     expect(moveCat(s, cat.id, 'shelter').ok).toBe(true);
     expect(cat.location).toBe('shelter');
+  });
+});
+
+describe('покупка кота (анти-софт-лок)', () => {
+  it('первый кот бесплатно, если котов нет; затем платно', () => {
+    const rng = makeRng(20);
+    const s = createInitialState(rng, 0);
+    s.cats = []; // продал всех — тупик
+    expect(buyCatCost(s)).toBe(0);
+    s.coins = 0;
+    const r1 = buyCat(s, rng, 0);
+    expect(r1.ok).toBe(true);
+    expect(s.cats).toHaveLength(1);
+    expect(s.cats[0]!.location).toBe('nursery');
+    // следующий уже стоит денег
+    expect(buyCatCost(s)).toBe(STARTER_CAT_COST);
+    expect(buyCat(s, rng, 0).ok).toBe(false); // 0 монет
+    s.coins = STARTER_CAT_COST;
+    expect(buyCat(s, rng, 0).ok).toBe(true);
+    expect(s.coins).toBe(0);
+  });
+
+  it('купленный кот — простой (без редких генов)', () => {
+    const rng = makeRng(21);
+    const s = createInitialState(rng, 0);
+    s.cats = [];
+    const r = buyCat(s, rng, 0);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const g = r.cat.genotype;
+      expect(g.W).toEqual(['w', 'w']);
+      expect(g.Ea).toEqual(['normal', 'normal']);
+      expect(g.L).toEqual(['L', 'L']);
+      expect(g.D).toEqual(['D', 'D']);
+    }
   });
 });
 

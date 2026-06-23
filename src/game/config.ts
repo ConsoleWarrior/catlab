@@ -38,6 +38,9 @@ export const SHOW_BONUS_STEP = 0.25;       // +25% к пассиву за уро
 export const CONNECTIONS_STEP = 0.2;       // +20% к цене пристройства
 export const BIOBANK_STEP = 0.25;          // +25% к выходу ДНК
 
+// --- Покупка котов (анти-софт-лок) ---
+export const STARTER_CAT_COST = 50; // простой кот из питомника; первый (когда котов нет) — бесплатно
+
 // --- Генолаб ---
 export const ANALYZE_DNA_COST = 10;
 

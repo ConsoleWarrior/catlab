@@ -141,6 +141,26 @@ export class Button extends Container {
   }
 }
 
+/**
+ * Горизонтальный ряд элементов (кнопок), отцентрованный по parentW.
+ * Элементы позиционируются по центру (как Button), gap ужимается, чтобы влезть.
+ */
+export function centerRow(items: Container[], y: number, parentW: number, gap = 14): void {
+  if (items.length === 0) return;
+  const widths = items.map((it) => it.width);
+  let total = widths.reduce((s, w) => s + w, 0) + gap * (items.length - 1);
+  let g = gap;
+  if (total > parentW) { // ужимаем зазор, чтобы поместиться
+    g = Math.max(4, (parentW - widths.reduce((s, w) => s + w, 0)) / (items.length - 1 || 1));
+    total = widths.reduce((s, w) => s + w, 0) + g * (items.length - 1);
+  }
+  let x = parentW / 2 - total / 2;
+  items.forEach((it, i) => {
+    it.position.set(x + widths[i]! / 2, y);
+    x += widths[i]! + g;
+  });
+}
+
 /** Значок ресурса с числом (для HUD и стоимостей). */
 export function resourcePill(glyph: string, value: string, tint: number, size = 16): Container {
   const c = new Container();

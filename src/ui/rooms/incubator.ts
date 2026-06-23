@@ -11,7 +11,7 @@ import {
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { Button, COLORS, label, panel } from '../theme.js';
+import { Button, COLORS, centerRow, label, panel } from '../theme.js';
 import { catSprite } from '../catTextures.js';
 import { upgradeButton } from '../upgradeButton.js';
 
@@ -143,11 +143,10 @@ export function createIncubator(ctx: UiContext): Room {
       shell.body.addChild(c);
     }
 
-    const b1 = upgradeButton(ctx, 'slots', 248);
-    const b2 = upgradeButton(ctx, 'speed', 248);
-    const upX = Math.max(140, shell.contentW / 2);
-    b1.position.set(upX - 132, slotH + 32);
-    b2.position.set(upX + 132, slotH + 32);
+    const bw = Math.min(248, (shell.contentW - 14) / 2);
+    const b1 = upgradeButton(ctx, 'slots', bw);
+    const b2 = upgradeButton(ctx, 'speed', bw);
+    centerRow([b1, b2], slotH + 32, shell.contentW);
     shell.body.addChild(b1, b2);
   }
 

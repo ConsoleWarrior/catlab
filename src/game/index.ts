@@ -10,11 +10,12 @@ export {
   lvl, emptySlot, slotCount, nurseryCapacity, shelterCapacity, capacityOf,
   incubationDuration, mutationRate, offlineCapMin, catsIn, isBusy,
   passiveRatePerMin, adoptReward, upgradeCost, upgradeMaxed, makeCatInstance,
+  buyCatCost,
 } from './economy.js';
 export { createInitialState, serialize, deserialize } from './state.js';
 export { matchesOrder, generateOrder, refillOrders } from './orders.js';
 export {
   collectIncome, startBreeding, collectReady, adoptCat, moveCat,
-  buyUpgrade, unlockGene, analyzeCat, claimOrder,
+  buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat,
 } from './actions.js';
 export type { Result, BirthEvent } from './actions.js';

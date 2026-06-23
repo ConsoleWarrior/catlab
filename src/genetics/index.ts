@@ -9,5 +9,5 @@ export { expressPhenotype } from './phenotype.js';
 export { calcRarity } from './rarity.js';
 export type { Rarity } from './rarity.js';
 export {
-  wildType, makeCat, randomCat, detectBreed, BREED_PRESETS,
+  wildType, makeCat, randomCat, simpleCat, detectBreed, BREED_PRESETS,
 } from './factory.js';

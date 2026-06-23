@@ -6,7 +6,7 @@
 import { catsIn, shelterCapacity } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { COLORS, label } from '../theme.js';
+import { COLORS, centerRow, label } from '../theme.js';
 import { layoutCatGrid } from '../catCard.js';
 import { upgradeButton } from '../upgradeButton.js';
 
@@ -30,13 +30,11 @@ export function createShelter(ctx: UiContext): Room {
     const gridH = shell.contentH - gridTop - 66;
     layoutCatGrid(ctx, shell.body, cats, 0, gridTop, shell.contentW, gridH);
 
-    const b1 = upgradeButton(ctx, 'shelterCap', 240);
-    const b2 = upgradeButton(ctx, 'connections', 240);
-    const b3 = upgradeButton(ctx, 'biobank', 240);
-    const cx = shell.contentW / 2;
-    b1.position.set(cx - 256, shell.contentH - 28);
-    b2.position.set(cx, shell.contentH - 28);
-    b3.position.set(cx + 256, shell.contentH - 28);
+    const bw = Math.min(240, (shell.contentW - 28) / 3);
+    const b1 = upgradeButton(ctx, 'shelterCap', bw);
+    const b2 = upgradeButton(ctx, 'connections', bw);
+    const b3 = upgradeButton(ctx, 'biobank', bw);
+    centerRow([b1, b2, b3], shell.contentH - 28, shell.contentW);
     shell.body.addChild(b1, b2, b3);
   }
 

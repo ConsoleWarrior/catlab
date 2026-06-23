@@ -75,6 +75,22 @@ export function randomCat(rng: Rng, sex?: Sex): Genotype {
   };
 }
 
+/**
+ * «Простой» кот для покупки в питомнике: базовый домашний метис без редких
+ * генов (плотный окрас, короткая шерсть, обычные уши, без пойнта/белого).
+ * Цвет/паттерн/глаза варьируются — для разнообразия.
+ */
+export function simpleCat(rng: Rng, sex?: Sex): Genotype {
+  const c = randomCat(rng, sex);
+  c.D = ['D', 'D'];          // без разбавления (нет голубого/кремового)
+  c.W = ['w', 'w'];          // не доминантный белый
+  c.C = ['C', 'C'];          // без колор-пойнта
+  c.L = ['L', 'L'];          // короткая шерсть
+  c.Ea = ['normal', 'normal']; // обычные уши
+  c.Fc = ['normal', 'normal'];
+  return c;
+}
+
 // --- Пресеты пород (узнаваемые наборы генов) ---
 
 export const BREED_PRESETS: Record<string, (sex: Sex) => Genotype> = {

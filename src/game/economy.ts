@@ -64,6 +64,11 @@ export function passiveRatePerMin(state: GameState): number {
   return rate * mult;
 }
 
+/** Стоимость покупки простого кота. Если котов нет вовсе — первый бесплатно (анти-софт-лок). */
+export function buyCatCost(state: GameState): number {
+  return state.cats.length === 0 ? 0 : C.STARTER_CAT_COST;
+}
+
 /** Награда за пристройство кота: 💰 (с учётом «Связей») + 🧬 (с учётом «Биобанка»). */
 export function adoptReward(state: GameState, cat: Cat): { coins: number; dna: number } {
   const v = C.TIER_VALUE[cat.rarityTier];

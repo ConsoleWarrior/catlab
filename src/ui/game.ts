@@ -23,10 +23,9 @@ import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
-import { buildCatMenu, buildOrdersPanel } from './overlays.js';
+import { buildCatMenu, buildOrdersPanel, buildHelpPanel } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
-const TOP_INSET = 64;
 
 export class Game implements UiContext {
   readonly app = new Application();
@@ -34,8 +33,9 @@ export class Game implements UiContext {
   readonly rng: Rng = makeRng(Math.floor(Math.random() * 1e9));
   roomW = 0;
   roomH = 0;
-  topInset = TOP_INSET;
+  topInset = 56;
   selection: string[] = [];
+  private freshGame = false;
 
   private readonly world = new Container();
   private readonly hud = new Container();
@@ -88,6 +88,9 @@ export class Game implements UiContext {
     this.installInput();
     this.app.ticker.add((t) => this.update(Math.min(t.deltaMS / 1000, 0.05)));
 
+    // первый запуск — показываем инструкцию (но не во время скриншотов ?reset)
+    if (this.freshGame && !reset) this.openHelp();
+
     // автосейв при сворачивании/закрытии
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.save(); });
     window.addEventListener('beforeunload', () => this.save());
@@ -98,6 +101,8 @@ export class Game implements UiContext {
         app: this.app, state: this.state,
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
+        openHelp: () => this.openHelp(),
+        closeOverlay: () => this.closeOverlay(),
         give: (c = 5000, x = 50, d = 500) => { this.state.coins += c; this.state.crystals += x; this.state.dna += d; this.commit(); },
         demo: () => this.demo(),
         save: () => this.save(),
@@ -147,6 +152,7 @@ export class Game implements UiContext {
       } catch { /* битый сейв — начинаем заново */ }
     }
     this.state = createInitialState(this.rng, this.now());
+    this.freshGame = true;
   }
 
   /** Офлайн-прогресс: родившиеся котята + накопленный доход. */
@@ -207,11 +213,17 @@ export class Game implements UiContext {
     this.showOverlay(buildOrdersPanel(this, close));
   }
 
+  openHelp(): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildHelpPanel(this, close));
+  }
+
   // --- раскладка ---
 
   private layout(): void {
     this.roomW = this.app.screen.width;
     this.roomH = this.app.screen.height;
+    this.topInset = Math.round(Math.max(48, Math.min(64, this.roomH * 0.085)));
     this.app.stage.hitArea = new Rectangle(0, 0, this.roomW, this.roomH);
 
     // пересобираем комнаты под новый размер
@@ -243,27 +255,39 @@ export class Game implements UiContext {
   private buildHud(): void {
     this.hud.removeChildren();
     const w = this.roomW;
+    const ti = this.topInset;
     const bg = new Graphics();
-    bg.rect(0, 0, w, this.topInset).fill({ color: COLORS.hud, alpha: 0.96 });
-    bg.rect(0, this.topInset - 2, w, 2).fill({ color: COLORS.cardEdge });
+    bg.rect(0, 0, w, ti).fill({ color: COLORS.hud, alpha: 0.96 });
+    bg.rect(0, ti - 2, w, 2).fill({ color: COLORS.cardEdge });
     this.hud.addChild(bg);
 
+    // адаптивные размеры под ширину экрана (один интерфейс для ПК и мобилы)
+    const fs = Math.round(Math.max(13, Math.min(18, ti * 0.3)));
+    const pad = Math.round(Math.max(8, Math.min(18, w * 0.014)));
+    const gap = Math.max(82, Math.min(150, w / 6));
     const mk = (x: number, color: number): Text => {
-      const t = label('', 18, color, '800');
+      const t = label('', fs, color, '800');
       t.anchor.set(0, 0.5);
-      t.position.set(x, this.topInset / 2);
+      t.position.set(x, ti / 2);
       this.hud.addChild(t);
       return t;
     };
-    this.coinsT = mk(18, 0xc9912a);
-    this.crystalsT = mk(170, 0x3a93c9);
-    this.dnaT = mk(300, 0x7a4fd0);
-    this.levelT = mk(430, COLORS.ink);
+    this.coinsT = mk(pad, 0xc9912a);
+    this.crystalsT = mk(pad + gap, 0x3a93c9);
+    this.dnaT = mk(pad + gap * 2, 0x7a4fd0);
+    this.levelT = mk(pad + gap * 3, COLORS.ink);
 
-    this.ordersBtn = new Button({ text: '📋 Заказы', w: 168, h: 44, color: COLORS.warn, fontSize: 16 });
-    this.ordersBtn.position.set(w - 94, this.topInset / 2);
+    const bh = Math.round(ti * 0.72);
+    const helpW = Math.round(ti * 0.92);
+    const help = new Button({ text: '❓', w: helpW, h: bh, color: COLORS.secondary, fontSize: fs + 3 });
+    help.position.set(w - pad - helpW / 2, ti / 2);
+    help.onTap = () => this.openHelp();
+
+    const ordW = Math.round(Math.max(120, Math.min(180, w * 0.16)));
+    this.ordersBtn = new Button({ text: '📋 Заказы', w: ordW, h: bh, color: COLORS.warn, fontSize: fs });
+    this.ordersBtn.position.set(w - pad - helpW - 8 - ordW / 2, ti / 2);
     this.ordersBtn.onTap = () => this.openOrders();
-    this.hud.addChild(this.ordersBtn);
+    this.hud.addChild(help, this.ordersBtn);
   }
 
   private updateHud(): void {
@@ -347,7 +371,15 @@ export class Game implements UiContext {
     dim.rect(0, 0, this.roomW, this.roomH).fill({ color: COLORS.overlay, alpha: 0.5 });
     dim.eventMode = 'static';
     dim.on('pointertap', () => this.closeOverlay());
-    content.position.set((this.roomW - content.width) / 2, Math.max(this.topInset + 8, (this.roomH - content.height) / 2));
+
+    // вписываем панель в экран (на узких мобильных — уменьшаем)
+    const margin = 12;
+    let s = 1;
+    if (content.height > this.roomH - margin * 2) s = Math.min(s, (this.roomH - margin * 2) / content.height);
+    if (content.width > this.roomW - margin * 2) s = Math.min(s, (this.roomW - margin * 2) / content.width);
+    content.scale.set(s);
+    content.position.set((this.roomW - content.width) / 2, (this.roomH - content.height) / 2);
+
     this.overlayLayer.addChild(dim, content);
   }
 
