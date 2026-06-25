@@ -3,10 +3,10 @@
  * Менять баланс здесь, не в логике. См. GAME.md §5–6.
  */
 
-import type { RarityTier } from '../genetics/index.js';
+import type { RarityTier, BreedBoosts } from '../genetics/index.js';
 import type { Currency } from './types.js';
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 3; // v3: Котодекс (discoveredBreeds) + инженерия (boosts) + research (доп. поля — мягкие дефолты в deserialize, без сброса)
 
 /** Ценность кота по тиру редкости: пристройство (💰), образец (🧬), пассив (💰/мин). */
 export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; incomePerMin: number }> = {
@@ -18,8 +18,9 @@ export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; income
 };
 
 // --- Инкубатор ---
-export const INCUBATION_BASE_MS = 5 * 60_000;
-export const INCUBATION_MIN_MS = 2 * 60_000;
+// ТЕСТ: время вязки 10 c для плейтестов. Вернуть после тестов: BASE = 5 * 60_000, MIN = 2 * 60_000.
+export const INCUBATION_BASE_MS = 10_000;
+export const INCUBATION_MIN_MS = 10_000;
 export const SPEED_STEP_MS = 30_000;       // −30 c за уровень скорости
 export const MUTATION_BASE = 0.01;
 export const MUTATION_STEP = 0.01;
@@ -43,6 +44,78 @@ export const STARTER_CAT_COST = 50; // простой кот из питомни
 
 // --- Генолаб ---
 export const ANALYZE_DNA_COST = 10;
+
+// --- Генная инженерия (усилители вязки за 🧬) ---
+export type BoostId = keyof BreedBoosts;
+export interface BoostDef {
+  id: BoostId;
+  glyph: string;
+  label: string;
+  desc: string;
+  dna: number;
+}
+/** Усилители следующей вязки. Заряд тратится при рождении из инкубатора. */
+export const BOOSTS: readonly BoostDef[] = [
+  { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не опустится по тиру', dna: 15 },
+  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Резкий рост шанса тира-вверх', dna: 30 },
+  { id: 'tierUp', glyph: '🔼', label: 'Форсаж тира', desc: 'Гарантия тира выше (если есть куда)', dna: 60 },
+];
+
+// --- Рост котят ---
+// ТЕСТ: котёнок взрослеет за 30 c, чтобы видеть взросление/эффект/таблички.
+// Вернуть после тестов: 8 * 60_000 (~8 минут).
+export const KITTEN_GROWTH_MS = 30_000;
+export const KITTEN_MIN_SCALE = 0.45;       // размер новорождённого относительно взрослого
+
+// --- Дерево исследований (постоянные бонусы за 🧬) ---
+// Эффекты применяются в чистых функциях economy.ts. 3 ветки × 3 уровня;
+// узел открывается, если изучены все `requires` и хватает 🧬.
+export type ResearchEffectKind =
+  | 'income'           // +доля к пассивному доходу (множитель)
+  | 'collectionIncome' // +плоский доход за каждую открытую породу
+  | 'adoptCoins'       // +доля к 💰 за пристройство
+  | 'adoptDna'         // +доля к 🧬 за пристройство
+  | 'nurseryCap'       // +мест в питомнике
+  | 'shelterCap'       // +мест в приюте
+  | 'offline';         // +минут к потолку офлайн-дохода
+
+export interface ResearchDef {
+  id: string;
+  glyph: string;
+  title: string;
+  desc: string;
+  dna: number;
+  requires: readonly string[];
+  col: number; // уровень в ветке (0 — корень)
+  row: number; // ветка (0 — доход, 1 — пристройство, 2 — инфраструктура)
+  effect: { kind: ResearchEffectKind; value: number };
+}
+
+export const RESEARCH: readonly ResearchDef[] = [
+  // ветка 0 — 💰 Доход
+  { id: 'r_income1', glyph: '🧺', title: 'Лежанки', desc: '+25% пассивного дохода',
+    dna: 30, requires: [], col: 0, row: 0, effect: { kind: 'income', value: 0.25 } },
+  { id: 'r_income2', glyph: '🏆', title: 'Выставка', desc: '+35% пассивного дохода',
+    dna: 70, requires: ['r_income1'], col: 1, row: 0, effect: { kind: 'income', value: 0.35 } },
+  { id: 'r_income3', glyph: '📖', title: 'Коллекционер', desc: '+0.5 💰/мин за каждую открытую породу',
+    dna: 140, requires: ['r_income2'], col: 2, row: 0, effect: { kind: 'collectionIncome', value: 0.5 } },
+
+  // ветка 1 — 🤝 Пристройство
+  { id: 'r_adopt1', glyph: '🤝', title: 'Добрые руки', desc: '+30% 💰 за пристройство',
+    dna: 30, requires: [], col: 0, row: 1, effect: { kind: 'adoptCoins', value: 0.30 } },
+  { id: 'r_adopt2', glyph: '🧬', title: 'Биобанк+', desc: '+40% 🧬 за пристройство',
+    dna: 70, requires: ['r_adopt1'], col: 1, row: 1, effect: { kind: 'adoptDna', value: 0.40 } },
+  { id: 'r_adopt3', glyph: '💞', title: 'Меценаты', desc: '+50% 💰 за пристройство',
+    dna: 140, requires: ['r_adopt2'], col: 2, row: 1, effect: { kind: 'adoptCoins', value: 0.50 } },
+
+  // ветка 2 — 🏠 Инфраструктура
+  { id: 'r_infra1', glyph: '🏠', title: 'Пристройка', desc: '+4 места в питомнике',
+    dna: 40, requires: [], col: 0, row: 2, effect: { kind: 'nurseryCap', value: 4 } },
+  { id: 'r_infra2', glyph: '🏡', title: 'Приют+', desc: '+6 мест в приюте',
+    dna: 60, requires: ['r_infra1'], col: 1, row: 2, effect: { kind: 'shelterCap', value: 6 } },
+  { id: 'r_infra3', glyph: '⏳', title: 'Автокорм', desc: '+180 мин к потолку офлайна',
+    dna: 120, requires: ['r_infra2'], col: 2, row: 2, effect: { kind: 'offline', value: 180 } },
+];
 
 export interface UpgradeDef {
   label: string;

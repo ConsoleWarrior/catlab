@@ -6,26 +6,30 @@
  */
 
 import {
-  Application, Container, Graphics, Rectangle,
+  Application, Assets, Container, Graphics, Rectangle,
 } from 'pixi.js';
 import type { Text, Texture, FederatedPointerEvent } from 'pixi.js';
-import { makeRng, randomCat, expressPhenotype } from '../genetics/index.js';
+import { makeRng, randomCat, expressPhenotype, pick, BREEDS } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
+import type { Sex } from '../genetics/index.js';
 import { buildCat } from '../render/catSprite.js';
 import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
   passiveRatePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
+  emptySlot, moveCat, clearBreederSlot,
 } from '../game/index.js';
-import { isBusy } from '../game/index.js';
-import type { Cat, GameState } from '../game/index.js';
+import { isBusy, isInSlot } from '../game/index.js';
+import type { Cat, GameState, BirthEvent } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
-import { catTexture } from './catTextures.js';
+import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor } from './catTextures.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
-import { buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel } from './overlays.js';
+import {
+  buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel, buildBirthCard,
+} from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
 
@@ -57,7 +61,11 @@ export class Game implements UiContext {
 
   // взятие котика за шкирку
   private pendingGrab: { opts: GrabOpts; sx: number; sy: number } | null = null;
-  private grab: { opts: GrabOpts; sprite: Container; x: number; y: number; px: number } | null = null;
+  private grab: {
+    opts: GrabOpts; sprite: Container; baseScale: number;
+    x: number; y: number; cx: number; cy: number; vx: number; t: number; pop: number;
+    originRoom: number; edgeCd: number;
+  } | null = null;
 
   // HUD-ссылки
   private coinsT!: Text;
@@ -88,6 +96,26 @@ export class Game implements UiContext {
 
     this.loadState(reset);
 
+    // Готовый арт коллекции: породы `<breed>__<sex>.png` и базовые `<sex>__N.png`.
+    // Грузим до сборки комнат; вис делаем из той же текстуры. Если ассет не
+    // подгрузился — кот рисуется процедурно (фолбэк).
+    const breedAssets = import.meta.glob('../assets/breeds/*.png', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+    const baseAssets = import.meta.glob('../assets/base/*.png', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+
+    await Promise.all(Object.entries(breedAssets).map(async ([path, url]) => {
+      const name = path.split('/').pop()!.replace('.png', ''); // <breed>__<sex>
+      try { setAiBreedTexture(name, await Assets.load(url)); } catch { /* фолбэк */ }
+    }));
+    await Promise.all(Object.entries(baseAssets).map(async ([path, url]) => {
+      const name = path.split('/').pop()!.replace('.png', ''); // <sex>__<n>
+      const sex: Sex = name.startsWith('female') ? 'female' : 'male';
+      try { addBaseTexture(sex, await Assets.load(url)); } catch { /* фолбэк */ }
+    }));
+
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox);
 
@@ -109,10 +137,20 @@ export class Game implements UiContext {
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
         openHelp: () => this.openHelp(),
+        openCatMenu: (id?: string) => {
+          const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
+          if (c) this.openCatMenu(c);
+        },
         closeOverlay: () => this.closeOverlay(),
         give: (c = 5000, x = 50, d = 500) => { this.state.coins += c; this.state.crystals += x; this.state.dna += d; this.commit(); },
         demo: () => this.demo(),
         demoGrab: () => this.demoGrab(),
+        collection: () => this.collection(),
+        birth: () => this.devBirth(),
+        lab: (s = 'engineering') => {
+          this.rooms.find((r) => r.id === 'genolab')?.setSection?.(s);
+          this.goRoom(3);
+        },
         save: () => this.save(),
       };
     }
@@ -123,12 +161,13 @@ export class Game implements UiContext {
     this.state.coins += 8000; this.state.crystals += 60; this.state.dna += 800;
     this.state.upgrades.nurseryCap = 4; // запас места
     const now = this.now();
-    for (let i = 0; i < 6; i++) {
-      this.state.cats.push(makeCatInstance(this.state, randomCat(this.rng), now, 'nursery'));
-    }
-    for (let i = 0; i < 7; i++) {
-      this.state.cats.push(makeCatInstance(this.state, randomCat(this.rng), now, 'shelter'));
-    }
+    const spawn = (room: 'nursery' | 'shelter'): void => {
+      const b = pick(this.rng, BREEDS);
+      const sex: Sex = this.rng() < 0.5 ? 'female' : 'male';
+      this.state.cats.push(makeCatInstance(this.state, randomCat(this.rng, sex), now, room, b.key));
+    };
+    for (let i = 0; i < 6; i++) spawn('nursery');
+    for (let i = 0; i < 7; i++) spawn('shelter');
     const f = this.state.cats.find((c) => c.location === 'nursery' && c.genotype.sex === 'female');
     const m = this.state.cats.find((c) => c.location === 'nursery' && c.genotype.sex === 'male');
     if (f && m) {
@@ -141,6 +180,36 @@ export class Game implements UiContext {
       }
     }
     this.commit();
+  }
+
+  /** DEV: парад коллекции — по коту на каждую породу в Питомник (для проверки арта). */
+  private collection(): void {
+    this.state.upgrades.nurseryCap = Math.ceil(BREEDS.length / 2) + 2;
+    const now = this.now();
+    // освобождаем Питомник, чтобы парад был наглядным
+    this.state.cats = this.state.cats.filter((c) => c.location !== 'nursery');
+    BREEDS.forEach((b, i) => {
+      const sex: Sex = i % 2 === 0 ? 'female' : 'male';
+      const room = i < BREEDS.length / 2 ? 'nursery' : 'shelter';
+      this.state.cats.push(makeCatInstance(this.state, randomCat(this.rng, sex), now, room, b.key));
+    });
+    this.goRoom(1); // Питомник
+    this.commit();
+  }
+
+  /** DEV: мгновенно «родить» котёнка — спавнит новорождённого и показывает карточку. */
+  private devBirth(): void {
+    const now = this.now();
+    const mom = pick(this.rng, BREEDS);
+    const dad = pick(this.rng, BREEDS);
+    const sex: Sex = this.rng() < 0.5 ? 'female' : 'male';
+    const kitten = makeCatInstance(this.state, randomCat(this.rng, sex), now, 'nursery', pick(this.rng, BREEDS).key);
+    kitten.bornAt = now; // настоящий новорождённый — маленький, будет расти
+    kitten.motherBreed = mom.key; kitten.fatherBreed = dad.key; // родословная для карточки
+    this.state.cats.push(kitten);
+    this.commit();
+    this.goRoom(1); // Питомник — увидеть, как малыш растёт на полу
+    this.openBirthCard([{ slotIndex: 0, kitten, stillborn: false, motherBreed: mom.key, fatherBreed: dad.key }]);
   }
 
   /** DEV: показать котика «на весу» по центру (для скриншота взятия за шкирку). */
@@ -167,6 +236,7 @@ export class Game implements UiContext {
           const s = deserialize(raw);
           if (s && s.version === SAVE_VERSION) {
             this.state = s;
+            this.ensureTestSlots();
             this.applyOffline();
             return;
           }
@@ -175,6 +245,12 @@ export class Game implements UiContext {
     }
     this.state = createInitialState(this.rng, this.now());
     this.freshGame = true;
+    this.ensureTestSlots();
+  }
+
+  /** ТЕСТ: гарантируем 3 места вязки в игре (логика/тесты используют createInitialState как есть). Убрать после тестов. */
+  private ensureTestSlots(): void {
+    while (this.state.slots.length < 3) this.state.slots.push(emptySlot());
   }
 
   /** Офлайн-прогресс: родившиеся котята + накопленный доход. */
@@ -230,6 +306,12 @@ export class Game implements UiContext {
     this.showOverlay(buildCatMenu(this, cat, close));
   }
 
+  openBirthCard(events: BirthEvent[]): void {
+    if (!events.some((e) => e.kitten)) return;
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildBirthCard(this, events, close));
+  }
+
   openOrders(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildOrdersPanel(this, close));
@@ -254,24 +336,80 @@ export class Game implements UiContext {
     if (!this.pendingGrab) return;
     const opts = this.pendingGrab.opts;
     opts.hide();
-    const hang = buildCat(expressPhenotype(opts.cat.genotype), 'hang', opts.cat.genotype.sex);
-    const s = (opts.displayH * 1.6) / Math.max(1, hang.height);
-    hang.scale.set(s);
-    hang.pivot.set(0, -104);
-    hang.position.set(e.global.x, e.global.y);
-    this.dragLayer.addChild(hang);
-    this.grab = { opts, sprite: hang, x: e.global.x, y: e.global.y, px: e.global.x };
+    const gx = e.global.x, gy = e.global.y;
+    // «в руках»: спрайт породы (та же текстура, что на полу), иначе процедурный
+    let sprite: Container = aiHeldSpriteFor(opts.cat, opts.displayH) ?? (() => {
+      const proc = buildCat(expressPhenotype(opts.cat.genotype), 'hang', opts.cat.genotype.sex);
+      proc.scale.set((opts.displayH * 1.6) / Math.max(1, proc.height));
+      proc.pivot.set(0, -104);
+      return proc;
+    })();
+    sprite.position.set(gx, gy);
+    this.dragLayer.addChild(sprite);
+    this.grab = {
+      opts, sprite, baseScale: sprite.scale.x,
+      x: gx, y: gy, cx: gx, cy: gy, vx: 0, t: 0, pop: 0,
+      originRoom: this.currentRoom, edgeCd: 0,
+    };
     this.app.canvas.style.cursor = 'grabbing';
   }
 
   private endGrab(): void {
     if (!this.grab) return;
-    const gx = this.grab.x;
-    this.grab.sprite.destroy({ children: true });
-    this.grab.opts.show();
-    this.grab.opts.onDrop(gx);
+    const g = this.grab;
+    const { x: gx, y: gy, opts, originRoom } = g;
+    g.sprite.destroy({ children: true });
     this.grab = null;
     this.app.canvas.style.cursor = 'default';
+
+    // пристроить кота в текущей комнате (слот вязки / приют / питомник)
+    if (this.handleCatDrop(opts.cat, gx, gy)) return; // успех → commit пересобрал комнаты
+    // не пристроили — кот возвращается назад, в свою комнату
+    if (this.currentRoom !== originRoom) this.goRoom(originRoom);
+    opts.show();
+    opts.onDrop(gx);
+  }
+
+  private roomIndex(id: string): number {
+    return this.rooms.findIndex((r) => r.id === id);
+  }
+
+  /** Перетаскивая кота, у края экрана листаем комнаты: влево → Инкубатор, вправо → Приют. */
+  private carryEdgeScroll(dt: number): void {
+    const g = this.grab;
+    if (!g) return;
+    g.edgeCd -= dt;
+    if (g.edgeCd > 0) return;
+    const edge = Math.min(72, this.roomW * 0.12);
+    const lo = this.roomIndex('incubator');
+    const hi = this.roomIndex('shelter');
+    // 2 c между сменами комнат — чтобы не проскакивать центральную комнату насквозь
+    if (g.x < edge && this.currentRoom > lo) { this.goRoom(this.currentRoom - 1); g.edgeCd = 2; }
+    else if (g.x > this.roomW - edge && this.currentRoom < hi) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
+  }
+
+  /** Куда уронили кота: Инкубатор → слот вязки, Приют/Питомник → переезд. */
+  private handleCatDrop(cat: Cat, gx: number, gy: number): boolean {
+    const room = this.rooms[this.currentRoom];
+    if (!room) return false;
+    if (room.tryDropCat) return room.tryDropCat(cat, gx, gy); // Инкубатор: в слот вязки
+    if (room.id === 'shelter') return this.relocateCat(cat, 'shelter');
+    if (room.id === 'nursery') return this.relocateCat(cat, 'nursery');
+    return false; // Генолаб и пр. — ставить некуда
+  }
+
+  private relocateCat(cat: Cat, room: 'nursery' | 'shelter'): boolean {
+    const staged = isInSlot(this.state, cat.id); // кота тащат из слота вязки
+    // ничего не меняется (тот же пол, не из слота) — просто приземлить на полу
+    if (cat.location === room && !staged) return false;
+    if (cat.location !== room) {
+      const r = moveCat(this.state, cat.id, room);
+      if (!r.ok) { this.toast(r.reason); return false; } // нет места → кот вернётся в слот
+    }
+    if (staged) clearBreederSlot(this.state, cat.id); // вынимаем из слота — теперь живёт в комнате
+    this.commit();
+    this.toast(room === 'shelter' ? 'Котик в приюте 🏠' : 'Котик в питомнике 🏆');
+    return true;
   }
 
   // --- раскладка ---
@@ -498,14 +636,29 @@ export class Game implements UiContext {
       else this.world.x = this.targetX;
     }
 
-    // котик на весу: следование с инерцией + раскачивание
+    // котик «в руках»: взяли → чуть крупнее («поп»), мягко следует, лёгкая
+    // деформация и наклон-отставание от движения
     if (this.grab) {
-      const v = this.grab.sprite;
-      v.x += (this.grab.x - v.x) * Math.min(1, dt * 14);
-      v.y += (this.grab.y - v.y) * Math.min(1, dt * 14);
-      const vx = v.x - this.grab.px;
-      this.grab.px = v.x;
-      v.rotation += (Math.max(-0.5, Math.min(0.5, -vx * 0.03)) - v.rotation) * Math.min(1, dt * 10);
+      const g = this.grab;
+      g.t += dt;
+      const v = g.sprite;
+      // плавное следование за пальцем (инерция = естественное отставание корпуса)
+      g.cx += (g.x - g.cx) * Math.min(1, dt * 16);
+      g.cy += (g.y - g.cy) * Math.min(1, dt * 16);
+      v.x = g.cx; v.y = g.cy;
+      // сглаженное отставание от пальца ~ скорость (для наклона и сжатия)
+      g.vx += ((g.x - g.cx) - g.vx) * Math.min(1, dt * 10);
+      g.pop += (1 - g.pop) * Math.min(1, dt * 9); // «поп» масштаба при взятии
+      const popK = 0.9 + 0.1 * g.pop;
+      const stretch = Math.max(-1, Math.min(1, g.vx * 0.02)); // тянется по ходу
+      const breathe = Math.sin(g.t * 3) * 0.015;              // лёгкое «дыхание»
+      v.scale.set(
+        g.baseScale * popK * (1 + Math.abs(stretch) * 0.06 - breathe),
+        g.baseScale * popK * (1 - Math.abs(stretch) * 0.05 + breathe),
+      );
+      const targetRot = Math.max(-0.22, Math.min(0.22, g.vx * 0.004));
+      v.rotation += (targetRot - v.rotation) * Math.min(1, dt * 12);
+      this.carryEdgeScroll(dt); // у края экрана — переносим кота в соседнюю комнату
     }
 
     // таймеры/анимация текущей комнаты

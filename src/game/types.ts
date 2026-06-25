@@ -13,11 +13,14 @@ export type Currency = 'coins' | 'crystals' | 'dna';
 export interface Cat {
   id: string;
   genotype: Genotype;
+  breed: string;             // ключ породы из каталога (moggie | persian | ...)
   name?: string;
   bornAt: number;            // timestamp рождения
   location: LiveRoom;        // в какой комнате живёт
-  rarityTier: RarityTier;    // кэш из calcRarity
+  rarityTier: RarityTier;    // кэш: тир из каталога породы
   analyzed: boolean;         // раскрыто ли скрытое носительство (Генолаб)
+  motherBreed?: string;      // родословная: порода матери (если рождён в инкубаторе)
+  fatherBreed?: string;      // родословная: порода отца
 }
 
 /** Слот вязки в инкубаторе. readyAt === 0 — слот пуст. */
@@ -64,7 +67,10 @@ export interface GameState {
   cats: Cat[];
   slots: BreedingSlot[];
   upgrades: Record<string, number>; // id апгрейда → уровень
-  unlockedGenes: string[];          // открытые гены/фичи (Генолаб)
+  unlockedGenes: string[];          // открытые гены/фичи (Генолаб, легаси)
+  discoveredBreeds: string[];       // когда-либо полученные породы (Котодекс)
+  boosts: Record<string, number>;   // заряды генной инженерии (применяются при рождении)
+  research: string[];               // изученные узлы дерева исследований (постоянные бонусы)
   unlockedRooms: RoomId[];
   orders: Order[];
   lastSeenAt: number;               // для офлайн/пассивного дохода

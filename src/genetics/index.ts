@@ -11,3 +11,8 @@ export type { Rarity } from './rarity.js';
 export {
   wildType, makeCat, randomCat, simpleCat, detectBreed, BREED_PRESETS,
 } from './factory.js';
+export {
+  BREEDS, PEDIGREE_BREEDS, BREED_BY_KEY, BREEDS_BY_TIER, TIER_LEVEL, LEVEL_TIER,
+  tierOfBreed, breedName, isBaseBreed, breedKitten,
+} from './catalog.js';
+export type { BreedDef, BreedKind, BreedBoosts } from './catalog.js';

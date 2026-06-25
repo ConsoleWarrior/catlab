@@ -3,18 +3,67 @@
  * Возвращают Container с панелью; центрирование и затемнение — на Game.
  */
 
-import { Container, Text } from 'pixi.js';
-import type { Cat } from '../game/index.js';
+import { Container, Graphics, Text } from 'pixi.js';
+import type { Cat, BirthEvent } from '../game/index.js';
 import {
-  isBusy, adoptReward, adoptCat, moveCat, analyzeCat, claimOrder, matchesOrder,
-  ANALYZE_DNA_COST,
+  isBusy, isInSlot, clearBreederSlot, adoptReward, adoptCat, moveCat, claimOrder, matchesOrder, renameCat,
+  isAdult, growthScale, growthProgress, growthRemainingMs,
 } from '../game/index.js';
+import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, COLORS, FONT, label, panel, stars } from './theme.js';
+import { Button, COLORS, FONT, label, panel, stars, TIER_RU, TIER_COLOR } from './theme.js';
 import { describeCat, catTraits, describeReq } from './describe.js';
+import { catSprite } from './catTextures.js';
 import { upgradeButton } from './upgradeButton.js';
 
-const ANALYZE_COST = ANALYZE_DNA_COST;
+/**
+ * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
+ * (тот блокируется в части окружений) и даёт мобильную клавиатуру.
+ * onDone(null) — отмена, иначе строка из поля.
+ */
+function askText(title: string, initial: string, maxLen: number, onDone: (v: string | null) => void): void {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;'
+    + 'justify-content:center;background:rgba(42,35,32,.55);font-family:system-ui,sans-serif;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fffaf3;padding:18px;border-radius:16px;display:flex;flex-direction:column;'
+    + 'gap:12px;min-width:240px;box-shadow:0 10px 32px rgba(0,0,0,.3);';
+  const lab = document.createElement('div');
+  lab.textContent = title;
+  lab.style.cssText = 'font-weight:700;color:#5a4a42;font-size:16px;';
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.maxLength = maxLen;
+  input.value = initial;
+  input.style.cssText = 'font-size:18px;padding:9px 11px;border:2px solid #e9d8c6;border-radius:10px;'
+    + 'outline:none;color:#5a4a42;background:#fff;';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+  const cancel = document.createElement('button');
+  cancel.textContent = 'Отмена';
+  cancel.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
+    + 'cursor:pointer;background:#e9d8c6;color:#5a4a42;';
+  const ok = document.createElement('button');
+  ok.textContent = 'OK';
+  ok.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
+    + 'cursor:pointer;background:#ff9eb5;color:#fff;';
+  row.append(cancel, ok);
+  box.append(lab, input, row);
+  wrap.append(box);
+  document.body.append(wrap);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const finish = (v: string | null): void => { if (done) return; done = true; wrap.remove(); onDone(v); };
+  ok.onclick = () => finish(input.value);
+  cancel.onclick = () => finish(null);
+  wrap.onpointerdown = (e) => { if (e.target === wrap) finish(null); };
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') finish(input.value);
+    else if (e.key === 'Escape') finish(null);
+  };
+}
 
 function rewardText(r: { coins: number; crystals: number; dna: number; reputation: number }): string {
   const p: string[] = [];
@@ -69,8 +118,8 @@ export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
     '🧬 Вязка. В Питомнике тапни котика → «Выбрать для вязки» (нужны ♀ и ♂). Затем в Инкубаторе нажми «Свести» и дождись таймера — родится котёнок.',
     '🏆 Питомник. Ценные коты приносят пассивный доход 💰/мин. Тап по коту открывает меню действий.',
     '🏠 Приют. Обычных котиков пристраивай «в добрые руки» — получишь 💰 и 🧬 ДНК.',
-    '🔬 Генолаб. Трать 🧬 ДНК на новые гены — больше окрасов и заказов.',
-    '📋 Заказы. Выведи кота нужного окраса под заказ → 💰, 💎 и репутация. Репутация повышает уровень лаборатории.',
+    '🔬 Генолаб. Котодекс — альбом всех пород: собирай редких в коллекцию. Дальше — улучшения за 🧬 ДНК.',
+    '📋 Заказы. Приведи кота нужной породы или редкости → 💰, 💎 и репутация. Репутация повышает уровень лаборатории.',
     '🛒 Нет котиков? В Питомнике купи простого. Если котов нет совсем — первый бесплатно.',
     '👆 Листай комнаты свайпом ← → или стрелками по бокам.',
   ];
@@ -103,34 +152,223 @@ export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
   return root;
 }
 
+/**
+ * Карточка рождения: показывает новорождённого (облик, пол, редкость, родословную).
+ * Если родилось несколько — листаем по одному кнопкой «Следующий».
+ */
+export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () => void): Container {
+  const births = events.filter((e) => e.kitten);
+  const W = 360;
+  const root = new Container();
+  let idx = 0;
+
+  const render = (): void => {
+    root.removeChildren();
+    const ev = births[idx]!;
+    const cat = ev.kitten!;
+
+    const title = label(
+      births.length > 1 ? `🎉 Пополнение! (${idx + 1}/${births.length})` : '🎉 Малыш родился!',
+      19, COLORS.ink, '800',
+    );
+    title.position.set(W / 2, 30);
+
+    // «колыбель» под спрайтом, рамка в цвет тира
+    const boxY = 52;
+    const boxH = 150;
+    const cradle = new Graphics();
+    cradle.roundRect(W / 2 - 82, boxY, 164, boxH, 18)
+      .fill({ color: COLORS.card })
+      .stroke({ width: 3, color: TIER_COLOR[cat.rarityTier], alpha: 0.85 });
+
+    const sp = catSprite(ctx.app, cat, boxH * 0.78);
+    sp.position.set(W / 2, boxY + boxH - 14);
+
+    let y = boxY + boxH + 26;
+    const name = label(breedName(cat.breed), 19, COLORS.ink, '800');
+    name.position.set(W / 2, y); y += 24;
+
+    const st = stars(cat.rarityTier, 16);
+    st.position.set(W / 2, y); y += 22;
+
+    const tierT = label(TIER_RU[cat.rarityTier], 13, TIER_COLOR[cat.rarityTier], '800');
+    tierT.position.set(W / 2, y); y += 22;
+
+    const grow = label('пол и имя проявятся, когда подрастёт 🌱', 12, COLORS.inkSoft, '600');
+    grow.position.set(W / 2, y); y += 24;
+
+    const extra: Container[] = [];
+    if (ev.motherBreed && ev.fatherBreed) {
+      const line = label(
+        `от: ${breedName(ev.motherBreed)} ♀ × ${breedName(ev.fatherBreed)} ♂`,
+        12, COLORS.inkSoft, '600',
+      );
+      line.position.set(W / 2, y); extra.push(line); y += 22;
+
+      const parentMax = Math.max(
+        TIER_LEVEL[tierOfBreed(ev.motherBreed)],
+        TIER_LEVEL[tierOfBreed(ev.fatherBreed)],
+      );
+      if (TIER_LEVEL[cat.rarityTier] > parentMax) {
+        const up = label('🌟 редкость выше родителей!', 13, COLORS.good, '800');
+        up.position.set(W / 2, y); extra.push(up); y += 24;
+      }
+    }
+    y += 8;
+
+    const last = idx >= births.length - 1;
+    const advance = (): void => { if (last) close(); else { idx++; render(); } };
+
+    // отправить новорождённого в приют (по умолчанию малыш остаётся в питомнике)
+    const toShelter = new Button({ text: '➡️ В приют', w: W - 60, h: 42, color: COLORS.secondary, fontSize: 15 });
+    toShelter.position.set(W / 2, y + 21);
+    toShelter.onTap = () => {
+      const r = moveCat(ctx.state, cat.id, 'shelter');
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      ctx.commit();
+      ctx.toast('Малыш отправлен в приют 🏠');
+      advance();
+    };
+    y += 50;
+
+    const btn = new Button({
+      text: last ? 'В питомник 🏠' : 'Следующий →',
+      w: W - 60, h: 46, color: COLORS.primary, fontSize: 16,
+    });
+    btn.position.set(W / 2, y + 23);
+    btn.onTap = advance;
+    y += 58;
+
+    root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, name, st, tierT, grow, ...extra, toShelter, btn);
+  };
+
+  render();
+  return root;
+}
+
+/**
+ * Табличка котёнка: пока малыш не вырос — порода, редкость и шкала времени до
+ * взросления (заполняется в реальном времени). Имя/пол и действия вязки скрыты,
+ * проявятся, когда котёнок повзрослеет. По взрослении карточка сама переключится.
+ */
+function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const tierCol = TIER_COLOR[cat.rarityTier];
+
+  const title = label(breedName(cat.breed), 19, tierCol, '800');
+  title.position.set(W / 2, 28);
+
+  const boxY = 50, boxH = 130;
+  const cradle = new Graphics();
+  cradle.roundRect(W / 2 - 78, boxY, 156, boxH, 18)
+    .fill({ color: COLORS.card })
+    .stroke({ width: 3, color: tierCol, alpha: 0.85 });
+  const sp = catSprite(ctx.app, cat, boxH * 0.7 * growthScale(cat, ctx.now()));
+  sp.position.set(W / 2, boxY + boxH - 12);
+
+  let y = boxY + boxH + 22;
+  const st = stars(cat.rarityTier, 15);
+  st.position.set(W / 2, y); y += 22;
+  const tierT = label(`🍼 котёнок · ${TIER_RU[cat.rarityTier]}`, 13, tierCol, '800');
+  tierT.position.set(W / 2, y); y += 22;
+  const hint = label('пол и имя проявятся, когда подрастёт 🌱', 12, COLORS.inkSoft, '600');
+  hint.position.set(W / 2, y); y += 24;
+
+  // шкала взросления (заполняется в реальном времени)
+  const barW = W - 60, barH = 14, barX = (W - barW) / 2, barY = y;
+  const barBg = new Graphics();
+  barBg.roundRect(barX, barY, barW, barH, 7).fill({ color: 0x000000, alpha: 0.08 });
+  const bar = new Graphics();
+  const timeT = label('', 13, COLORS.ink, '700');
+  timeT.position.set(W / 2, barY + barH + 16);
+  y = barY + barH + 34;
+
+  // контекстная кнопка переезда — чтобы малыш не занимал место навсегда
+  const toShelter = cat.location === 'nursery';
+  const moveBtn = new Button({
+    text: toShelter ? '➡️ В приют' : '⬅️ В питомник',
+    w: W - 60, h: 42, color: COLORS.secondary, fontSize: 15,
+  });
+  moveBtn.position.set(W / 2, y + 21);
+  moveBtn.onTap = () => {
+    const r = moveCat(ctx.state, cat.id, toShelter ? 'shelter' : 'nursery');
+    if (r.ok) { close(); ctx.commit(); } else ctx.toast(r.reason);
+  };
+  y += 50;
+
+  const closeBtn = new Button({ text: 'Закрыть', w: W - 60, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 20);
+  closeBtn.onTap = close;
+  y += 50;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, st, tierT, hint, barBg, bar, timeT, moveBtn, closeBtn);
+
+  const mmss = (ms: number): string => {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  const redraw = (): void => {
+    const p = growthProgress(cat, ctx.now());
+    bar.clear();
+    bar.roundRect(barX, barY, Math.max(2, barW * p), barH, 7).fill(COLORS.primary);
+    timeT.text = `до взросления: ${mmss(growthRemainingMs(cat, ctx.now()))}`;
+  };
+  redraw();
+  // живое обновление шкалы; как только вырос — переоткрываем как взрослого
+  const fn = (): void => {
+    if (!root.parent) { ctx.app.ticker.remove(fn); return; }
+    if (isAdult(cat, ctx.now())) { ctx.app.ticker.remove(fn); close(); ctx.openCatMenu(cat); return; }
+    redraw();
+  };
+  ctx.app.ticker.add(fn);
+
+  return root;
+}
+
 /** Меню действий над котом. */
 export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Container {
+  if (!isAdult(cat, ctx.now())) return buildKittenCard(ctx, cat, close);
   const W = 380;
   const root = new Container();
   const busy = isBusy(ctx.state, cat.id);
-  const selected = ctx.selection.includes(cat.id);
 
   const traits = catTraits(cat);
   const H = 150 + traits.length * 20 + (busy ? 28 : 0) + 4 * 54;
   root.addChild(panel(W, H, COLORS.hud, 18));
 
-  const title = label(describeCat(cat), 17, COLORS.ink, '800');
+  const named = cat.name?.trim();
+  const title = label(named || describeCat(cat), 17, named ? TIER_COLOR[cat.rarityTier] : COLORS.ink, '800');
   title.position.set(W / 2, 28);
   root.addChild(title);
 
-  const st = stars(cat.rarityTier, 15);
-  st.position.set(W / 2, 52);
-  root.addChild(st);
+  let y = 52;
+  if (named) {
+    const sub = label(describeCat(cat), 12, COLORS.inkSoft, '700');
+    sub.position.set(W / 2, y);
+    root.addChild(sub);
+    y += 18;
+  }
 
-  let y = 78;
+  const st = stars(cat.rarityTier, 15);
+  st.position.set(W / 2, y);
+  root.addChild(st);
+  y += 26;
+  // строки облика: перенос по словам, чтобы текст не вылезал за край меню
   for (const line of traits) {
-    const t = label(line, 13, COLORS.inkSoft, '600');
-    t.anchor.set(0, 0.5);
+    const t = new Text({
+      text: line,
+      style: {
+        fontFamily: FONT, fontSize: 13, fontWeight: '600', fill: COLORS.inkSoft,
+        wordWrap: true, wordWrapWidth: W - 56, lineHeight: 18, align: 'left',
+      },
+    });
+    t.anchor.set(0, 0);
     t.position.set(28, y);
     root.addChild(t);
-    y += 20;
+    y += t.height + 4;
   }
-  y += 8;
+  y += 10;
 
   if (busy) {
     const note = label('💤 кот занят в вязке', 14, COLORS.warn, '700');
@@ -149,35 +387,36 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     y += 52;
   };
 
-  addBtn(
-    selected ? '✓ Выбран для вязки' : '🐾 Выбрать для вязки',
-    selected ? COLORS.good : COLORS.primary,
-    !busy,
-    () => { ctx.toggleSelect(cat.id); close(); ctx.commit(); },
-  );
+  // Перемещение между комнатами и постановка на вязку — теперь перетаскиванием
+  // (взять кота за шкирку → отнести в нужную комнату / на слот инкубатора).
+  addBtn(named ? '✏️ Переименовать' : '✏️ Дать имя', COLORS.warn, true, () => {
+    askText('Имя котика:', cat.name ?? '', 16, (input) => {
+      if (input === null) return;               // отмена — ничего не делаем
+      const r = renameCat(ctx.state, cat.id, input);
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      ctx.commit();
+      close();
+      ctx.openCatMenu(cat);                      // переоткрыть с новым именем
+    });
+  });
 
-  if (cat.location === 'nursery') {
-    addBtn('➡️ Отправить в приют', COLORS.secondary, !busy, () => {
-      const r = moveCat(ctx.state, cat.id, 'shelter');
-      if (r.ok) { close(); ctx.commit(); } else ctx.toast(r.reason);
-    });
-  } else {
-    const rw = adoptReward(ctx.state, cat);
-    addBtn(`🏠 Пристроить (+💰${rw.coins} +🧬${rw.dna})`, COLORS.good, !busy, () => {
-      const r = adoptCat(ctx.state, cat.id);
-      if (r.ok) { close(); ctx.commit(); ctx.toast(`Котик в добрых руках 🏠 +💰${r.coins} +🧬${r.dna}`); }
-      else ctx.toast(r.reason);
-    });
-    addBtn('⬅️ Вернуть в питомник', COLORS.secondary, !busy, () => {
+  // Кот стоит в слоте вязки → быстрый возврат в питомник (без перетаскивания).
+  if (!busy && isInSlot(ctx.state, cat.id)) {
+    addBtn('⬅️ В питомник', COLORS.secondary, true, () => {
       const r = moveCat(ctx.state, cat.id, 'nursery');
-      if (r.ok) { close(); ctx.commit(); } else ctx.toast(r.reason);
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      clearBreederSlot(ctx.state, cat.id);
+      close(); ctx.commit(); ctx.toast('Котик в питомнике 🏆');
     });
   }
 
-  if (!cat.analyzed) {
-    addBtn(`🔬 Анализ носительства (${ANALYZE_COST} 🧬)`, COLORS.dna, ctx.state.dna >= ANALYZE_COST, () => {
-      const r = analyzeCat(ctx.state, cat.id);
-      if (r.ok) { close(); ctx.commit(); ctx.toast('Анализ выполнен 🔬'); }
+  // Пристройство «в добрые руки» (только из приюта) — это не переезд, а награда.
+  if (cat.location === 'shelter') {
+    const rw = adoptReward(ctx.state, cat);
+    addBtn(`🏠 Пристроить (+💰${rw.coins} +🧬${rw.dna})`, COLORS.good, !busy, () => {
+      clearBreederSlot(ctx.state, cat.id); // если стоял в слоте — убрать ссылку
+      const r = adoptCat(ctx.state, cat.id);
+      if (r.ok) { close(); ctx.commit(); ctx.toast(`Котик в добрых руках 🏠 +💰${r.coins} +🧬${r.dna}`); }
       else ctx.toast(r.reason);
     });
   }

@@ -37,7 +37,9 @@ describe('геттеры прокачки', () => {
     const s = createInitialState(makeRng(3), 0);
     expect(incubationDuration(s)).toBe(C.INCUBATION_BASE_MS);
     s.upgrades.speed = 2;
-    expect(incubationDuration(s)).toBe(C.INCUBATION_BASE_MS - 2 * C.SPEED_STEP_MS);
+    expect(incubationDuration(s)).toBe(
+      Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS - 2 * C.SPEED_STEP_MS),
+    );
     s.upgrades.speed = 999;
     expect(incubationDuration(s)).toBe(C.INCUBATION_MIN_MS);
   });
@@ -104,6 +106,37 @@ describe('доход и пристройство', () => {
     expect(adoptReward(s, cat)).toEqual({
       coins: Math.round(v.adopt * (1 + C.CONNECTIONS_STEP)),
       dna: Math.round(v.dna * (1 + C.BIOBANK_STEP)),
+    });
+  });
+});
+
+describe('дерево исследований (эффекты)', () => {
+  it('инфраструктура расширяет вместимости и потолок офлайна', () => {
+    const s = createInitialState(makeRng(30), 0);
+    s.research = ['r_infra1', 'r_infra2', 'r_infra3'];
+    expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP + 4);
+    expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + 6);
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 180);
+  });
+
+  it('доходные узлы дают множитель и бонус за коллекцию', () => {
+    const s = createInitialState(makeRng(31), 0);
+    const base = passiveRatePerMin(s);
+    s.research = ['r_income1']; // +25% пассива
+    expect(passiveRatePerMin(s)).toBeCloseTo(base * 1.25);
+    s.research = ['r_income3']; // +0.5 💰/мин за каждую открытую породу
+    s.discoveredBreeds = ['a', 'b', 'c', 'd'];
+    expect(passiveRatePerMin(s)).toBeCloseTo(base + 4 * 0.5);
+  });
+
+  it('узлы пристройства увеличивают 💰 и 🧬', () => {
+    const s = createInitialState(makeRng(32), 0);
+    const cat = s.cats[0]!;
+    const v = C.TIER_VALUE[cat.rarityTier];
+    s.research = ['r_adopt1', 'r_adopt2', 'r_adopt3']; // +0.30 и +0.50 к 💰, +0.40 к 🧬
+    expect(adoptReward(s, cat)).toEqual({
+      coins: Math.round(v.adopt * (1 + 0.30 + 0.50)),
+      dna: Math.round(v.dna * (1 + 0.40)),
     });
   });
 });

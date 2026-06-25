@@ -3,8 +3,8 @@
  * Время передаётся параметром `now` (тестируемо), RNG — параметром. См. GAME.md §10.
  */
 
-import { breed, isLethal, simpleCat } from '../genetics/index.js';
-import type { Rng } from '../genetics/index.js';
+import { breed, isLethal, simpleCat, breedKitten } from '../genetics/index.js';
+import type { Rng, BreedBoosts } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
@@ -56,14 +56,14 @@ export function startBreeding(
   if (!mother || !father) return { ok: false, reason: 'кот не найден' };
   if (mother.genotype.sex !== 'female') return { ok: false, reason: 'мама должна быть самкой' };
   if (father.genotype.sex !== 'male') return { ok: false, reason: 'папа должен быть самцом' };
+  if (!E.isAdult(mother, now) || !E.isAdult(father, now)) {
+    return { ok: false, reason: 'котёнок ещё не вырос' };
+  }
   if (E.isBusy(state, motherId) || E.isBusy(state, fatherId)) {
     return { ok: false, reason: 'кот уже занят в вязке' };
   }
-  // резервируем место в питомнике под будущего котёнка
-  const pending = state.slots.filter((s) => s.readyAt > 0).length;
-  if (E.catsIn(state, 'nursery').length + pending >= E.nurseryCapacity(state)) {
-    return { ok: false, reason: 'нет места в питомнике — пристрой котиков' };
-  }
+  // Место в питомнике НЕ требуется: вязку можно запустить всегда, котёнок
+  // родится даже при переполненном питомнике (его потом пристраивают).
   slot.motherId = motherId;
   slot.fatherId = fatherId;
   slot.startedAt = now;
@@ -71,10 +71,52 @@ export function startBreeding(
   return { ok: true };
 }
 
+/**
+ * Поставить кота в слот вязки (перетаскиванием). Кот занимает место по полу:
+ * самка → «мама», самец → «папа». Если место в этой роли уже занято другим
+ * котом — он просто освобождается (коты «меняются местами»). Слот с активной
+ * вязкой (readyAt > 0) трогать нельзя. Само рождение запускается кнопкой «Свести».
+ */
+export function assignBreeder(state: GameState, slotIndex: number, catId: string, now: number): Result {
+  const slot = state.slots[slotIndex];
+  if (!slot) return { ok: false, reason: 'нет такого слота' };
+  if (slot.readyAt > 0) return { ok: false, reason: 'слот занят вязкой' };
+  const cat = findCat(state, catId);
+  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
+  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот уже занят в вязке' };
+  // снимаем кота с других неактивных слотов, чтобы он не «раздваивался»
+  for (const s of state.slots) {
+    if (s.readyAt > 0) continue;
+    if (s.motherId === catId) s.motherId = null;
+    if (s.fatherId === catId) s.fatherId = null;
+  }
+  if (cat.genotype.sex === 'female') slot.motherId = catId;
+  else slot.fatherId = catId;
+  return { ok: true };
+}
+
+/**
+ * Снять кота со всех неактивных слотов вязки (при перетаскивании из слота
+ * обратно в комнату или возврате кнопкой). Слот с идущей вязкой не трогаем.
+ * Возвращает true, если кот где-то стоял.
+ */
+export function clearBreederSlot(state: GameState, catId: string): boolean {
+  let removed = false;
+  for (const s of state.slots) {
+    if (s.readyAt > 0) continue;
+    if (s.motherId === catId) { s.motherId = null; removed = true; }
+    if (s.fatherId === catId) { s.fatherId = null; removed = true; }
+  }
+  return removed;
+}
+
 export interface BirthEvent {
   slotIndex: number;
   kitten?: Cat;
   stillborn: boolean;
+  motherBreed?: string;       // родословная (для карточки рождения)
+  fatherBreed?: string;
 }
 
 /** Забирает всех готовых котят из инкубатора. Обрабатывает летальные комбо. */
@@ -100,9 +142,20 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
       events.push({ slotIndex: i, stillborn: true });
       continue;
     }
-    const kitten = E.makeCatInstance(state, child, now, 'nursery');
+    // Порода котёнка — по лестнице редкости от пород родителей (прогрессия коллекции).
+    // Усилители «Генной инженерии» влияют на исход; списываем только сработавшие.
+    const used: BreedBoosts = {};
+    const childBreed = breedKitten(mother.breed, father.breed, rng, E.activeBoosts(state), used);
+    E.consumeBoosts(state, used);
+    const kitten = E.makeCatInstance(state, child, now, 'nursery', childBreed);
+    kitten.bornAt = now; // настоящий новорождённый — появляется маленьким и растёт
+    kitten.motherBreed = mother.breed; // родословная — покажем в карточке кота
+    kitten.fatherBreed = father.breed;
     state.cats.push(kitten);
-    events.push({ slotIndex: i, kitten, stillborn: false });
+    events.push({
+      slotIndex: i, kitten, stillborn: false,
+      motherBreed: mother.breed, fatherBreed: father.breed,
+    });
   }
   return events;
 }
@@ -145,6 +198,16 @@ export function moveCat(state: GameState, catId: string, room: LiveRoom): Result
   return { ok: true };
 }
 
+/** Дать/сменить имя коту. Пустая строка — сбросить имя. Длина обрезается до 16. */
+export function renameCat(state: GameState, catId: string, name: string): Result {
+  const cat = findCat(state, catId);
+  if (!cat) return { ok: false, reason: 'кот не найден' };
+  const trimmed = name.trim().slice(0, 16);
+  if (trimmed) cat.name = trimmed;
+  else delete cat.name;
+  return { ok: true };
+}
+
 // --- Прокачка ---
 
 export function buyUpgrade(state: GameState, id: string): Result {
@@ -175,6 +238,28 @@ export function analyzeCat(state: GameState, catId: string): Result {
   if (cat.analyzed) return { ok: true };
   if (!spend(state, 'dna', C.ANALYZE_DNA_COST)) return { ok: false, reason: 'не хватает ДНК' };
   cat.analyzed = true;
+  return { ok: true };
+}
+
+/** Зарядить усилитель «Генной инженерии» (+1 заряд за 🧬). Тратится при рождении. */
+export function buyBoost(state: GameState, id: string): Result {
+  const def = C.BOOSTS.find((b) => b.id === id);
+  if (!def) return { ok: false, reason: 'нет такого усилителя' };
+  if (!spend(state, 'dna', def.dna)) return { ok: false, reason: 'не хватает ДНК' };
+  state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
+  return { ok: true };
+}
+
+/** Изучить узел дерева исследований (постоянный бонус за 🧬). */
+export function unlockResearch(state: GameState, id: string): Result {
+  const def = C.RESEARCH.find((r) => r.id === id);
+  if (!def) return { ok: false, reason: 'нет такого исследования' };
+  if (state.research.includes(id)) return { ok: false, reason: 'уже изучено' };
+  if (!def.requires.every((req) => state.research.includes(req))) {
+    return { ok: false, reason: 'сначала изучи предыдущее' };
+  }
+  if (!spend(state, 'dna', def.dna)) return { ok: false, reason: 'не хватает ДНК' };
+  state.research.push(id);
   return { ok: true };
 }
 

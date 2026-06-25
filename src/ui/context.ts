@@ -5,7 +5,7 @@
 
 import type { Application, Container, Texture, FederatedPointerEvent } from 'pixi.js';
 import type { Rng } from '../genetics/index.js';
-import type { Cat, GameState } from '../game/index.js';
+import type { Cat, GameState, BirthEvent } from '../game/index.js';
 
 /** Параметры взятия котика «за шкирку» (живой котик в комнате). */
 export interface GrabOpts {
@@ -25,6 +25,13 @@ export interface Room {
   refresh(): void;
   /** Покадровое обновление (таймеры, анимация). dt — секунды. */
   tick?(dt: number): void;
+  /** (Генолаб) переключить активную под-секцию — навигация/DEV. */
+  setSection?(id: string): void;
+  /**
+   * Уронили перетаскиваемого кота в этой комнате (глобальные экранные коорд.).
+   * Вернуть true, если кот пристроен (состояние изменилось) — иначе он вернётся назад.
+   */
+  tryDropCat?(cat: Cat, globalX: number, globalY: number): boolean;
 }
 
 export interface UiContext {
@@ -48,6 +55,8 @@ export interface UiContext {
   clearSelection(): void;
   goRoom(index: number): void;
   openCatMenu(cat: Cat): void;
+  /** Карточка(и) новорождённых после «Забрать» в инкубаторе. */
+  openBirthCard(events: BirthEvent[]): void;
   openOrders(): void;
   openUpgrades(title: string, ids: string[]): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */

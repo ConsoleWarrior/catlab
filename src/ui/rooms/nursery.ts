@@ -6,7 +6,7 @@
 
 import { Container } from 'pixi.js';
 import {
-  catsIn, nurseryCapacity, passiveRatePerMin, buyCat, buyCatCost,
+  catsIn, nurseryCapacity, passiveRatePerMin, buyCat, buyCatCost, isInSlot,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
@@ -23,17 +23,20 @@ export function createNursery(ctx: UiContext): Room {
   const floor = createLivingFloor(
     ctx, floorLayer,
     { x: 24, y: bandTop, w: ctx.roomW - 48, h: Math.max(80, baseline - bandTop) },
-    () => catsIn(ctx.state, 'nursery'),
+    // коты, поставленные в слот вязки, физически в инкубаторе — на полу их не показываем
+    () => catsIn(ctx.state, 'nursery').filter((c) => !isInSlot(ctx.state, c.id)),
   );
 
   function refresh(): void {
     shell.body.removeChildren();
-    const cats = catsIn(ctx.state, 'nursery');
+    const owned = catsIn(ctx.state, 'nursery');
+    // на полу — без тех, кто сейчас стоит в слоте инкубатора (они «в отъезде»)
+    const present = owned.filter((c) => !isInSlot(ctx.state, c.id));
     const cap = nurseryCapacity(ctx.state);
     const rate = passiveRatePerMin(ctx.state);
 
     const info = label(
-      `${cats.length}/${cap} котиков   ·   💰 +${rate.toFixed(rate < 10 ? 1 : 0)}/мин`,
+      `${present.length}/${cap} котиков   ·   💰 +${rate.toFixed(rate < 10 ? 1 : 0)}/мин`,
       15, COLORS.ink, '700',
     );
     info.anchor.set(0, 0.5);
@@ -45,7 +48,8 @@ export function createNursery(ctx: UiContext): Room {
       text: cost === 0 ? '🛒 Котик (бесплатно)' : `🛒 Купить котика (${cost} 💰)`,
       w: 220, h: 40, color: COLORS.good, fontSize: 14,
     });
-    buy.enabled = cats.length < cap && ctx.state.coins >= cost;
+    // покупку ограничиваем по «владению» (как buyCat) — слотовые коты ещё наши
+    buy.enabled = owned.length < cap && ctx.state.coins >= cost;
     buy.position.set(shell.contentW - 252, 16);
     buy.onTap = () => {
       const r = buyCat(ctx.state, ctx.rng, ctx.now());

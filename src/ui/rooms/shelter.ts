@@ -5,7 +5,7 @@
  */
 
 import { Container } from 'pixi.js';
-import { catsIn, shelterCapacity } from '../../game/index.js';
+import { catsIn, shelterCapacity, isInSlot } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
@@ -21,16 +21,18 @@ export function createShelter(ctx: UiContext): Room {
   const floor = createLivingFloor(
     ctx, floorLayer,
     { x: 24, y: bandTop, w: ctx.roomW - 48, h: Math.max(80, baseline - bandTop) },
-    () => catsIn(ctx.state, 'shelter'),
+    // коты, поставленные в слот вязки, физически в инкубаторе — на полу их не показываем
+    () => catsIn(ctx.state, 'shelter').filter((c) => !isInSlot(ctx.state, c.id)),
   );
 
   function refresh(): void {
     shell.body.removeChildren();
-    const cats = catsIn(ctx.state, 'shelter');
+    // на полу — без тех, кто сейчас стоит в слоте инкубатора (они «в отъезде»)
+    const present = catsIn(ctx.state, 'shelter').filter((c) => !isInSlot(ctx.state, c.id));
     const cap = shelterCapacity(ctx.state);
 
     const info = label(
-      `${cats.length}/${cap} котиков ждут добрые руки   ·   тапни → пристроить (💰 + 🧬)`,
+      `${present.length}/${cap} котиков ждут добрые руки   ·   тапни → пристроить (💰 + 🧬)`,
       15, COLORS.ink, '700',
     );
     info.anchor.set(0, 0.5);

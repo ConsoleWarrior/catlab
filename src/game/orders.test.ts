@@ -8,56 +8,68 @@ import type { Order } from './index.js';
 const noReward = { coins: 0, crystals: 0, dna: 0, reputation: 0 };
 
 describe('matchesOrder', () => {
-  it('совпадение и несовпадение по цвету', () => {
+  it('совпадение и несовпадение по породе', () => {
     const s = createInitialState(makeRng(1), 0);
-    const black = makeCatInstance(s, makeCat('female'), 0); // дикий чёрный
-    const ok: Order = { id: 'o', req: { baseColor: 'black' }, reward: noReward, createdAt: 0, expiresAt: 0 };
-    const bad: Order = { ...ok, req: { baseColor: 'blue' } };
-    expect(matchesOrder(ok, black)).toBe(true);
-    expect(matchesOrder(bad, black)).toBe(false);
+    const persian = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
+    const ok: Order = { id: 'o', req: { breed: 'persian' }, reward: noReward, createdAt: 0, expiresAt: 0 };
+    const bad: Order = { ...ok, req: { breed: 'siamese' } };
+    expect(matchesOrder(ok, persian)).toBe(true);
+    expect(matchesOrder(bad, persian)).toBe(false);
   });
 
-  it('минимальная редкость отсекает обычного кота', () => {
+  it('минимальная редкость: отсекает необычного, пропускает легендарного', () => {
     const s = createInitialState(makeRng(2), 0);
-    const plain = makeCatInstance(s, makeCat('male', { A: ['a', 'a'] }), 0); // чёрный солид
-    const order: Order = { id: 'o', req: { minRarity: 'epic' }, reward: noReward, createdAt: 0, expiresAt: 0 };
-    expect(matchesOrder(order, plain)).toBe(false);
+    const persian = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian'); // uncommon
+    const bengal = makeCatInstance(s, makeCat('male'), 0, 'nursery', 'bengal');     // legendary
+    const order: Order = { id: 'o', req: { minRarity: 'rare' }, reward: noReward, createdAt: 0, expiresAt: 0 };
+    expect(matchesOrder(order, persian)).toBe(false);
+    expect(matchesOrder(order, bengal)).toBe(true);
+  });
+
+  it('дворовый кот не подходит под заказ конкретной породы', () => {
+    const s = createInitialState(makeRng(3), 0);
+    const moggie = makeCatInstance(s, makeCat('female'), 0); // breed по умолчанию moggie
+    const order: Order = { id: 'o', req: { breed: 'persian' }, reward: noReward, createdAt: 0, expiresAt: 0 };
+    expect(matchesOrder(order, moggie)).toBe(false);
   });
 });
 
 describe('generateOrder', () => {
-  it('не требует закрытых генов', () => {
-    const s = createInitialState(makeRng(3), 0); // dilute/fold/curl/pointed/longhair закрыты
+  it('заказы требуют породу или минимальную редкость (без генных полей)', () => {
+    const s = createInitialState(makeRng(3), 0);
     const rng = makeRng(123);
     for (let i = 0; i < 200; i++) {
       const o = generateOrder(s, rng, 0);
-      if (o.req.baseColor) expect(['blue', 'cream']).not.toContain(o.req.baseColor);
+      expect(o.req.breed !== undefined || o.req.minRarity !== undefined).toBe(true);
       expect(o.req.earShape).toBeUndefined();
       expect(o.req.coatLength).toBeUndefined();
-      expect(o.req.breed).toBeUndefined();
+      // конкретная порода в заказе — всегда породистая (не базовый дворовый)
+      if (o.req.breed) expect(o.req.breed).not.toBe('moggie');
     }
   });
 
-  it('после открытия dilute синий/кремовый попадают в пул', () => {
+  it('в пул попадают и конкретные породы, и тиры редкости', () => {
     const s = createInitialState(makeRng(4), 0);
-    s.unlockedGenes.push('dilute');
     const rng = makeRng(7);
-    let seen = false;
+    let sawBreed = false;
+    let sawTier = false;
     for (let i = 0; i < 300; i++) {
-      const c = generateOrder(s, rng, 0).req.baseColor;
-      if (c === 'blue' || c === 'cream') { seen = true; break; }
+      const req = generateOrder(s, rng, 0).req;
+      if (req.breed) sawBreed = true;
+      if (req.minRarity) sawTier = true;
     }
-    expect(seen).toBe(true);
+    expect(sawBreed).toBe(true);
+    expect(sawTier).toBe(true);
   });
 });
 
 describe('claimOrder', () => {
   it('подходящий кот → награда, репутация, уровень; кот уезжает', () => {
     const s = createInitialState(makeRng(5), 0);
-    const cat = makeCatInstance(s, makeCat('female'), 0); // чёрный
+    const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
     s.cats.push(cat);
     const order: Order = {
-      id: 'o1', req: { baseColor: 'black' },
+      id: 'o1', req: { breed: 'persian' },
       reward: { coins: 100, crystals: 0, dna: 5, reputation: 120 },
       createdAt: 0, expiresAt: 0,
     };
@@ -75,9 +87,9 @@ describe('claimOrder', () => {
 
   it('неподходящий кот отклоняется', () => {
     const s = createInitialState(makeRng(6), 0);
-    const cat = makeCatInstance(s, makeCat('female'), 0); // чёрный
+    const cat = makeCatInstance(s, makeCat('female'), 0); // дворовый
     s.cats.push(cat);
-    const order: Order = { id: 'o2', req: { baseColor: 'blue' }, reward: noReward, createdAt: 0, expiresAt: 0 };
+    const order: Order = { id: 'o2', req: { breed: 'siamese' }, reward: noReward, createdAt: 0, expiresAt: 0 };
     s.orders.push(order);
     expect(claimOrder(s, 'o2', cat.id, 0).ok).toBe(false);
   });

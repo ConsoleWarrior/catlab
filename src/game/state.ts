@@ -22,6 +22,9 @@ export function createInitialState(rng: Rng, now: number): GameState {
     slots: [emptySlot()],
     upgrades: {},
     unlockedGenes: [...BASE_GENES],
+    discoveredBreeds: [],
+    boosts: {},
+    research: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
     lastSeenAt: now,
@@ -41,6 +44,9 @@ export function serialize(state: GameState): string {
 /** Восстанавливает состояние из сейва (заглушка миграций по version). */
 export function deserialize(json: string): GameState {
   const data = JSON.parse(json) as GameState;
-  // здесь будут миграции при росте SAVE_VERSION
+  // мягкие дефолты для полей, добавленных в новых версиях
+  if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
+  if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
+  if (!Array.isArray(data.research)) data.research = [];
   return data;
 }
