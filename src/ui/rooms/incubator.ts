@@ -21,7 +21,7 @@ import {
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, label, panel } from '../theme.js';
-import { catSprite } from '../catTextures.js';
+import { catSprite, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { darken } from '../../render/palette.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
@@ -38,6 +38,7 @@ interface LiveSlot {
   startedAt: number;
   partition: Graphics; partRaise: number;
   mom?: Sprite; dad?: Sprite;
+  momGlow?: Sprite; dadGlow?: Sprite; kitGlow?: Sprite;  // ореолы редкости (под спрайтами)
   kitten?: Sprite; kittenBase: number; kittenCat?: Cat;  // «оставленный с роднёй» малыш в центре
   momHomeX: number; momMeetX: number; dadHomeX: number; dadMeetX: number;
   momBase: number; dadBase: number;
@@ -53,6 +54,14 @@ interface LiveSlot {
 function mmss(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Ореол редкости повторяет позу своего кота (положение/сквош/наклон). */
+function syncGlow(sp?: Sprite, g?: Sprite): void {
+  if (!sp || !g) return;
+  g.position.copyFrom(sp.position);
+  g.scale.set(sp.scale.x * GLOW_OUT, sp.scale.y * GLOW_OUT);
+  g.rotation = sp.rotation;
 }
 
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
@@ -251,6 +260,7 @@ export function createIncubator(ctx: UiContext): Room {
     };
 
     let mom: Sprite | undefined, dad: Sprite | undefined;
+    let momGlow: Sprite | undefined, dadGlow: Sprite | undefined;
     let momBase = 1, dadBase = 1;
     // Отца добавляем первым — он стоит ЗА самкой, поэтому во время вязки
     // (когда коты сходятся внахлёст) спрайт отца оказывается сзади.
@@ -259,7 +269,9 @@ export function createIncubator(ctx: UiContext): Room {
       dadBase = Math.abs(dad.scale.x);
       dad.scale.x = dadBase;              // слева — смотрит вправо, к центру
       dad.position.set(busy ? dadMeetX : dadHomeX, floorY);
-      chamber.addChild(dad);
+      dadGlow = rarityGlow(dad, dadCat.rarityTier, catH);
+      dadGlow.position.copyFrom(dad.position);
+      chamber.addChild(dadGlow, dad);
       wireSlotCat(dad, dadCat);
     }
     if (momCat) {
@@ -267,7 +279,9 @@ export function createIncubator(ctx: UiContext): Room {
       momBase = Math.abs(mom.scale.x);
       mom.scale.x = -momBase;             // справа — смотрит влево, к центру
       mom.position.set(busy ? momMeetX : momHomeX, floorY);
-      chamber.addChild(mom);
+      momGlow = rarityGlow(mom, momCat.rarityTier, catH);
+      momGlow.position.copyFrom(mom.position);
+      chamber.addChild(momGlow, mom);
       wireSlotCat(mom, momCat);
     }
 
@@ -301,13 +315,16 @@ export function createIncubator(ctx: UiContext): Room {
     // «оставленный с роднёй» малыш — в центре, маленький, растёт втрое медленнее.
     // Берётся за шкирку → унести в комнату (или тап → меню кота).
     let kitten: Sprite | undefined;
+    let kitGlow: Sprite | undefined;
     let kittenBase = 1;
     if (hasKitten && heldKitten) {
       kitten = catSprite(ctx.app, heldKitten, catH);
       kittenBase = Math.abs(kitten.scale.x);
       kitten.scale.set(kittenBase * growthScale(heldKitten, now));
       kitten.position.set(centerX, floorY);
-      chamber.addChild(kitten);
+      kitGlow = rarityGlow(kitten, heldKitten.rarityTier, catH);
+      kitGlow.position.copyFrom(kitten.position);
+      chamber.addChild(kitGlow, kitten);
       const kCat = heldKitten;
       const ksp = kitten;
       ksp.eventMode = 'static';
@@ -399,6 +416,7 @@ export function createIncubator(ctx: UiContext): Room {
       busy, startedAt: slot.startedAt,
       partition, partRaise,
       mom, dad,
+      momGlow, dadGlow, kitGlow,
       kitten, kittenBase, kittenCat: heldKitten,
       momHomeX, momMeetX, dadHomeX, dadMeetX,
       momBase, dadBase,
@@ -418,14 +436,24 @@ export function createIncubator(ctx: UiContext): Room {
     for (const c of shell.body.removeChildren()) c.destroy({ children: true });
     live = [];
     const n = ctx.state.slots.length;
-    const gap = 14;
-    const slotW = Math.min(230, (shell.contentW - gap * (n - 1)) / n);
-    const slotH = Math.min(260, shell.contentH * 0.66);
+    const gap = 16;
+    // Раньше слоты брали лишь 0.66 высоты и капились 230×260 — на ландшафтном
+    // мобиле пропадала треть высоты, на ПК слоты висели маленькими по центру.
+    // Теперь тянем под доступное место (высота — главный лимит на мобиле), с
+    // потолком, чтобы на большом ПК не было гигантских карточек.
+    const colW = (shell.contentW - gap * (n - 1)) / n;
+    let slotW = Math.min(340, colW);
+    let slotH = Math.min(360, shell.contentH);
+    // держим пропорцию карточки в разумных рамках: коты внутри лимитированы
+    // шириной (шире — крупнее коты), но совсем плоские/узкие слоты выглядят плохо.
+    if (slotW > slotH * 1.35) slotW = slotH * 1.35;
+    if (slotW < slotH * 0.8) slotH = slotW / 0.8;
     const totalW = slotW * n + gap * (n - 1);
     const startX = Math.max(0, (shell.contentW - totalW) / 2);
+    const startY = Math.max(0, (shell.contentH - slotH) / 2); // центрируем по высоте
     for (let i = 0; i < n; i++) {
       const c = buildSlot(i, slotW, slotH);
-      c.position.set(startX + i * (slotW + gap), 0);
+      c.position.set(startX + i * (slotW + gap), startY);
       shell.body.addChild(c);
     }
 
@@ -500,6 +528,11 @@ export function createIncubator(ctx: UiContext): Room {
         const pop = ls.kittenPop > 0 ? 1 + Math.sin((1 - ls.kittenPop / 0.6) * Math.PI) * 0.35 : 1;
         ls.kitten.scale.set(ls.kittenBase * gs * pop, ls.kittenBase * gs * breathe * pop);
       }
+
+      // ореолы редкости повторяют позы котов этого слота
+      syncGlow(ls.mom, ls.momGlow);
+      syncGlow(ls.dad, ls.dadGlow);
+      syncGlow(ls.kitten, ls.kitGlow);
 
       // искры салюта: разлетаются, чуть падают, тают
       for (let k = ls.sparks.length - 1; k >= 0; k--) {

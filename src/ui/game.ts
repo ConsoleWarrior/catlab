@@ -6,7 +6,7 @@
  */
 
 import {
-  Application, Assets, Container, Graphics, Rectangle,
+  Application, Assets, Container, Graphics, Rectangle, Sprite,
 } from 'pixi.js';
 import type { Text, Texture, FederatedPointerEvent } from 'pixi.js';
 import { makeRng, randomCat, expressPhenotype, pick, BREEDS } from '../genetics/index.js';
@@ -22,7 +22,7 @@ import { isBusy, isInSlot } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
-import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor } from './catTextures.js';
+import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
@@ -63,7 +63,7 @@ export class Game implements UiContext {
   // взятие котика за шкирку
   private pendingGrab: { opts: GrabOpts; sx: number; sy: number } | null = null;
   private grab: {
-    opts: GrabOpts; sprite: Container; baseScale: number;
+    opts: GrabOpts; sprite: Container; glow?: Sprite; baseScale: number;
     x: number; y: number; cx: number; cy: number; vx: number; t: number; pop: number;
     originRoom: number; edgeCd: number;
   } | null = null;
@@ -393,9 +393,16 @@ export class Game implements UiContext {
       return proc;
     })();
     sprite.position.set(gx, gy);
+    // ореол редкости под котом «в руках» (только для спрайтов из текстуры)
+    let glow: Sprite | undefined;
+    if (sprite instanceof Sprite) {
+      glow = rarityGlow(sprite, opts.cat.rarityTier, opts.displayH);
+      glow.position.set(gx, gy);
+      this.dragLayer.addChild(glow);
+    }
     this.dragLayer.addChild(sprite);
     this.grab = {
-      opts, sprite, baseScale: sprite.scale.x,
+      opts, sprite, glow, baseScale: sprite.scale.x,
       x: gx, y: gy, cx: gx, cy: gy, vx: 0, t: 0, pop: 0,
       originRoom: this.currentRoom, edgeCd: 0,
     };
@@ -406,6 +413,7 @@ export class Game implements UiContext {
     if (!this.grab) return;
     const g = this.grab;
     const { x: gx, y: gy, opts, originRoom } = g;
+    g.glow?.destroy();
     g.sprite.destroy({ children: true });
     this.grab = null;
     this.app.canvas.style.cursor = 'default';
@@ -545,7 +553,7 @@ export class Game implements UiContext {
     this.dots = [];
     const n = this.rooms.length;
     const gap = 26;
-    const y = this.roomH - 22;
+    const y = this.roomH - 20;
     const totalW = gap * (n - 1);
     const startX = this.roomW / 2 - totalW / 2;
     for (let i = 0; i < n; i++) {
@@ -559,12 +567,19 @@ export class Game implements UiContext {
       this.dots.push(d);
     }
 
-    // стрелки для ПК
-    const left = new Button({ text: '‹', w: 40, h: 40, color: COLORS.hud, textColor: COLORS.ink, fontSize: 26 });
-    left.position.set(28, this.roomH / 2);
+    // Стрелки ‹ › стоят в той же нижней полосе, фланкируя точки. Раньше они
+    // висели по центру высоты у краёв экрана — поверх контента комнаты (слой nav
+    // выше world), и перехватывали тапы по контенту у левого/правого края
+    // (напр. по крайним узлам Исследований). Теперь вся навигация — в нижней
+    // зарезервированной полосе, контент её не касается.
+    const aw = 34, ah = 30;
+    const leftX = Math.max(aw / 2 + 4, startX - gap - aw / 2);
+    const rightX = Math.min(this.roomW - aw / 2 - 4, startX + totalW + gap + aw / 2);
+    const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 24 });
+    left.position.set(leftX, y);
     left.onTap = () => this.goRoom(this.currentRoom - 1);
-    const right = new Button({ text: '›', w: 40, h: 40, color: COLORS.hud, textColor: COLORS.ink, fontSize: 26 });
-    right.position.set(this.roomW - 28, this.roomH / 2);
+    const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 24 });
+    right.position.set(rightX, y);
     right.onTap = () => this.goRoom(this.currentRoom + 1);
     this.nav.addChild(left, right);
   }
@@ -705,6 +720,11 @@ export class Game implements UiContext {
       );
       const targetRot = Math.max(-0.22, Math.min(0.22, g.vx * 0.004));
       v.rotation += (targetRot - v.rotation) * Math.min(1, dt * 12);
+      if (g.glow) { // ореол следует за котом в руках
+        g.glow.position.copyFrom(v.position);
+        g.glow.scale.set(v.scale.x * GLOW_OUT, v.scale.y * GLOW_OUT);
+        g.glow.rotation = v.rotation;
+      }
       this.carryEdgeScroll(dt); // у края экрана — переносим кота в соседнюю комнату
     }
 

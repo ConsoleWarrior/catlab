@@ -11,12 +11,36 @@
  * (ассет не загрузился) — отдаём процедурного кота как запасной вариант.
  */
 
-import { Sprite } from 'pixi.js';
+import { BlurFilter, Sprite } from 'pixi.js';
 import type { Application, Texture } from 'pixi.js';
 import { expressPhenotype } from '../genetics/index.js';
-import type { Sex } from '../genetics/index.js';
+import type { Sex, RarityTier } from '../genetics/index.js';
 import type { Cat } from '../game/index.js';
 import { buildCat } from '../render/catSprite.js';
+import { TIER_COLOR } from './theme.js';
+
+/** Насколько ореол выходит за силуэт кота (множитель масштаба). Тот же
+ * коэффициент использует «живой пол» в анимации — чтобы ореол повторял позу. */
+export const GLOW_OUT = 1.06;
+
+/**
+ * Светящийся ореол цвета редкости: подкрашенный, чуть увеличенный и размытый
+ * дубль силуэта кота. Кладётся ПОД основной спрайт, поэтому наружу выходит лишь
+ * мягкая цветная кромка — узкая, но яркая. `displayH` задаёт ширину размытия.
+ */
+export function rarityGlow(src: Sprite, tier: RarityTier, displayH: number): Sprite {
+  const glow = new Sprite(src.texture);
+  glow.eventMode = 'none'; // не перехватывает тапы/перетаскивание у кота
+  glow.anchor.copyFrom(src.anchor);
+  glow.tint = TIER_COLOR[tier];
+  glow.alpha = 0.95;
+  glow.scale.set(src.scale.x * GLOW_OUT, src.scale.y * GLOW_OUT);
+  glow.filters = [new BlurFilter({
+    strength: Math.max(3, Math.min(9, displayH * 0.06)),
+    quality: 3,
+  })];
+  return glow;
+}
 
 const cache = new Map<string, Texture>();
 

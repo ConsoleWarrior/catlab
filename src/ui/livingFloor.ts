@@ -10,7 +10,7 @@ import type { Cat } from '../game/index.js';
 import { isBusy, growthScale, isAdult } from '../game/index.js';
 import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { catSprite, aiSitSpriteFor } from './catTextures.js';
+import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
 export interface Band { x: number; y: number; w: number; h: number; }
@@ -19,6 +19,7 @@ interface Actor {
   cat: Cat;
   view: Container;
   sprite: Sprite;
+  glow: Sprite;              // светящийся ореол цвета редкости (под спрайтом)
   baseScale: number;
   busy: boolean;
   adult: boolean;            // вырос ли (для подписи и эффекта взросления)
@@ -62,6 +63,10 @@ export function createLivingFloor(
 
     const sprite = aiSitSpriteFor(cat, catH) ?? catSprite(ctx.app, cat, catH);
     if (busy) sprite.alpha = 0.55;
+    // ореол редкости — под спрайтом, чтобы наружу выходила лишь цветная кромка
+    const glow = rarityGlow(sprite, cat.rarityTier, catH);
+    if (busy) glow.alpha *= 0.5;
+    view.addChild(glow);
     view.addChild(sprite);
     const baseScale = sprite.scale.x;
 
@@ -112,7 +117,7 @@ export function createLivingFloor(
     view.cursor = busy ? 'pointer' : 'grab';
 
     const actor: Actor = {
-      cat, view, sprite, baseScale, busy, adult,
+      cat, view, sprite, glow, baseScale, busy, adult,
       x, targetX: x, facing: savedFacing ?? 1,
       phase: savedPhase ?? Math.random() * 6,
       nextWander: 0.5 + Math.random() * 2.5, walking: false,
@@ -211,6 +216,9 @@ export function createLivingFloor(
         sp.scale.y = a.baseScale * breathe;
         sp.rotation += (0 - sp.rotation) * Math.min(1, dt * 8);
       }
+      // ореол повторяет позу кота (разворот/сквош/наклон)
+      a.glow.scale.set(sp.scale.x * GLOW_OUT, sp.scale.y * GLOW_OUT);
+      a.glow.rotation = sp.rotation;
     }
 
     // пересобираем повзрослевших — чтобы появилась подпись (имя/пол)
