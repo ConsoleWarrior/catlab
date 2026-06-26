@@ -87,7 +87,6 @@ export class Game implements UiContext {
   async start(reset = false): Promise<void> {
     await this.app.init({
       background: COLORS.bg,
-      resizeTo: window,
       antialias: true,
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
@@ -118,8 +117,15 @@ export class Game implements UiContext {
 
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox);
+    // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер
+    // (по центру внизу, roomW/2 × roomH-56) своими границами перехватывал хит-тест и
+    // не пускал тапы к кнопкам под ним — это и был баг «кнопки над навигацией не
+    // кликаются» (центр-низ, и на ПК, и на мобиле). 'none' убирает весь поддерево из
+    // обработки событий, на отрисовку/анимацию тоста не влияет.
+    this.toastBox.eventMode = 'none';
+    this.dragLayer.eventMode = 'none';
 
-    this.layout();
+    this.resize();
     this.installInput();
     this.app.ticker.add((t) => this.update(Math.min(t.deltaMS / 1000, 0.05)));
 
@@ -129,7 +135,15 @@ export class Game implements UiContext {
     // автосейв при сворачивании/закрытии
     document.addEventListener('visibilitychange', () => { if (document.hidden) this.save(); });
     window.addEventListener('beforeunload', () => this.save());
-    window.addEventListener('resize', () => this.layout());
+    // Канвас привязан к visualViewport — реально видимой области. На мобиле
+    // layout-вьюпорт (window.innerHeight) часто больше: низ канваса уходит под
+    // адресную строку и под навигацией появляется «пустая полоса». visualViewport
+    // даёт точную видимую высоту, поэтому навигация всегда у настоящего низа.
+    const onResize = (): void => this.resize();
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', () => setTimeout(onResize, 250));
+    window.visualViewport?.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('scroll', onResize);
 
     if (import.meta.env.DEV) {
       (window as unknown as { __game: unknown }).__game = {
@@ -469,6 +483,17 @@ export class Game implements UiContext {
 
   // --- раскладка ---
 
+  /** Подгоняем рендерер под реально видимую область (см. onResize выше). */
+  private resize(): void {
+    const vv = window.visualViewport;
+    const w = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
+    const h = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
+    if (this.app.screen.width !== w || this.app.screen.height !== h) {
+      this.app.renderer.resize(w, h);
+    }
+    this.layout();
+  }
+
   private layout(): void {
     this.roomW = this.app.screen.width;
     this.roomH = this.app.screen.height;
@@ -552,8 +577,9 @@ export class Game implements UiContext {
     this.nav.removeChildren();
     this.dots = [];
     const n = this.rooms.length;
-    const gap = 26;
-    const y = this.roomH - 20;
+    // точки разведены шире (легче попасть пальцем) и прижаты к самому низу.
+    const gap = 40;
+    const y = this.roomH - 12;
     const totalW = gap * (n - 1);
     const startX = this.roomW / 2 - totalW / 2;
     for (let i = 0; i < n; i++) {
@@ -562,6 +588,9 @@ export class Game implements UiContext {
       d.position.set(startX + i * gap, y);
       d.eventMode = 'static';
       d.cursor = 'pointer';
+      // зона тапа крупнее самой точки (точка маленькая — пальцем не попасть);
+      // вверх не вылезает за низ контента, чтобы не перехватывать тапы по нему.
+      d.hitArea = new Rectangle(-20, -14, 40, 26);
       d.on('pointertap', () => this.goRoom(i));
       this.nav.addChild(d);
       this.dots.push(d);
@@ -572,13 +601,13 @@ export class Game implements UiContext {
     // выше world), и перехватывали тапы по контенту у левого/правого края
     // (напр. по крайним узлам Исследований). Теперь вся навигация — в нижней
     // зарезервированной полосе, контент её не касается.
-    const aw = 34, ah = 30;
+    const aw = 34, ah = 24;
     const leftX = Math.max(aw / 2 + 4, startX - gap - aw / 2);
     const rightX = Math.min(this.roomW - aw / 2 - 4, startX + totalW + gap + aw / 2);
-    const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 24 });
+    const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 21 });
     left.position.set(leftX, y);
     left.onTap = () => this.goRoom(this.currentRoom - 1);
-    const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 24 });
+    const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 21 });
     right.position.set(rightX, y);
     right.onTap = () => this.goRoom(this.currentRoom + 1);
     this.nav.addChild(left, right);

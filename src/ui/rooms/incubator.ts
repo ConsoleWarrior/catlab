@@ -242,7 +242,7 @@ export function createIncubator(ctx: UiContext): Room {
 
     // Коты в слоте кликабельны: тап → инфо, а пока вязка не идёт — можно взять
     // за шкирку и утащить (как на полу комнаты). Во время активной вязки — только тап.
-    const wireSlotCat = (sprite: Sprite, cat: Cat): void => {
+    const wireSlotCat = (sprite: Sprite, cat: Cat, glow?: Sprite): void => {
       sprite.eventMode = 'static';
       sprite.cursor = busy ? 'pointer' : 'grab';
       if (busy) {
@@ -251,8 +251,9 @@ export function createIncubator(ctx: UiContext): Room {
         sprite.on('pointerdown', (e) => ctx.startGrab({
           cat,
           displayH: catH,
-          hide: () => { sprite.visible = false; },
-          show: () => { sprite.visible = true; },
+          // ореол прячем вместе с котом — иначе он остаётся висеть в слоте
+          hide: () => { sprite.visible = false; if (glow) glow.visible = false; },
+          show: () => { sprite.visible = true; if (glow) glow.visible = true; },
           onTap: () => ctx.openCatMenu(cat),
           onDrop: () => { /* не пристроили — кот остаётся в слоте (refresh вернёт) */ },
         }, e));
@@ -272,7 +273,7 @@ export function createIncubator(ctx: UiContext): Room {
       dadGlow = rarityGlow(dad, dadCat.rarityTier, catH);
       dadGlow.position.copyFrom(dad.position);
       chamber.addChild(dadGlow, dad);
-      wireSlotCat(dad, dadCat);
+      wireSlotCat(dad, dadCat, dadGlow);
     }
     if (momCat) {
       mom = catSprite(ctx.app, momCat, catH);
@@ -282,7 +283,7 @@ export function createIncubator(ctx: UiContext): Room {
       momGlow = rarityGlow(mom, momCat.rarityTier, catH);
       momGlow.position.copyFrom(mom.position);
       chamber.addChild(momGlow, mom);
-      wireSlotCat(mom, momCat);
+      wireSlotCat(mom, momCat, momGlow);
     }
 
     // перегородка по центру (поднимается при старте вязки)
@@ -332,8 +333,8 @@ export function createIncubator(ctx: UiContext): Room {
       ksp.on('pointerdown', (e) => ctx.startGrab({
         cat: kCat,
         displayH: catH * growthScale(kCat, ctx.now()),
-        hide: () => { ksp.visible = false; },
-        show: () => { ksp.visible = true; },
+        hide: () => { ksp.visible = false; if (kitGlow) kitGlow.visible = false; },
+        show: () => { ksp.visible = true; if (kitGlow) kitGlow.visible = true; },
         onTap: () => ctx.openCatMenu(kCat),
         onDrop: () => { /* не унесли — малыш остаётся в слоте (refresh вернёт) */ },
       }, e));

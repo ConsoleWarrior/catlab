@@ -4,9 +4,9 @@
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
-import type { Cat, BirthEvent, Ancestor } from '../game/index.js';
+import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
-  isBusy, isInSlot, clearBreederSlot, adoptReward, adoptCat, moveCat, keepKittenWithParents,
+  isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
   isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, MAX_BREEDS,
   roomCount, nurseryCapacity, shelterCapacity,
@@ -376,6 +376,28 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
  * взросления (заполняется в реальном времени). Имя/пол и действия вязки скрыты,
  * проявятся, когда котёнок повзрослеет. По взрослении карточка сама переключится.
  */
+type AddBtn = (text: string, color: number, enabled: boolean, onTap: () => void) => void;
+
+/**
+ * Кнопки переезда кота между комнатами. Кот, стоящий в слоте вязки, относится
+ * к обеим комнатам сразу — показываем обе кнопки; иначе одну (в ту комнату, где
+ * кота сейчас нет). addBtn — помощник конкретной карточки (он же двигает y вниз).
+ */
+function addMoveButtons(ctx: UiContext, cat: Cat, close: () => void, addBtn: AddBtn): void {
+  const inSlot = isInSlot(ctx.state, cat.id);
+  const move = (room: LiveRoom, text: string, color: number): void => {
+    addBtn(text, color, true, () => {
+      const r = moveCat(ctx.state, cat.id, room);
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      clearBreederSlot(ctx.state, cat.id); // если стоял в слоте — снять со слота
+      close(); ctx.commit();
+      ctx.toast(room === 'nursery' ? 'Котик в питомнике 🏆' : 'Котик в приюте 🏚️');
+    });
+  };
+  if (inSlot || cat.location === 'shelter') move('nursery', '🏠 В питомник', COLORS.primary);
+  if (inSlot || cat.location === 'nursery') move('shelter', '🏚️ В приют', COLORS.secondary);
+}
+
 function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container {
   const W = 340;
   const root = new Container();
@@ -410,25 +432,29 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   timeT.position.set(W / 2, barY + barH + 16);
   y = barY + barH + 34;
 
-  // контекстная кнопка переезда — чтобы малыш не занимал место навсегда
-  const toShelter = cat.location === 'nursery';
-  const moveBtn = new Button({
-    text: toShelter ? '➡️ В приют' : '⬅️ В питомник',
-    w: W - 60, h: 42, color: COLORS.secondary, fontSize: 15,
-  });
-  moveBtn.position.set(W / 2, y + 21);
-  moveBtn.onTap = () => {
-    const r = moveCat(ctx.state, cat.id, toShelter ? 'shelter' : 'nursery');
-    if (r.ok) { close(); ctx.commit(); } else ctx.toast(r.reason);
+  // Кнопки: родословная (если известны родители) + переезд (в слоте — обе
+  // комнаты) + закрыть. Малыш не занимает место навсегда — его можно переселить.
+  const controls: Container[] = [];
+  const btnW = W - 60;
+  const addBtn: AddBtn = (text, color, _enabled, onTap) => {
+    const b = new Button({ text, w: btnW, h: 42, color, fontSize: 15 });
+    b.position.set(W / 2, y + 21);
+    b.onTap = onTap;
+    controls.push(b);
+    y += 50;
   };
-  y += 50;
 
-  const closeBtn = new Button({ text: 'Закрыть', w: W - 60, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  if (cat.motherBreed || cat.fatherBreed) {
+    addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+  }
+  addMoveButtons(ctx, cat, close, addBtn);
+
+  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   y += 50;
 
-  root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, st, tierT, hint, barBg, bar, timeT, moveBtn, closeBtn);
+  root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, st, tierT, hint, barBg, bar, timeT, ...controls, closeBtn);
 
   const mmss = (ms: number): string => {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -655,8 +681,8 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     y += 52;
   };
 
-  // Перемещение между комнатами и постановка на вязку — теперь перетаскиванием
-  // (взять кота за шкирку → отнести в нужную комнату / на слот инкубатора).
+  // Постановка на вязку — перетаскиванием (взять кота за шкирку → на слот
+  // инкубатора); переезд между комнатами — кнопками ниже.
   addBtn(named ? '✏️ Переименовать' : '✏️ Дать имя', COLORS.warn, true, () => {
     askText('Имя котика:', cat.name ?? '', 16, (input) => {
       if (input === null) return;               // отмена — ничего не делаем
@@ -673,26 +699,9 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
-  // Кот стоит в слоте вязки → быстрый возврат в питомник (без перетаскивания).
-  if (!busy && isInSlot(ctx.state, cat.id)) {
-    addBtn('⬅️ В питомник', COLORS.secondary, true, () => {
-      const r = moveCat(ctx.state, cat.id, 'nursery');
-      if (!r.ok) { ctx.toast(r.reason); return; }
-      clearBreederSlot(ctx.state, cat.id);
-      close(); ctx.commit(); ctx.toast('Котик в питомнике 🏆');
-    });
-  }
-
-  // Пристройство «в добрые руки» (только из приюта) — это не переезд, а награда.
-  if (cat.location === 'shelter') {
-    const rw = adoptReward(ctx.state, cat);
-    addBtn(`🏠 Пристроить (+💰${rw.coins} +🧬${rw.dna})`, COLORS.good, !busy, () => {
-      clearBreederSlot(ctx.state, cat.id); // если стоял в слоте — убрать ссылку
-      const r = adoptCat(ctx.state, cat.id);
-      if (r.ok) { close(); ctx.commit(); ctx.toast(`Котик в добрых руках 🏠 +💰${r.coins} +🧬${r.dna}`); }
-      else ctx.toast(r.reason);
-    });
-  }
+  // Переезд между комнатами: в слоте вязки — обе кнопки, иначе одна (в комнату,
+  // где кота нет). Занятого активной вязкой кота не двигаем — он breeding'ится.
+  if (!busy) addMoveButtons(ctx, cat, close, addBtn);
 
   const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);

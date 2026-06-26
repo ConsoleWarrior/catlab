@@ -11,7 +11,7 @@
  * (ассет не загрузился) — отдаём процедурного кота как запасной вариант.
  */
 
-import { BlurFilter, Sprite } from 'pixi.js';
+import { BlurFilter, ColorMatrixFilter, Sprite } from 'pixi.js';
 import type { Application, Texture } from 'pixi.js';
 import { expressPhenotype } from '../genetics/index.js';
 import type { Sex, RarityTier } from '../genetics/index.js';
@@ -24,18 +24,38 @@ import { TIER_COLOR } from './theme.js';
 export const GLOW_OUT = 1.06;
 
 /**
- * Светящийся ореол цвета редкости: подкрашенный, чуть увеличенный и размытый
- * дубль силуэта кота. Кладётся ПОД основной спрайт, поэтому наружу выходит лишь
- * мягкая цветная кромка — узкая, но яркая. `displayH` задаёт ширину размытия.
+ * Заливка силуэта сплошным цветом: ColorMatrixFilter ставит RGB = `color`
+ * (offset-столбец), а альфу берёт из спрайта. Так силуэт окрашивается ровно в
+ * цвет редкости независимо от окраса шерсти — в отличие от tint, который
+ * УМНОЖАЕТ цвет (у тёмного кота ореол выходил почти чёрным).
+ */
+function solidFill(color: number): ColorMatrixFilter {
+  const r = ((color >> 16) & 0xff) / 255;
+  const g = ((color >> 8) & 0xff) / 255;
+  const b = (color & 0xff) / 255;
+  const cm = new ColorMatrixFilter();
+  cm.matrix = [
+    0, 0, 0, 0, r,
+    0, 0, 0, 0, g,
+    0, 0, 0, 0, b,
+    0, 0, 0, 1, 0,
+  ];
+  return cm;
+}
+
+/**
+ * Светящийся ореол цвета редкости: чуть увеличенный и размытый дубль силуэта
+ * кота, залитый сплошным цветом редкости. Кладётся ПОД основной спрайт, поэтому
+ * наружу выходит лишь мягкая цветная кромка. `displayH` задаёт ширину размытия.
+ * У серых (common) ореол на треть тусклее, чтобы не спорил с котом.
  */
 export function rarityGlow(src: Sprite, tier: RarityTier, displayH: number): Sprite {
   const glow = new Sprite(src.texture);
   glow.eventMode = 'none'; // не перехватывает тапы/перетаскивание у кота
   glow.anchor.copyFrom(src.anchor);
-  glow.tint = TIER_COLOR[tier];
-  glow.alpha = 0.95;
+  glow.alpha = tier === 'common' ? 0.95 * (2 / 3) : 0.95;
   glow.scale.set(src.scale.x * GLOW_OUT, src.scale.y * GLOW_OUT);
-  glow.filters = [new BlurFilter({
+  glow.filters = [solidFill(TIER_COLOR[tier]), new BlurFilter({
     strength: Math.max(3, Math.min(9, displayH * 0.06)),
     quality: 3,
   })];
