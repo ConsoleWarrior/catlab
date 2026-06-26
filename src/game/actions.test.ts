@@ -2,12 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, startBreeding, assignBreeder, clearBreederSlot, isInSlot,
-  collectReady, adoptCat, moveCat,
+  collectReady, adoptCat, moveCat, keepKittenWithParents,
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, unlockResearch,
-  isOld, breedsLeft,
+  isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
 } from './index.js';
-import { STARTER_CAT_COST, MAX_BREEDS } from './config.js';
+import { STARTER_CAT_COST, MAX_BREEDS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
 import type { GameState } from './index.js';
 
 function pair(s: GameState) {
@@ -132,7 +132,8 @@ describe('лимит вязок (статус «Старый»)', () => {
     let now = 0;
     for (let k = 0; k < MAX_BREEDS; k++) {
       expect(startBreeding(s, 0, female.id, male.id, now).ok).toBe(true);
-      collectReady(s, now + dur, rng); // освобождаем слот к следующей вязке
+      collectReady(s, now + dur, rng);
+      s.slots[0]!.kittenId = null; // «пристроили» малыша → слот снова свободен под вязку
       now += dur;
     }
     expect(female.breedCount).toBe(MAX_BREEDS);
@@ -300,6 +301,90 @@ describe('дерево исследований', () => {
     expect(unlockResearch(s, 'r_income2').ok).toBe(true);  // пререквизит теперь есть
     expect(s.dna).toBe(1000 - 30 - 70);                    // списаны обе стоимости
     expect(unlockResearch(s, 'bogus').ok).toBe(false);
+  });
+});
+
+describe('малыш с родителями (рождение)', () => {
+  function bornKitten(seed: number) {
+    const rng = makeRng(seed);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    const dur = incubationDuration(s);
+    startBreeding(s, 0, female.id, male.id, 0);
+    const ev = collectReady(s, dur, rng);
+    return { s, female, male, kitten: ev[0]!.kitten! };
+  }
+
+  it('после рождения родители остаются в слоте, малыш сидит в слоте (kittenId)', () => {
+    const { s, female, male, kitten } = bornKitten(100);
+    expect(s.slots[0]!.motherId).toBe(female.id);
+    expect(s.slots[0]!.fatherId).toBe(male.id);
+    expect(s.slots[0]!.kittenId).toBe(kitten.id);
+    // малыш «в слоте» — в заполненность комнаты не входит
+    expect(isInSlot(s, kitten.id)).toBe(true);
+    expect(roomCount(s, 'nursery')).toBe(0); // оба родителя и малыш — в слоте
+  });
+
+  it('пока малыш в слоте — нельзя ни свести, ни поставить нового кота', () => {
+    const { s, female, male } = bornKitten(101);
+    expect(startBreeding(s, 0, female.id, male.id, 1).ok).toBe(false);
+    expect(assignBreeder(s, 0, female.id, 1).ok).toBe(false);
+  });
+
+  it('moveCat уносит малыша из слота в комнату и освобождает kittenId', () => {
+    const { s, kitten } = bornKitten(102);
+    const r = moveCat(s, kitten.id, 'shelter');
+    expect(r.ok).toBe(true);
+    expect(s.slots[0]!.kittenId).toBeNull();
+    expect(kitten.location).toBe('shelter');
+    expect(isInSlot(s, kitten.id)).toBe(false);
+  });
+
+  it('нет места → moveCat не уносит малыша, он остаётся с роднёй', () => {
+    const { s, kitten } = bornKitten(103);
+    // забиваем питомник под завязку фиктивными котами (родители/малыш в слоте не в счёт)
+    while (roomCount(s, 'nursery') < nurseryCapacity(s)) {
+      s.cats.push({ ...kitten, id: 'x' + s.nextId++, location: 'nursery' });
+    }
+    const r = moveCat(s, kitten.id, 'nursery');
+    expect(r.ok).toBe(false);
+    expect(s.slots[0]!.kittenId).toBe(kitten.id);
+  });
+
+  it('keepKittenWithParents включает медленный рост (втрое)', () => {
+    const { s, kitten } = bornKitten(104);
+    const now = 5_000;
+    keepKittenWithParents(s, kitten.id, now);
+    expect(kitten.growthMs).toBe(KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR);
+    // в обычный срок ещё не взрослый — взрослеет только через утроенный
+    expect(isAdult(kitten, now + KITTEN_GROWTH_MS)).toBe(false);
+    expect(isAdult(kitten, now + KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR)).toBe(true);
+    expect(growthRemainingMs(kitten, now)).toBe(KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR);
+  });
+
+  it('подросший малыш уходит родителем в соседний слот и не остаётся в родном (без раздвоения)', () => {
+    const rng = makeRng(105);
+    const s = createInitialState(rng, 0);
+    s.coins = 1000;
+    buyUpgrade(s, 'slots'); // нужен 2-й слот вязки
+    const { female, male } = pair(s);
+    const dur = incubationDuration(s);
+    startBreeding(s, 0, female.id, male.id, 0);
+    const kitten = collectReady(s, dur, rng)[0]!.kitten!;
+    expect(s.slots[0]!.kittenId).toBe(kitten.id);
+
+    const grown = dur + KITTEN_GROWTH_MS; // малыш дорос до взрослого
+    expect(isAdult(kitten, grown)).toBe(true);
+    // ставим подросшего малыша в соседний слот как родителя
+    expect(assignBreeder(s, 1, kitten.id, grown).ok).toBe(true);
+    // он покинул родной слот 0 — kittenId очищен
+    expect(s.slots[0]!.kittenId).toBeNull();
+    // и числится ровно в одном слоте (не «раздвоился»)
+    const inSlots = s.slots.filter(
+      (sl) => sl.motherId === kitten.id || sl.fatherId === kitten.id || sl.kittenId === kitten.id,
+    );
+    expect(inSlots).toHaveLength(1);
+    expect(isInSlot(s, kitten.id)).toBe(true);
   });
 });
 

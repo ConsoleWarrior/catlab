@@ -9,7 +9,7 @@ import {
   catsIn, nurseryCapacity, passiveRatePerMin, buyCat, buyCatCost, isInSlot,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell } from './shell.js';
+import { roomShell, floorBaseline } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 
@@ -18,7 +18,7 @@ export function createNursery(ctx: UiContext): Room {
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
-  const baseline = ctx.roomH - 78;
+  const baseline = floorBaseline(ctx.roomH);
   const bandTop = ctx.topInset + 96;
   const floor = createLivingFloor(
     ctx, floorLayer,

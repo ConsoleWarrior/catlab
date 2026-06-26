@@ -52,5 +52,9 @@ export function deserialize(json: string): GameState {
   for (const cat of data.cats) {
     if (typeof cat.breedCount !== 'number') cat.breedCount = 0;
   }
+  // «оставленный с роднёй» малыш в слоте — поле добавлено позже, у старых сейвов его нет
+  for (const slot of data.slots) {
+    if (slot.kittenId === undefined) slot.kittenId = null;
+  }
   return data;
 }

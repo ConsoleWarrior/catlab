@@ -6,8 +6,10 @@
 import { Container, Graphics, Text } from 'pixi.js';
 import type { Cat, BirthEvent, Ancestor } from '../game/index.js';
 import {
-  isBusy, isInSlot, clearBreederSlot, adoptReward, adoptCat, moveCat, claimOrder, matchesOrder, renameCat,
+  isBusy, isInSlot, clearBreederSlot, adoptReward, adoptCat, moveCat, keepKittenWithParents,
+  claimOrder, matchesOrder, renameCat,
   isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, MAX_BREEDS,
+  roomCount, nurseryCapacity, shelterCapacity,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
 } from '../game/index.js';
 import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
@@ -222,29 +224,72 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
 
     const last = idx >= births.length - 1;
     const advance = (): void => { if (last) close(); else { idx++; render(); } };
+    // малыш сидит в слоте инкубатора (его держит collectReady) — значит доступен
+    // вариант «оставить с родителями». Для DEV-рождений (не из слота) его не будет.
+    const held = ctx.state.slots.some((s) => s.kittenId === cat.id);
 
-    // основная кнопка: малыш по умолчанию остаётся в питомнике (или листаем дальше)
-    const btn = new Button({
-      text: last ? 'В питомник 🏠' : 'Следующий →',
-      w: W - 60, h: 46, color: COLORS.primary, fontSize: 16,
-    });
-    btn.position.set(W / 2, y + 23);
-    btn.onTap = advance;
-    y += 54;
-
-    // отправить новорождённого в приют
-    const toShelter = new Button({ text: '➡️ В приют', w: W - 60, h: 42, color: COLORS.secondary, fontSize: 15 });
-    toShelter.position.set(W / 2, y + 21);
-    toShelter.onTap = () => {
-      const r = moveCat(ctx.state, cat.id, 'shelter');
-      if (!r.ok) { ctx.toast(r.reason); return; }
-      ctx.commit();
-      ctx.toast('Малыш отправлен в приют 🏠');
-      advance();
+    // всплывающая исчезающая надпись «нет места» у кнопки переполненной комнаты
+    const flashNoSpace = (atY: number): void => {
+      const t = label('нет места', 16, 0xe06a6a, '800');
+      t.position.set(W / 2, atY);
+      root.addChild(t);
+      let life = 0;
+      const fn = (tk: { deltaMS: number }): void => {
+        if (t.destroyed) { ctx.app.ticker.remove(fn); return; }
+        const d = tk.deltaMS / 1000;
+        life += d;
+        t.y -= d * 26;
+        t.alpha = Math.max(0, 1 - life / 0.9);
+        if (life >= 0.9) { ctx.app.ticker.remove(fn); t.destroy(); }
+      };
+      ctx.app.ticker.add(fn);
     };
-    y += 50;
 
-    root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, name, st, tierT, grow, ...extra, btn, toShelter);
+    const btns: Container[] = [];
+
+    // «В питомник» / «В приют» с текущей заполненностью; если места нет — кнопка не
+    // срабатывает и над ней вспыхивает «нет места».
+    const mkPlace = (text: string, color: number, room: 'nursery' | 'shelter'): Button => {
+      const b = new Button({ text, w: W - 60, h: 46, color, fontSize: 16 });
+      b.position.set(W / 2, y + 23);
+      b.onTap = () => {
+        const r = moveCat(ctx.state, cat.id, room);
+        if (!r.ok) { flashNoSpace(b.y - 4); return; }
+        ctx.commit();
+        ctx.toast(room === 'shelter' ? 'Малыш в приюте 🏠' : 'Малыш в питомнике 🏆');
+        advance();
+      };
+      y += 54;
+      return b;
+    };
+    btns.push(mkPlace(
+      `🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
+      COLORS.primary, 'nursery',
+    ));
+    btns.push(mkPlace(
+      `🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
+      COLORS.secondary, 'shelter',
+    ));
+
+    // Крайний случай (мест нигде нет): оставить малыша с родителями в слоте — он
+    // растёт втрое медленнее и блокирует слот, пока его не унесут в комнату.
+    if (held) {
+      const keep = new Button({
+        text: '🐾 Оставить с родителями', w: W - 60, h: 44, color: COLORS.warn,
+        textColor: COLORS.ink, fontSize: 15,
+      });
+      keep.position.set(W / 2, y + 22);
+      keep.onTap = () => {
+        keepKittenWithParents(ctx.state, cat.id, ctx.now());
+        ctx.commit();
+        ctx.toast('Малыш остался с роднёй 🐾 (растёт медленно)');
+        advance();
+      };
+      btns.push(keep);
+      y += 52;
+    }
+
+    root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, name, st, tierT, grow, ...extra, ...btns);
   };
 
   render();

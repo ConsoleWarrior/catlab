@@ -16,7 +16,7 @@ import { buildCat } from '../render/catSprite.js';
 import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
   passiveRatePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
-  emptySlot, moveCat, clearBreederSlot,
+  emptySlot, moveCat, clearBreederSlot, keepKittenWithParents,
 } from '../game/index.js';
 import { isBusy, isInSlot } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -78,7 +78,6 @@ export class Game implements UiContext {
 
   // прочее
   private incomeAcc = 0;
-  private readyCount = 0;
   private saveTimer = 0;
   private toastT: Text | null = null;
   private toastUntil = 0;
@@ -217,7 +216,8 @@ export class Game implements UiContext {
     this.commit();
   }
 
-  /** DEV: мгновенно «родить» котёнка — спавнит новорождённого и показывает карточку. */
+  /** DEV: мгновенно «родить» котёнка — спавнит новорождённого и оставляет его в слоте
+   * между родителями (как настоящий collectReady). Эффект-салют играет в инкубаторе. */
   private devBirth(): void {
     const now = this.now();
     const mom = pick(this.rng, BREEDS);
@@ -227,9 +227,18 @@ export class Game implements UiContext {
     kitten.bornAt = now; // настоящий новорождённый — маленький, будет расти
     kitten.motherBreed = mom.key; kitten.fatherBreed = dad.key; // родословная для карточки
     this.state.cats.push(kitten);
+    // ставим родителей и малыша в слот 0 — повторяем состояние после реальной вязки
+    const slot = this.state.slots[0];
+    if (slot) {
+      const f = this.state.cats.find((c) => c.genotype.sex === 'female' && c.id !== kitten.id);
+      const m = this.state.cats.find((c) => c.genotype.sex === 'male' && c.id !== kitten.id);
+      slot.motherId = f?.id ?? null;
+      slot.fatherId = m?.id ?? null;
+      slot.startedAt = 0; slot.readyAt = 0;
+      slot.kittenId = kitten.id;
+    }
     this.commit();
-    this.goRoom(1); // Питомник — увидеть, как малыш растёт на полу
-    this.openBirthCard([{ slotIndex: 0, kitten, stillborn: false, motherBreed: mom.key, fatherBreed: dad.key }]);
+    this.goRoom(0); // Инкубатор — увидеть малыша с роднёй в центре слота + салют
   }
 
   /** DEV: показать котика «на весу» по центру (для скриншота взятия за шкирку). */
@@ -277,6 +286,15 @@ export class Game implements UiContext {
   private applyOffline(): void {
     const now = this.now();
     const events = collectReady(this.state, now, this.rng);
+    // Офлайн-рождения показать негде — расселяем малышей по комнатам (если есть
+    // место), а если мест нет нигде — оставляем с роднёй в слоте (растут медленно).
+    for (const e of events) {
+      if (!e.kitten) continue;
+      const id = e.kitten.id;
+      if (!moveCat(this.state, id, 'nursery').ok && !moveCat(this.state, id, 'shelter').ok) {
+        keepKittenWithParents(this.state, id, now);
+      }
+    }
     const born = events.filter((e) => e.kitten).length;
     const inc = collectIncome(this.state, now);
     const parts: string[] = [];
@@ -429,14 +447,13 @@ export class Game implements UiContext {
   }
 
   private relocateCat(cat: Cat, room: 'nursery' | 'shelter'): boolean {
-    const staged = isInSlot(this.state, cat.id); // кота тащат из слота вязки
+    const staged = isInSlot(this.state, cat.id); // кота/малыша тащат из слота инкубатора
     // ничего не меняется (тот же пол, не из слота) — просто приземлить на полу
     if (cat.location === room && !staged) return false;
-    if (cat.location !== room) {
-      const r = moveCat(this.state, cat.id, room);
-      if (!r.ok) { this.toast(r.reason); return false; } // нет места → кот вернётся в слот
-    }
-    if (staged) clearBreederSlot(this.state, cat.id); // вынимаем из слота — теперь живёт в комнате
+    // moveCat сам проверит место и снимет «оставленного с роднёй» малыша со слота
+    const r = moveCat(this.state, cat.id, room);
+    if (!r.ok) { this.toast(r.reason); return false; } // нет места → вернётся в слот
+    clearBreederSlot(this.state, cat.id); // если был родителем — снять (для малыша no-op)
     this.commit();
     this.toast(room === 'shelter' ? 'Котик в приюте 🏠' : 'Котик в питомнике 🏆');
     return true;
@@ -703,9 +720,17 @@ export class Game implements UiContext {
     }
     this.state.lastSeenAt = this.now();
 
-    // появились готовые котята → пересобрать (чтобы показать «Забрать»)
-    const ready = this.state.slots.filter((s) => s.readyAt > 0 && this.now() >= s.readyAt).length;
-    if (ready !== this.readyCount) { this.readyCount = ready; this.commit(); }
+    // вязка завершилась → малыш сам появляется в слоте между родителями (красивый
+    // эффект играет в инкубаторе). Кнопки «Забрать» больше нет. Мест не ищем — малыш
+    // ждёт в слоте, игрок пристроит его кнопками/перетаскиванием.
+    if (this.state.slots.some((s) => s.readyAt > 0 && this.now() >= s.readyAt)) {
+      const events = collectReady(this.state, this.now(), this.rng);
+      this.commit();
+      const born = events.filter((e) => e.kitten).length;
+      const dead = events.filter((e) => e.stillborn).length;
+      if (born) this.toast(born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾');
+      else if (dead) this.toast('Котёнок не выжил 😿');
+    }
 
     this.updateHud();
 

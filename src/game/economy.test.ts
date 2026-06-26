@@ -65,7 +65,7 @@ describe('стоимость апгрейдов', () => {
   it('слоты дорожают по кривой', () => {
     const s = createInitialState(makeRng(6), 0);
     expect(upgradeCost(s, 'slots')).toEqual({ currency: 'coins', amount: 500 });
-    s.slots.push({ motherId: null, fatherId: null, startedAt: 0, readyAt: 0 });
+    s.slots.push({ motherId: null, fatherId: null, startedAt: 0, readyAt: 0, kittenId: null });
     expect(upgradeCost(s, 'slots')).toEqual({ currency: 'coins', amount: 2000 });
   });
 
@@ -80,7 +80,7 @@ describe('стоимость апгрейдов', () => {
     const s = createInitialState(makeRng(8), 0);
     expect(upgradeMaxed(s, 'slots')).toBe(false);
     while (s.slots.length - 1 < C.UPGRADES.slots!.max) {
-      s.slots.push({ motherId: null, fatherId: null, startedAt: 0, readyAt: 0 });
+      s.slots.push({ motherId: null, fatherId: null, startedAt: 0, readyAt: 0, kittenId: null });
     }
     expect(upgradeMaxed(s, 'slots')).toBe(true);
     expect(upgradeMaxed(s, 'нет-такого')).toBe(true);

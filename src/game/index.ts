@@ -8,7 +8,7 @@ export {
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchEffectKind } from './config.js';
 export {
   lvl, emptySlot, slotCount, nurseryCapacity, shelterCapacity, capacityOf,
-  incubationDuration, mutationRate, offlineCapMin, catsIn, isBusy, isInSlot,
+  incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot,
   passiveRatePerMin, adoptReward, upgradeCost, upgradeMaxed, makeCatInstance,
   buyCatCost, growthScale, growthProgress, growthRemainingMs, isAdult, boostCharges,
   activeBoosts, consumeBoosts, researchBonus, isOld, breedsLeft, pedigreeBonus,
@@ -17,7 +17,8 @@ export { createInitialState, serialize, deserialize } from './state.js';
 export { buildPedigree, catAncestors, pedigreeDepth } from './pedigree.js';
 export { matchesOrder, generateOrder, refillOrders } from './orders.js';
 export {
-  collectIncome, startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat, renameCat,
+  collectIncome, startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
+  keepKittenWithParents, renameCat,
   buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, unlockResearch,
 } from './actions.js';
 export type { Result, BirthEvent } from './actions.js';

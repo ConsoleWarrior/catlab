@@ -23,6 +23,7 @@ export interface Cat {
   breed: string;             // ключ породы из каталога (moggie | persian | ...)
   name?: string;
   bornAt: number;            // timestamp рождения
+  growthMs?: number;         // индивидуальная длительность взросления (медленный рост у «оставленных с роднёй»); по умолчанию KITTEN_GROWTH_MS
   location: LiveRoom;        // в какой комнате живёт
   rarityTier: RarityTier;    // кэш: тир из каталога породы
   analyzed: boolean;         // раскрыто ли скрытое носительство (Генолаб)
@@ -38,6 +39,9 @@ export interface BreedingSlot {
   fatherId: string | null;
   startedAt: number;
   readyAt: number;
+  // id новорождённого, «оставленного с родителями»: сидит в центре слота, растёт
+  // втрое медленнее и блокирует постановку новых котов, пока его не унесут в комнату.
+  kittenId: string | null;
 }
 
 /** Требования заказа к фенотипу кота (любое подмножество). */

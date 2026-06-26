@@ -51,6 +51,7 @@ export function startBreeding(
   const slot = state.slots[slotIndex];
   if (!slot) return { ok: false, reason: 'нет такого слота' };
   if (slot.readyAt > 0) return { ok: false, reason: 'слот занят' };
+  if (slot.kittenId) return { ok: false, reason: 'сначала пристрой малыша' };
   if (motherId === fatherId) return { ok: false, reason: 'нужны два разных кота' };
   const mother = findCat(state, motherId);
   const father = findCat(state, fatherId);
@@ -88,16 +89,20 @@ export function assignBreeder(state: GameState, slotIndex: number, catId: string
   const slot = state.slots[slotIndex];
   if (!slot) return { ok: false, reason: 'нет такого слота' };
   if (slot.readyAt > 0) return { ok: false, reason: 'слот занят вязкой' };
+  if (slot.kittenId) return { ok: false, reason: 'сначала пристрой малыша' };
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
   if (E.isOld(cat)) return { ok: false, reason: 'кот слишком стар для вязки' };
   if (E.isBusy(state, catId)) return { ok: false, reason: 'кот уже занят в вязке' };
-  // снимаем кота с других неактивных слотов, чтобы он не «раздваивался»
+  // снимаем кота со всех других неактивных слотов, чтобы он не «раздваивался».
+  // Важно и для kittenId: подросший «малыш с роднёй» уходит в соседний слот как
+  // родитель — его ссылку на родном слоте надо обнулить, иначе он останется и там.
   for (const s of state.slots) {
     if (s.readyAt > 0) continue;
     if (s.motherId === catId) s.motherId = null;
     if (s.fatherId === catId) s.fatherId = null;
+    if (s.kittenId === catId) s.kittenId = null;
   }
   if (cat.genotype.sex === 'female') slot.motherId = catId;
   else slot.fatherId = catId;
@@ -115,6 +120,7 @@ export function clearBreederSlot(state: GameState, catId: string): boolean {
     if (s.readyAt > 0) continue;
     if (s.motherId === catId) { s.motherId = null; removed = true; }
     if (s.fatherId === catId) { s.fatherId = null; removed = true; }
+    if (s.kittenId === catId) { s.kittenId = null; removed = true; }
   }
   return removed;
 }
@@ -135,19 +141,23 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     if (!slot || slot.readyAt === 0 || now < slot.readyAt) continue;
     const mother = slot.motherId ? findCat(state, slot.motherId) : undefined;
     const father = slot.fatherId ? findCat(state, slot.fatherId) : undefined;
-    // освобождаем слот в любом случае
-    slot.motherId = null;
-    slot.fatherId = null;
+    // Вязка закончилась: останавливаем таймер, но РОДИТЕЛЕЙ оставляем в слоте
+    // (их забирает игрок). Малыша ниже «оставим с роднёй» в центре слота.
     slot.startedAt = 0;
     slot.readyAt = 0;
-    if (!mother || !father) continue; // родителя удалили — вязка отменяется
+    if (!mother || !father) {
+      // родителя удалили — вязка отменяется, слот полностью очищаем
+      slot.motherId = null;
+      slot.fatherId = null;
+      continue;
+    }
 
     const rate = E.mutationRate(state);
     let child = breed(mother.genotype, father.genotype, rng, rate);
     let guard = 0;
     while (isLethal(child) && guard++ < 8) child = breed(mother.genotype, father.genotype, rng, rate);
     if (isLethal(child)) {
-      events.push({ slotIndex: i, stillborn: true });
+      events.push({ slotIndex: i, stillborn: true }); // мертворождение — родители остаются, малыша нет
       continue;
     }
     // Порода котёнка — по лестнице редкости от пород родителей (прогрессия коллекции).
@@ -163,6 +173,9 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     kitten.fatherBreed = father.breed;
     kitten.pedigree = buildPedigree(mother, father, C.PEDIGREE_DEPTH); // дерево до прадедов
     state.cats.push(kitten);
+    // Малыш «на руках» в центре слота: родители рядом, перегородка поднята.
+    // Игрок решит в карточке рождения — в питомник, в приют или оставить с роднёй.
+    slot.kittenId = kitten.id;
     events.push({
       slotIndex: i, kitten, stillborn: false,
       motherBreed: mother.breed, fatherBreed: father.breed,
@@ -201,11 +214,29 @@ export function adoptCat(state: GameState, catId: string): Result<{ coins: numbe
 export function moveCat(state: GameState, catId: string, room: LiveRoom): Result {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (cat.location === room) return { ok: true };
-  if (E.catsIn(state, room).length >= E.capacityOf(state, room)) {
+  // «оставленный с роднёй» малыш сидит в слоте инкубатора — его пристройство всегда
+  // проверяет место и снимает котёнка со слота (даже если location формально совпадает).
+  const heldSlot = state.slots.find((s) => s.kittenId === catId);
+  if (!heldSlot && cat.location === room) return { ok: true };
+  if (E.roomCount(state, room) >= E.capacityOf(state, room)) {
     return { ok: false, reason: 'нет места' };
   }
   cat.location = room;
+  if (heldSlot) heldSlot.kittenId = null; // унесли малыша → слот свободен под новую пару
+  return { ok: true };
+}
+
+/**
+ * Оставить новорождённого в слоте с родителями (на крайний случай, когда мест нигде
+ * нет): малыш сидит в центре слота, растёт втрое медленнее (KITTEN_SLOW_FACTOR) и
+ * блокирует постановку новых котов, пока его не унесут в комнату. kittenId уже стоит
+ * на слоте (его поставил collectReady) — здесь только включаем медленный рост.
+ */
+export function keepKittenWithParents(state: GameState, catId: string, now: number): Result {
+  const cat = findCat(state, catId);
+  if (!cat) return { ok: false, reason: 'кот не найден' };
+  cat.growthMs = C.KITTEN_GROWTH_MS * C.KITTEN_SLOW_FACTOR;
+  cat.bornAt = now; // отсчёт взросления — заново, в медленном темпе
   return { ok: true };
 }
 

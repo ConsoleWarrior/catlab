@@ -15,7 +15,8 @@ import { Container, Graphics } from 'pixi.js';
 import type { Sprite, Text } from 'pixi.js';
 import type { Cat, BoostDef } from '../../game/index.js';
 import {
-  startBreeding, assignBreeder, collectReady, incubationDuration, BOOSTS, boostCharges,
+  startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, growthScale,
+  moveCat, roomCount, nurseryCapacity, shelterCapacity,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
@@ -26,6 +27,7 @@ import { darken } from '../../render/palette.js';
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
 
 interface Heart { view: Text; life: number; ttl: number; vx: number; }
+interface Spark { view: Text; life: number; ttl: number; vx: number; vy: number; rot: number; }
 
 interface LiveSlot {
   index: number;
@@ -36,10 +38,15 @@ interface LiveSlot {
   startedAt: number;
   partition: Graphics; partRaise: number;
   mom?: Sprite; dad?: Sprite;
+  kitten?: Sprite; kittenBase: number; kittenCat?: Cat;  // «оставленный с роднёй» малыш в центре
   momHomeX: number; momMeetX: number; dadHomeX: number; dadMeetX: number;
   momBase: number; dadBase: number;
   catBaseY: number; catH: number;
   hearts: Container; heartObjs: Heart[]; heartTimer: number;
+  // эффект рождения: малыш только что появился в слоте → искры + кольцо-вспышка + «поп»
+  fx: Container; fxX: number; fxY: number;
+  pendingFx: boolean; sparks: Spark[]; ring?: Graphics; ringLife: number; ringTtl: number;
+  kittenPop: number;
   phase: number;
 }
 
@@ -55,6 +62,9 @@ const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
 export function createIncubator(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'incubator', '🧬 Инкубатор');
   let live: LiveSlot[] = [];
+  // id малышей, чьё «рождение» уже отпраздновали эффектом — чтобы не повторять
+  // вспышку на каждом пересборе. Эффект играет один раз, когда малыш виден.
+  const celebrated = new Set<string>();
 
   // --- Усилители вязки (Генная инженерия) у названия комнаты ---
   // Кнопки-чипы справа от заголовка. Заряженный усилитель «горит» (яркая
@@ -132,13 +142,38 @@ export function createIncubator(ctx: UiContext): Room {
     ls.heartObjs.push({ view: t, life: 0, ttl: 1.0 + Math.random() * 0.6, vx: (Math.random() - 0.5) * 18 });
   }
 
+  // Красивый «салют» при появлении малыша в слоте: кольцо-вспышка + венок искр
+  // во все стороны. Малыш в этот момент делает упругий «поп» (см. tick).
+  function startBornFx(ls: LiveSlot): void {
+    const ring = new Graphics();
+    ls.fx.addChild(ring);
+    ls.ring = ring; ls.ringLife = 0; ls.ringTtl = 0.5;
+    const glyphs = ['✨', '💫', '⭐', '🌟'];
+    const n = 12;
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2 + Math.random() * 0.4;
+      const speed = ls.catH * (1.0 + Math.random() * 0.8);
+      const t = label(glyphs[i % glyphs.length]!, 11 + Math.random() * 8, 0xffffff, '700');
+      t.position.set(ls.fxX, ls.fxY);
+      ls.fx.addChild(t);
+      ls.sparks.push({
+        view: t, life: 0, ttl: 0.6 + Math.random() * 0.4,
+        vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed - ls.catH * 0.3,
+        rot: (Math.random() - 0.5) * 8,
+      });
+    }
+  }
+
   function buildSlot(i: number, w: number, h: number): Container {
     const card = new Container();
     card.addChild(panel(w, h, COLORS.card, 16));
     const slot = ctx.state.slots[i]!;
     const now = ctx.now();
     const busy = slot.readyAt > 0;
-    const ready = busy && now >= slot.readyAt;
+    // «оставленный с роднёй» малыш сидит в центре слота: перегородка поднята,
+    // родители по бокам остаются, слот блокирован под новую пару.
+    const heldKitten = slot.kittenId ? ctx.state.cats.find((c) => c.id === slot.kittenId) : undefined;
+    const hasKitten = !!heldKitten && !busy;
 
     const head = label(`Слот ${i + 1}`, 13, COLORS.inkSoft, '700');
     head.position.set(w / 2, 13);
@@ -217,14 +252,8 @@ export function createIncubator(ctx: UiContext): Room {
 
     let mom: Sprite | undefined, dad: Sprite | undefined;
     let momBase = 1, dadBase = 1;
-    if (momCat) {
-      mom = catSprite(ctx.app, momCat, catH);
-      momBase = Math.abs(mom.scale.x);
-      mom.scale.x = -momBase;             // справа — смотрит влево, к центру
-      mom.position.set(busy ? momMeetX : momHomeX, floorY);
-      chamber.addChild(mom);
-      wireSlotCat(mom, momCat);
-    }
+    // Отца добавляем первым — он стоит ЗА самкой, поэтому во время вязки
+    // (когда коты сходятся внахлёст) спрайт отца оказывается сзади.
     if (dadCat) {
       dad = catSprite(ctx.app, dadCat, catH);
       dadBase = Math.abs(dad.scale.x);
@@ -232,6 +261,14 @@ export function createIncubator(ctx: UiContext): Room {
       dad.position.set(busy ? dadMeetX : dadHomeX, floorY);
       chamber.addChild(dad);
       wireSlotCat(dad, dadCat);
+    }
+    if (momCat) {
+      mom = catSprite(ctx.app, momCat, catH);
+      momBase = Math.abs(mom.scale.x);
+      mom.scale.x = -momBase;             // справа — смотрит влево, к центру
+      mom.position.set(busy ? momMeetX : momHomeX, floorY);
+      chamber.addChild(mom);
+      wireSlotCat(mom, momCat);
     }
 
     // перегородка по центру (поднимается при старте вязки)
@@ -251,23 +288,48 @@ export function createIncubator(ctx: UiContext): Room {
       const a = easeOut(clamp01((now - slot.startedAt) / APPROACH_MS));
       partition.y = -a * partRaise;
       partition.alpha = 1 - a;
+    } else if (hasKitten) {
+      // перегородка не опускается — стоит поднятой, в центре сидит малыш
+      partition.y = -partRaise;
+      partition.alpha = 0;
     }
 
     // сердечки (всплывают при вязке)
     const hearts = new Container();
     chamber.addChild(hearts);
 
-    // подсказка, если пары нет (покой)
-    if (!busy && (!momCat || !dadCat)) {
-      const hint = label('перетащи\nкотов сюда', 12, COLORS.inkSoft, '600');
-      hint.position.set(centerX, cy + ch * 0.42);
-      chamber.addChild(hint);
+    // «оставленный с роднёй» малыш — в центре, маленький, растёт втрое медленнее.
+    // Берётся за шкирку → унести в комнату (или тап → меню кота).
+    let kitten: Sprite | undefined;
+    let kittenBase = 1;
+    if (hasKitten && heldKitten) {
+      kitten = catSprite(ctx.app, heldKitten, catH);
+      kittenBase = Math.abs(kitten.scale.x);
+      kitten.scale.set(kittenBase * growthScale(heldKitten, now));
+      kitten.position.set(centerX, floorY);
+      chamber.addChild(kitten);
+      const kCat = heldKitten;
+      const ksp = kitten;
+      ksp.eventMode = 'static';
+      ksp.cursor = 'grab';
+      ksp.on('pointerdown', (e) => ctx.startGrab({
+        cat: kCat,
+        displayH: catH * growthScale(kCat, ctx.now()),
+        hide: () => { ksp.visible = false; },
+        show: () => { ksp.visible = true; },
+        onTap: () => ctx.openCatMenu(kCat),
+        onDrop: () => { /* не унесли — малыш остаётся в слоте (refresh вернёт) */ },
+      }, e));
     }
 
     // рамка комнаты поверх содержимого
     const frame = new Graphics();
     frame.roundRect(cx, cy, cw, ch, 10).stroke({ width: 2, color: COLORS.cardEdge });
     card.addChild(frame);
+
+    // слой эффекта рождения — поверх рамки (искры могут вылетать за пределы комнаты)
+    const fx = new Container();
+    card.addChild(fx);
 
     // --- контролы под комнатой ---
     const barX = rx + 4;
@@ -284,21 +346,31 @@ export function createIncubator(ctx: UiContext): Room {
       time = label('', 13, COLORS.ink, '700');
       time.position.set(w / 2, barY + 24);
       card.addChild(time);
+      // Кнопки «Забрать» нет: по окончании таймера малыш сам появится в центре слота
+      // (см. game.update → collectReady) с эффектом-салютом.
+    } else if (hasKitten) {
+      // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
+      // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
+      const hint = label('🐾 малыш с роднёй — пристрой его', 12, COLORS.inkSoft, '700');
+      hint.position.set(w / 2, barY + 4);
+      card.addChild(hint);
 
-      if (ready) {
-        const btn = new Button({ text: 'Забрать 🐾', w: w - 24, h: 34, color: COLORS.good, fontSize: 15 });
-        btn.position.set(w / 2, h - 19);
-        btn.onTap = () => {
-          const events = collectReady(ctx.state, ctx.now(), ctx.rng);
+      const placeBtn = (text: string, room: 'nursery' | 'shelter', color: number, yy: number): void => {
+        const b = new Button({ text, w: w - 24, h: 28, color, fontSize: 12.5 });
+        b.position.set(w / 2, yy);
+        b.onTap = () => {
+          if (!heldKitten) return;
+          const r = moveCat(ctx.state, heldKitten.id, room);
+          if (!r.ok) { ctx.toast(r.reason); return; }
           ctx.commit();
-          const born = events.filter((e) => e.kitten).length;
-          const dead = events.filter((e) => e.stillborn).length;
-          if (born) ctx.openBirthCard(events);          // карточка с инфо о новорождённом
-          else if (dead) ctx.toast('Котёнок не выжил 😿');
-          else ctx.toast('Готово');
+          ctx.toast(room === 'shelter' ? 'Малыш в приюте 🏠' : 'Малыш в питомнике 🏆');
         };
-        card.addChild(btn);
-      }
+        card.addChild(b);
+      };
+      placeBtn(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
+        'nursery', COLORS.primary, h - 44);
+      placeBtn(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
+        'shelter', COLORS.secondary, h - 14);
     } else {
       // пара = поставленные в слот коты (или превью глобального выбора)
       const mother = momCat;
@@ -327,10 +399,15 @@ export function createIncubator(ctx: UiContext): Room {
       busy, startedAt: slot.startedAt,
       partition, partRaise,
       mom, dad,
+      kitten, kittenBase, kittenCat: heldKitten,
       momHomeX, momMeetX, dadHomeX, dadMeetX,
       momBase, dadBase,
       catBaseY: floorY, catH,
       hearts, heartObjs: [], heartTimer: 0,
+      fx, fxX: centerX, fxY: floorY - catH * 0.32,
+      pendingFx: hasKitten && !!heldKitten && !celebrated.has(heldKitten.id),
+      sparks: [], ringLife: 0, ringTtl: 0,
+      kittenPop: 0,
       phase: Math.random() * 6,
     });
 
@@ -405,6 +482,47 @@ export function createIncubator(ctx: UiContext): Room {
         const sway = Math.sin(ls.phase * 1.6) * 0.05;
         if (ls.mom) { ls.mom.scale.y = ls.momBase * b; ls.mom.rotation = sway; }
         if (ls.dad) { ls.dad.scale.y = ls.dadBase * b; ls.dad.rotation = -sway; }
+      }
+
+      // эффект рождения: малыш только что появился в слоте (и виден) → салют один раз
+      if (ls.pendingFx && ls.kittenCat) {
+        ls.pendingFx = false;
+        celebrated.add(ls.kittenCat.id);
+        ls.kittenPop = 0.6;
+        startBornFx(ls);
+      }
+      if (ls.kittenPop > 0) ls.kittenPop = Math.max(0, ls.kittenPop - dt);
+
+      // малыш «с роднёй» в центре: подрастает + лёгкое дыхание + упругий «поп» при рождении
+      if (ls.kitten && ls.kittenCat && ls.kitten.visible) {
+        const gs = growthScale(ls.kittenCat, now);
+        const breathe = 1 + Math.sin(ls.phase * 2.4) * 0.03;
+        const pop = ls.kittenPop > 0 ? 1 + Math.sin((1 - ls.kittenPop / 0.6) * Math.PI) * 0.35 : 1;
+        ls.kitten.scale.set(ls.kittenBase * gs * pop, ls.kittenBase * gs * breathe * pop);
+      }
+
+      // искры салюта: разлетаются, чуть падают, тают
+      for (let k = ls.sparks.length - 1; k >= 0; k--) {
+        const sp = ls.sparks[k]!;
+        sp.life += dt;
+        const t = sp.life / sp.ttl;
+        sp.view.x += sp.vx * dt;
+        sp.view.y += sp.vy * dt;
+        sp.vy += ls.catH * 1.4 * dt;          // лёгкая гравитация
+        sp.view.rotation += sp.rot * dt;
+        sp.view.alpha = Math.max(0, 1 - t);
+        sp.view.scale.set(0.5 + t * 0.6);
+        if (sp.life >= sp.ttl) { sp.view.destroy(); ls.sparks.splice(k, 1); }
+      }
+
+      // кольцо-вспышка: расширяется и гаснет
+      if (ls.ring) {
+        ls.ringLife += dt;
+        const t = clamp01(ls.ringLife / ls.ringTtl);
+        ls.ring.clear();
+        ls.ring.circle(ls.fxX, ls.fxY, ls.catH * (0.2 + t * 0.8))
+          .stroke({ width: Math.max(1, ls.catH * 0.07 * (1 - t)), color: 0xffe27a, alpha: 0.75 * (1 - t) });
+        if (t >= 1) { ls.ring.destroy(); ls.ring = undefined; }
       }
 
       // полёт сердечек вверх с затуханием

@@ -3,7 +3,7 @@
  * Всё рисуется на Pixi (единый canvas, удобно для мобильного и скриншотов).
  */
 
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Rectangle, Text } from 'pixi.js';
 import type { RarityTier } from '../genetics/index.js';
 
 export const FONT = 'system-ui, "Segoe UI", sans-serif';
@@ -123,6 +123,12 @@ export class Button extends Container {
     this.addChild(this.bg, this.txt);
     this.eventMode = 'static';
     this.cursor = 'pointer';
+    // Единый таргет — сама кнопка: hitArea на весь прямоугольник, а bg/txt делаем
+    // некликабельными. Иначе над буквами таргетом становится Text (у него нет
+    // cursor → стрелка вместо «руки», и pointerdown/up на разных элементах ломают тап).
+    this.hitArea = new Rectangle(-this.w / 2, -this.h / 2, this.w, this.h);
+    this.bg.eventMode = 'none';
+    this.txt.eventMode = 'none';
     this.redraw();
     this.on('pointertap', () => { if (this._enabled) this.onTap?.(); });
     this.on('pointerdown', () => { if (this._enabled) this.scale.set(0.95); });

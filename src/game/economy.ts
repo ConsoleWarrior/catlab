@@ -15,7 +15,7 @@ export function lvl(state: GameState, id: string): number {
 }
 
 export function emptySlot(): BreedingSlot {
-  return { motherId: null, fatherId: null, startedAt: 0, readyAt: 0 };
+  return { motherId: null, fatherId: null, startedAt: 0, readyAt: 0, kittenId: null };
 }
 
 export function slotCount(state: GameState): number {
@@ -62,17 +62,27 @@ export function catsIn(state: GameState, room: LiveRoom): Cat[] {
   return state.cats.filter((c) => c.location === room);
 }
 
+/**
+ * Сколько котов реально живёт в комнате (на полу) — без тех, кто физически в слоте
+ * инкубатора (родители вязки и «оставленный с роднёй» малыш). Это число и есть
+ * заполненность комнаты для проверки вместимости и подписей «N/cap».
+ */
+export function roomCount(state: GameState, room: LiveRoom): number {
+  return state.cats.filter((c) => c.location === room && !isInSlot(state, c.id)).length;
+}
+
 /** Кот занят, если участвует в активной вязке. */
 export function isBusy(state: GameState, catId: string): boolean {
   return state.slots.some((s) => s.readyAt > 0 && (s.motherId === catId || s.fatherId === catId));
 }
 
 /**
- * Кот стоит в слоте инкубатора (поставлен для вязки или вязка уже идёт) —
- * физически он в инкубаторе, поэтому на полу своей комнаты не показывается.
+ * Кот стоит в слоте инкубатора (родитель вязки или «оставленный с роднёй» малыш) —
+ * физически он в инкубаторе, поэтому на полу своей комнаты не показывается и в
+ * заполненность комнаты не входит.
  */
 export function isInSlot(state: GameState, catId: string): boolean {
-  return state.slots.some((s) => s.motherId === catId || s.fatherId === catId);
+  return state.slots.some((s) => s.motherId === catId || s.fatherId === catId || s.kittenId === catId);
 }
 
 /** Суммарный пассивный доход питомника (💰/мин) с учётом «Выставки» и исследований. */
@@ -88,32 +98,42 @@ export function passiveRatePerMin(state: GameState): number {
 }
 
 /**
+ * Длительность взросления конкретного кота. По умолчанию KITTEN_GROWTH_MS, но у
+ * малыша, «оставленного с родителями», она в KITTEN_SLOW_FACTOR раз больше —
+ * он растёт втрое медленнее (см. keepKittenWithParents).
+ */
+export function effGrowthMs(cat: Cat): number {
+  return cat.growthMs && cat.growthMs > 0 ? cat.growthMs : C.KITTEN_GROWTH_MS;
+}
+
+/**
  * Визуальный масштаб кота по возрасту: новорождённый котёнок маленький (≈MIN_SCALE),
  * со временем дорастает до взрослого (1.0). Коты, созданные «взрослыми» (bornAt в
  * прошлом — стартовые, купленные), сразу дают 1.0; растут только настоящие
  * новорождённые из инкубатора (им collectReady ставит bornAt = now).
  */
 export function growthScale(cat: Cat, now: number): number {
+  const span = effGrowthMs(cat);
   const age = now - cat.bornAt;
-  if (age >= C.KITTEN_GROWTH_MS) return 1;
-  const t = Math.max(0, age) / C.KITTEN_GROWTH_MS;
+  if (age >= span) return 1;
+  const t = Math.max(0, age) / span;
   const eased = 1 - (1 - t) * (1 - t); // ease-out: рост заметен сразу, плавно замедляется
   return C.KITTEN_MIN_SCALE + (1 - C.KITTEN_MIN_SCALE) * eased;
 }
 
 /** Прогресс взросления 0..1 (1 — котёнок стал взрослым). */
 export function growthProgress(cat: Cat, now: number): number {
-  return Math.max(0, Math.min(1, (now - cat.bornAt) / C.KITTEN_GROWTH_MS));
+  return Math.max(0, Math.min(1, (now - cat.bornAt) / effGrowthMs(cat)));
 }
 
 /** Взрослый ли кот (вырос). Только взрослые участвуют в вязке и показывают имя/пол. */
 export function isAdult(cat: Cat, now: number): boolean {
-  return now - cat.bornAt >= C.KITTEN_GROWTH_MS;
+  return now - cat.bornAt >= effGrowthMs(cat);
 }
 
 /** Сколько мс осталось котёнку до взросления (0 — уже взрослый). */
 export function growthRemainingMs(cat: Cat, now: number): number {
-  return Math.max(0, C.KITTEN_GROWTH_MS - (now - cat.bornAt));
+  return Math.max(0, effGrowthMs(cat) - (now - cat.bornAt));
 }
 
 // --- Генная инженерия ---

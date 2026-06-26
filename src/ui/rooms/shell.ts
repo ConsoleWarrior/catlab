@@ -23,6 +23,20 @@ const PAD = 18;
 const TITLE_H = 44;
 const NAV_RESERVE = 46;
 
+/**
+ * Высота полосы пола (грунта под котами). Адаптивная: на коротких экранах
+ * (мобильный ландшафт) тоньше, чтобы не съедать пятую часть высоты, на ПК —
+ * как раньше (70px). Комнаты привязывают «линию ног» котов к этой же величине.
+ */
+export function floorBandH(h: number): number {
+  return Math.round(Math.max(40, Math.min(70, h * 0.11)));
+}
+
+/** Линия пола (низ лап котов): чуть выше верха полосы пола — там же контактная тень. */
+export function floorBaseline(h: number): number {
+  return h - floorBandH(h) - 8;
+}
+
 export function roomShell(ctx: UiContext, id: string, title: string): Shell {
   const { roomW: w, roomH: h, topInset } = ctx;
   const container = new Container();
@@ -35,12 +49,15 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
   wall.rect(0, 0, w, topInset + 90).fill({ color: 0xffffff, alpha: 0.18 });
   container.addChild(wall);
 
-  // пол
-  const floorY = h - 70;
-  const floor = new Graphics();
-  floor.rect(0, floorY, w, h - floorY).fill(darken(accent, 0.12));
-  floor.rect(0, floorY, w, 4).fill({ color: 0x000000, alpha: 0.06 });
-  container.addChild(floor);
+  // пол — только в жилых комнатах (там по нему ходят коты). В Инкубаторе и
+  // Генолабе пола нет (там слоты/панели), полоса внизу была лишней.
+  if (id === 'nursery' || id === 'shelter') {
+    const floorY = h - floorBandH(h);
+    const floor = new Graphics();
+    floor.rect(0, floorY, w, h - floorY).fill(darken(accent, 0.12));
+    floor.rect(0, floorY, w, 4).fill({ color: 0x000000, alpha: 0.06 });
+    container.addChild(floor);
+  }
 
   // боковые стены-перегородки (читается как соседние секции здания)
   const walls = new Graphics();
