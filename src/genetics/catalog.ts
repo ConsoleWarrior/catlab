@@ -135,6 +135,9 @@ export interface BreedBoosts {
  *
  * `boosts` — активные усилители; `used` (опц.) заполняется флагами тех усилителей,
  * что реально применились (для списания зарядов без потери впустую).
+ *
+ * `extraUp` — добавочный шанс «тир-вверх» от родословной родителей вязки (цвет их
+ * собственных родителей). Прибавляется к базовому шансу подъёма. См. economy.pedigreeBonus.
  */
 export function breedKitten(
   motherBreed: string,
@@ -142,6 +145,7 @@ export function breedKitten(
   rng: Rng,
   boosts: BreedBoosts = {},
   used?: BreedBoosts,
+  extraUp = 0,
 ): string {
   const lm = TIER_LEVEL[tierOfBreed(motherBreed)];
   const lf = TIER_LEVEL[tierOfBreed(fatherBreed)];
@@ -159,6 +163,7 @@ export function breedKitten(
     }
 
     let pUp = sameBreed ? 0.45 : 0.25;
+    if (extraUp > 0) pUp = Math.min(0.95, pUp + extraUp); // бонус родословной к подъёму
     if (boosts.luckyUp && canUp) {               // 🍀 Катализатор: резкий буст шанса вверх
       pUp = Math.max(pUp, 0.85);
       if (used) used.luckyUp = true;
@@ -187,6 +192,7 @@ export function breedKitten(
     return randomBreedOfLevel(hi, rng);
   }
   let pHi = 0.3;
+  if (extraUp > 0) pHi = Math.min(0.95, pHi + extraUp); // бонус родословной к подъёму
   if (boosts.luckyUp) {                          // 🍀 Катализатор: чаще тир старшего
     pHi = Math.max(pHi, 0.75);
     if (used) used.luckyUp = true;

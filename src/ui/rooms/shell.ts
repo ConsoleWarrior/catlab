@@ -13,6 +13,10 @@ export interface Shell {
   body: Container;
   contentW: number;
   contentH: number;
+  /** Титульная плашка комнаты — чтобы пристроить справа от названия кнопки/чипы. */
+  titleBar: Container;
+  titleW: number;
+  titleH: number;
 }
 
 const PAD = 18;
@@ -44,17 +48,17 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
   walls.rect(w - 6, topInset, 6, h - topInset).fill({ color: 0x000000, alpha: 0.05 });
   container.addChild(walls);
 
-  // титульная плашка
+  // титульная плашка — вдвое короче (название + запас), справа освобождаем место
+  // под кнопки комнаты (напр. чипы усилителей у Инкубатора).
   const titleBar = new Container();
-  const bw = Math.min(w - PAD * 2, 460);
-  const bg = new Graphics();
-  bg.roundRect(0, 0, bw, TITLE_H, 14).fill({ color: COLORS.hud, alpha: 0.92 });
-  bg.roundRect(0, 0, bw, TITLE_H, 14).stroke({ width: 2, color: COLORS.cardEdge });
-  titleBar.addChild(bg);
   const t = label(title, 20, COLORS.ink, '800');
   t.anchor.set(0, 0.5);
   t.position.set(16, TITLE_H / 2);
-  titleBar.addChild(t);
+  const bw = Math.max(t.width + 32, Math.min(w - PAD * 2, 460) / 2);
+  const bg = new Graphics();
+  bg.roundRect(0, 0, bw, TITLE_H, 14).fill({ color: COLORS.hud, alpha: 0.92 });
+  bg.roundRect(0, 0, bw, TITLE_H, 14).stroke({ width: 2, color: COLORS.cardEdge });
+  titleBar.addChild(bg, t);
   titleBar.position.set(PAD, topInset + 8);
   container.addChild(titleBar);
 
@@ -68,6 +72,9 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
     body,
     contentW: w - PAD * 2,
     contentH: h - top - NAV_RESERVE,
+    titleBar,
+    titleW: bw,
+    titleH: TITLE_H,
   };
 }
 

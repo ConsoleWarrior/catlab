@@ -6,7 +6,7 @@
 import type { RarityTier, BreedBoosts } from '../genetics/index.js';
 import type { Currency } from './types.js';
 
-export const SAVE_VERSION = 3; // v3: Котодекс (discoveredBreeds) + инженерия (boosts) + research (доп. поля — мягкие дефолты в deserialize, без сброса)
+export const SAVE_VERSION = 4; // v4: счётчик вязок кота (breedCount) — мягкий дефолт 0 в deserialize, без сброса
 
 /** Ценность кота по тиру редкости: пристройство (💰), образец (🧬), пассив (💰/мин). */
 export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; incomePerMin: number }> = {
@@ -18,6 +18,26 @@ export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; income
 };
 
 // --- Инкубатор ---
+// Лимит вязок: каждый кот может участвовать в вязке не более MAX_BREEDS раз,
+// после чего получает статус «Старый» и не может быть выбран в слот вязки.
+export const MAX_BREEDS = 5;
+
+// Бонус родословной: вся родословная кота (до прадедов) повышает шанс, что ЕГО
+// потомство поднимется по тиру. Вклад каждого предка = его цвет (тир) × вес поколения.
+// Чем ярче и глубже родословная — тем больше суммарный бонус.
+// Цвет предка: зелёный (uncommon) +1%, синий (rare) +2%, фиолетовый (epic) +3%,
+// золотой (legendary) +4%; серый (common) и базовый Дворовый — 0.
+export const PEDIGREE_TIER_BONUS: Record<RarityTier, number> = {
+  common: 0, uncommon: 0.01, rare: 0.02, epic: 0.03, legendary: 0.04,
+};
+
+// Вес поколения: родители ×1, деды ×0.5, прадеды ×0.25 — каждое поколение вглубь
+// вдвое слабее (вклад = PEDIGREE_GEN_FALLOFF^(поколение−1)).
+export const PEDIGREE_GEN_FALLOFF = 0.5;
+
+// Глубина сохраняемой родословной кота: 3 = родители → деды → прадеды.
+export const PEDIGREE_DEPTH = 3;
+
 // ТЕСТ: время вязки 10 c для плейтестов. Вернуть после тестов: BASE = 5 * 60_000, MIN = 2 * 60_000.
 export const INCUBATION_BASE_MS = 10_000;
 export const INCUBATION_MIN_MS = 10_000;
@@ -45,20 +65,23 @@ export const STARTER_CAT_COST = 50; // простой кот из питомни
 // --- Генолаб ---
 export const ANALYZE_DNA_COST = 10;
 
-// --- Генная инженерия (усилители вязки за 🧬) ---
+// --- Генная инженерия (усилители вязки) ---
+// Кнопки усилителей живут у названия Инкубатора; активируются за 🧬 гены или 💎
+// кристаллы. Заряд тратится при рождении из инкубатора (на первой подходящей вязке).
 export type BoostId = keyof BreedBoosts;
 export interface BoostDef {
   id: BoostId;
   glyph: string;
   label: string;
   desc: string;
-  dna: number;
+  dna: number;      // цена активации за 🧬 гены
+  crystals: number; // цена активации за 💎 кристаллы (премиум-альтернатива)
 }
 /** Усилители следующей вязки. Заряд тратится при рождении из инкубатора. */
 export const BOOSTS: readonly BoostDef[] = [
-  { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не опустится по тиру', dna: 15 },
-  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Резкий рост шанса тира-вверх', dna: 30 },
-  { id: 'tierUp', glyph: '🔼', label: 'Форсаж тира', desc: 'Гарантия тира выше (если есть куда)', dna: 60 },
+  { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не опустится по тиру', dna: 15, crystals: 2 },
+  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Резкий рост шанса тира-вверх', dna: 30, crystals: 3 },
+  { id: 'tierUp', glyph: '🔼', label: 'Форсаж тира', desc: 'Гарантия тира выше (если есть куда)', dna: 60, crystals: 5 },
 ];
 
 // --- Рост котят ---

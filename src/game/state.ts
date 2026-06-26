@@ -48,5 +48,9 @@ export function deserialize(json: string): GameState {
   if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
   if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
   if (!Array.isArray(data.research)) data.research = [];
+  // v4: счётчик вязок — у старых котов считаем «молодыми» (0)
+  for (const cat of data.cats) {
+    if (typeof cat.breedCount !== 'number') cat.breedCount = 0;
+  }
   return data;
 }

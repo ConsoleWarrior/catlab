@@ -55,8 +55,12 @@ export interface UiContext {
   clearSelection(): void;
   goRoom(index: number): void;
   openCatMenu(cat: Cat): void;
+  /** Дерево родословной кота (до прадедов). */
+  openPedigree(cat: Cat): void;
   /** Карточка(и) новорождённых после «Забрать» в инкубаторе. */
   openBirthCard(events: BirthEvent[]): void;
+  /** Всплывающее меню усилителя вязки (Генная инженерия у названия Инкубатора). */
+  openBoostMenu(boostId: string): void;
   openOrders(): void;
   openUpgrades(title: string, ids: string[]): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */

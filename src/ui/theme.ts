@@ -44,6 +44,15 @@ export const TIER_COLOR: Record<RarityTier, number> = {
   epic: 0xb07be0, legendary: 0xf2a93b,
 };
 
+/**
+ * Двусловное название — в две строки (читается лучше над котом и в карточках).
+ * Однословные и через дефис («Мейн-кун») не трогаем; 3+ слов оставляем как есть.
+ */
+export function stackWords(s: string): string {
+  const parts = s.trim().split(/\s+/);
+  return parts.length === 2 ? parts.join('\n') : s;
+}
+
 /** Короткий формат больших чисел: 1234 → «1.2k». */
 export function fmt(n: number): string {
   const v = Math.floor(n);

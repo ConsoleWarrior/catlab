@@ -1,6 +1,10 @@
 /**
- * Комната «Инкубатор»: места вязки (выбор пары → таймер → котёнок),
- * апгрейды слотов и скорости. Пара выбирается в Питомнике (ctx.selection).
+ * Комната «Инкубатор»: места вязки (выбор пары → таймер → котёнок).
+ * Пара выбирается в Питомнике (ctx.selection). Апгрейды слотов вязки и
+ * скорости инкубации переехали в Генолаб → Исследования (4-я ветка).
+ * Справа от названия — чипы усилителей вязки (Генная инженерия): активируешь
+ * за 🧬 гены или 💎 кристаллы, заряженный чип «горит» и срабатывает на первой
+ * следующей вязке.
  *
  * Визуал места вязки — мини-комната с перегородкой по центру. В покое перегородка
  * опущена, коты стоят по разные стороны. По кнопке «Свести» перегородка
@@ -9,15 +13,14 @@
 
 import { Container, Graphics } from 'pixi.js';
 import type { Sprite, Text } from 'pixi.js';
-import type { Cat } from '../../game/index.js';
+import type { Cat, BoostDef } from '../../game/index.js';
 import {
-  startBreeding, assignBreeder, collectReady, incubationDuration,
+  startBreeding, assignBreeder, collectReady, incubationDuration, BOOSTS, boostCharges,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { Button, COLORS, centerRow, label, panel } from '../theme.js';
+import { Button, COLORS, label, panel } from '../theme.js';
 import { catSprite } from '../catTextures.js';
-import { upgradeButton } from '../upgradeButton.js';
 import { darken } from '../../render/palette.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
@@ -52,6 +55,64 @@ const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
 export function createIncubator(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'incubator', '🧬 Инкубатор');
   let live: LiveSlot[] = [];
+
+  // --- Усилители вязки (Генная инженерия) у названия комнаты ---
+  // Кнопки-чипы справа от заголовка. Заряженный усилитель «горит» (яркая
+  // заливка + пульсирующий ореол) и сработает на первой следующей вязке.
+  const boostBar = new Container();
+  shell.titleBar.addChild(boostBar);
+  let boostGlows: { halo: Graphics; phase: number }[] = [];
+
+  function boostChip(def: BoostDef, size: number): Container {
+    const c = new Container();
+    const charges = boostCharges(ctx.state, def.id);
+    const active = charges > 0;
+
+    if (active) {
+      const halo = new Graphics();
+      halo.roundRect(-size / 2 - 5, -size / 2 - 5, size + 10, size + 10, 13)
+        .fill({ color: COLORS.dna, alpha: 0.5 });
+      c.addChild(halo);
+      boostGlows.push({ halo, phase: Math.random() * 6 });
+    }
+
+    const bg = new Graphics();
+    bg.roundRect(-size / 2, -size / 2, size, size, 9)
+      .fill({ color: active ? COLORS.dna : COLORS.card, alpha: active ? 1 : 0.92 })
+      .stroke({ width: 2, color: active ? 0xffffff : COLORS.cardEdge, alpha: active ? 0.95 : 0.8 });
+    c.addChild(bg);
+
+    const glyph = label(def.glyph, size * 0.5, active ? 0xffffff : COLORS.ink, '700');
+    glyph.alpha = active ? 1 : 0.7;
+    c.addChild(glyph);
+
+    if (charges > 1) {
+      const badge = new Graphics();
+      badge.circle(size / 2 - 3, -size / 2 + 3, 8).fill({ color: COLORS.good });
+      const cnt = label(String(charges), 11, 0xffffff, '800');
+      cnt.position.set(size / 2 - 3, -size / 2 + 3);
+      c.addChild(badge, cnt);
+    }
+
+    c.eventMode = 'static';
+    c.cursor = 'pointer';
+    c.on('pointertap', () => ctx.openBoostMenu(def.id));
+    return c;
+  }
+
+  function renderBoostChips(): void {
+    boostBar.removeChildren();
+    boostGlows = [];
+    const size = 34, gap = 6;
+    // чипы стоят справа от плашки названия, вплотную (boostBar — в локальных
+    // координатах titleBar, плашка шириной shell.titleW).
+    const firstCx = shell.titleW + 12 + size / 2;
+    BOOSTS.forEach((def, i) => {
+      const chip = boostChip(def, size);
+      chip.position.set(firstCx + i * (size + gap), shell.titleH / 2);
+      boostBar.addChild(chip);
+    });
+  }
 
   function selectedPair(): { mother?: Cat; father?: Cat } {
     const sel = ctx.selection
@@ -291,15 +352,18 @@ export function createIncubator(ctx: UiContext): Room {
       shell.body.addChild(c);
     }
 
-    const bw = Math.min(248, (shell.contentW - 14) / 2);
-    const b1 = upgradeButton(ctx, 'slots', bw);
-    const b2 = upgradeButton(ctx, 'speed', bw);
-    centerRow([b1, b2], slotH + 32, shell.contentW);
-    shell.body.addChild(b1, b2);
+    renderBoostChips(); // подсветка чипов усилителей зависит от зарядов
   }
 
   function tick(dt: number): void {
     const now = ctx.now();
+
+    // пульс ореола заряженных усилителей у названия комнаты («ярко горит»)
+    for (const bg of boostGlows) {
+      bg.phase += dt;
+      bg.halo.alpha = 0.3 + 0.25 * (0.5 + 0.5 * Math.sin(bg.phase * 4));
+    }
+
     for (const ls of live) {
       ls.phase += dt;
       const slot = ctx.state.slots[ls.index];

@@ -9,6 +9,13 @@ export type RoomId = 'incubator' | 'nursery' | 'shelter' | 'genolab';
 export type LiveRoom = 'nursery' | 'shelter';
 export type Currency = 'coins' | 'crystals' | 'dna';
 
+/** Узел родословной: порода предка и (опц.) его собственные родители — вглубь до прадедов. */
+export interface Ancestor {
+  breed: string;
+  mother?: Ancestor;
+  father?: Ancestor;
+}
+
 /** Экземпляр кота в коллекции игрока. */
 export interface Cat {
   id: string;
@@ -19,8 +26,10 @@ export interface Cat {
   location: LiveRoom;        // в какой комнате живёт
   rarityTier: RarityTier;    // кэш: тир из каталога породы
   analyzed: boolean;         // раскрыто ли скрытое носительство (Генолаб)
+  breedCount: number;        // сколько раз участвовал в вязке (≥ MAX_BREEDS → «Старый»)
   motherBreed?: string;      // родословная: порода матери (если рождён в инкубаторе)
   fatherBreed?: string;      // родословная: порода отца
+  pedigree?: { mother?: Ancestor; father?: Ancestor }; // дерево предков до прадедов (для родословной)
 }
 
 /** Слот вязки в инкубаторе. readyAt === 0 — слот пуст. */

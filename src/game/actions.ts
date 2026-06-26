@@ -9,6 +9,7 @@ import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
 import { matchesOrder } from './orders.js';
+import { buildPedigree } from './pedigree.js';
 
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; reason: string };
 
@@ -59,6 +60,9 @@ export function startBreeding(
   if (!E.isAdult(mother, now) || !E.isAdult(father, now)) {
     return { ok: false, reason: 'котёнок ещё не вырос' };
   }
+  if (E.isOld(mother) || E.isOld(father)) {
+    return { ok: false, reason: 'кот слишком стар для вязки' };
+  }
   if (E.isBusy(state, motherId) || E.isBusy(state, fatherId)) {
     return { ok: false, reason: 'кот уже занят в вязке' };
   }
@@ -68,6 +72,9 @@ export function startBreeding(
   slot.fatherId = fatherId;
   slot.startedAt = now;
   slot.readyAt = now + E.incubationDuration(state);
+  // вязка засчитана обоим: приближает к статусу «Старый»
+  mother.breedCount = (mother.breedCount ?? 0) + 1;
+  father.breedCount = (father.breedCount ?? 0) + 1;
   return { ok: true };
 }
 
@@ -84,6 +91,7 @@ export function assignBreeder(state: GameState, slotIndex: number, catId: string
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
+  if (E.isOld(cat)) return { ok: false, reason: 'кот слишком стар для вязки' };
   if (E.isBusy(state, catId)) return { ok: false, reason: 'кот уже занят в вязке' };
   // снимаем кота с других неактивных слотов, чтобы он не «раздваивался»
   for (const s of state.slots) {
@@ -145,12 +153,15 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     // Порода котёнка — по лестнице редкости от пород родителей (прогрессия коллекции).
     // Усилители «Генной инженерии» влияют на исход; списываем только сработавшие.
     const used: BreedBoosts = {};
-    const childBreed = breedKitten(mother.breed, father.breed, rng, E.activeBoosts(state), used);
+    // бонус родословной: цвет родителей мамы и папы повышает шанс редкого котёнка
+    const extraUp = E.pedigreeBonus(mother) + E.pedigreeBonus(father);
+    const childBreed = breedKitten(mother.breed, father.breed, rng, E.activeBoosts(state), used, extraUp);
     E.consumeBoosts(state, used);
     const kitten = E.makeCatInstance(state, child, now, 'nursery', childBreed);
     kitten.bornAt = now; // настоящий новорождённый — появляется маленьким и растёт
     kitten.motherBreed = mother.breed; // родословная — покажем в карточке кота
     kitten.fatherBreed = father.breed;
+    kitten.pedigree = buildPedigree(mother, father, C.PEDIGREE_DEPTH); // дерево до прадедов
     state.cats.push(kitten);
     events.push({
       slotIndex: i, kitten, stillborn: false,
@@ -241,11 +252,17 @@ export function analyzeCat(state: GameState, catId: string): Result {
   return { ok: true };
 }
 
-/** Зарядить усилитель «Генной инженерии» (+1 заряд за 🧬). Тратится при рождении. */
-export function buyBoost(state: GameState, id: string): Result {
+/**
+ * Зарядить усилитель «Генной инженерии» (+1 заряд). Оплата за 🧬 гены (по
+ * умолчанию) или 💎 кристаллы. Заряд тратится при рождении из инкубатора.
+ */
+export function buyBoost(state: GameState, id: string, currency: Currency = 'dna'): Result {
   const def = C.BOOSTS.find((b) => b.id === id);
   if (!def) return { ok: false, reason: 'нет такого усилителя' };
-  if (!spend(state, 'dna', def.dna)) return { ok: false, reason: 'не хватает ДНК' };
+  const cost = currency === 'crystals' ? def.crystals : def.dna;
+  if (!spend(state, currency, cost)) {
+    return { ok: false, reason: currency === 'crystals' ? 'не хватает кристаллов' : 'не хватает ДНК' };
+  }
   state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
   return { ok: true };
 }

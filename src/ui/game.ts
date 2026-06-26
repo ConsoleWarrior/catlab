@@ -19,7 +19,7 @@ import {
   emptySlot, moveCat, clearBreederSlot,
 } from '../game/index.js';
 import { isBusy, isInSlot } from '../game/index.js';
-import type { Cat, GameState, BirthEvent } from '../game/index.js';
+import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor } from './catTextures.js';
@@ -28,7 +28,8 @@ import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
 import {
-  buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel, buildBirthCard,
+  buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel, buildBirthCard, buildPedigreePanel,
+  buildBoostMenu,
 } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
@@ -137,9 +138,28 @@ export class Game implements UiContext {
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
         openHelp: () => this.openHelp(),
+        openBoostMenu: (id = 'tierUp') => this.openBoostMenu(id),
         openCatMenu: (id?: string) => {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openCatMenu(c);
+        },
+        pedigreeDemo: () => {
+          const base = this.state.cats[0];
+          if (!base) return;
+          const A = (breed: string, mother?: Ancestor, father?: Ancestor): Ancestor => ({ breed, mother, father });
+          const demo: Cat = {
+            ...base, name: undefined, breed: 'moggie', rarityTier: 'common',
+            motherBreed: 'abyssinian', fatherBreed: 'manx',
+            pedigree: {
+              mother: A('abyssinian',
+                A('persian', A('bengal'), A('american_shorthair')),
+                A('siamese', A('savannah'), A('toyger'))),
+              father: A('manx',
+                A('sphynx', A('egyptian_mau'), A('norwegian_forest')),
+                A('russian_blue', A('scottish_fold'), A('himalayan'))),
+            },
+          };
+          this.openPedigree(demo);
         },
         closeOverlay: () => this.closeOverlay(),
         give: (c = 5000, x = 50, d = 500) => { this.state.coins += c; this.state.crystals += x; this.state.dna += d; this.commit(); },
@@ -147,7 +167,7 @@ export class Game implements UiContext {
         demoGrab: () => this.demoGrab(),
         collection: () => this.collection(),
         birth: () => this.devBirth(),
-        lab: (s = 'engineering') => {
+        lab: (s = 'codex') => {
           this.rooms.find((r) => r.id === 'genolab')?.setSection?.(s);
           this.goRoom(3);
         },
@@ -306,10 +326,20 @@ export class Game implements UiContext {
     this.showOverlay(buildCatMenu(this, cat, close));
   }
 
+  openPedigree(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildPedigreePanel(this, cat, close));
+  }
+
   openBirthCard(events: BirthEvent[]): void {
     if (!events.some((e) => e.kitten)) return;
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildBirthCard(this, events, close));
+  }
+
+  openBoostMenu(boostId: string): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildBoostMenu(this, boostId, close));
   }
 
   openOrders(): void {

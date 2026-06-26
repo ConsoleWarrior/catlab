@@ -4,14 +4,15 @@
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
-import type { Cat, BirthEvent } from '../game/index.js';
+import type { Cat, BirthEvent, Ancestor } from '../game/index.js';
 import {
   isBusy, isInSlot, clearBreederSlot, adoptReward, adoptCat, moveCat, claimOrder, matchesOrder, renameCat,
-  isAdult, growthScale, growthProgress, growthRemainingMs,
+  isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, MAX_BREEDS,
+  catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
 } from '../game/index.js';
 import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, COLORS, FONT, label, panel, stars, TIER_RU, TIER_COLOR } from './theme.js';
+import { Button, COLORS, FONT, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
 import { describeCat, catTraits, describeReq } from './describe.js';
 import { catSprite } from './catTextures.js';
 import { upgradeButton } from './upgradeButton.js';
@@ -116,6 +117,7 @@ export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
 
   const steps = [
     '🧬 Вязка. В Питомнике тапни котика → «Выбрать для вязки» (нужны ♀ и ♂). Затем в Инкубаторе нажми «Свести» и дождись таймера — родится котёнок.',
+    '🛡 Усилители. У названия Инкубатора — чипы генной инженерии: активируй за 🧬 гены или 💎 кристаллы. Заряженный усилитель сработает на следующей вязке.',
     '🏆 Питомник. Ценные коты приносят пассивный доход 💰/мин. Тап по коту открывает меню действий.',
     '🏠 Приют. Обычных котиков пристраивай «в добрые руки» — получишь 💰 и 🧬 ДНК.',
     '🔬 Генолаб. Котодекс — альбом всех пород: собирай редких в коллекцию. Дальше — улучшения за 🧬 ДНК.',
@@ -184,9 +186,11 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     const sp = catSprite(ctx.app, cat, boxH * 0.78);
     sp.position.set(W / 2, boxY + boxH - 14);
 
-    let y = boxY + boxH + 26;
-    const name = label(breedName(cat.breed), 19, COLORS.ink, '800');
-    name.position.set(W / 2, y); y += 24;
+    let y = boxY + boxH + 18;
+    // двусловное название породы — в две строки (привязка по верху, сдвигаем y на высоту)
+    const name = label(stackWords(breedName(cat.breed)), 19, COLORS.ink, '800');
+    name.anchor.set(0.5, 0);
+    name.position.set(W / 2, y); y += name.height + 6;
 
     const st = stars(cat.rarityTier, 16);
     st.position.set(W / 2, y); y += 22;
@@ -219,7 +223,16 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     const last = idx >= births.length - 1;
     const advance = (): void => { if (last) close(); else { idx++; render(); } };
 
-    // отправить новорождённого в приют (по умолчанию малыш остаётся в питомнике)
+    // основная кнопка: малыш по умолчанию остаётся в питомнике (или листаем дальше)
+    const btn = new Button({
+      text: last ? 'В питомник 🏠' : 'Следующий →',
+      w: W - 60, h: 46, color: COLORS.primary, fontSize: 16,
+    });
+    btn.position.set(W / 2, y + 23);
+    btn.onTap = advance;
+    y += 54;
+
+    // отправить новорождённого в приют
     const toShelter = new Button({ text: '➡️ В приют', w: W - 60, h: 42, color: COLORS.secondary, fontSize: 15 });
     toShelter.position.set(W / 2, y + 21);
     toShelter.onTap = () => {
@@ -231,15 +244,82 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     };
     y += 50;
 
-    const btn = new Button({
-      text: last ? 'В питомник 🏠' : 'Следующий →',
-      w: W - 60, h: 46, color: COLORS.primary, fontSize: 16,
-    });
-    btn.position.set(W / 2, y + 23);
-    btn.onTap = advance;
-    y += 58;
+    root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, name, st, tierT, grow, ...extra, btn, toShelter);
+  };
 
-    root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, name, st, tierT, grow, ...extra, toShelter, btn);
+  render();
+  return root;
+}
+
+/**
+ * Всплывающее меню усилителя вязки («Генная инженерия», кнопки у названия
+ * Инкубатора): описание буста + две кнопки активации — за 🧬 гены или 💎
+ * кристаллы. После активации усилитель «горит» и сработает на первой же
+ * следующей вязке (в любом слоте). Перерисовывается на месте после оплаты.
+ */
+export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => void): Container {
+  const def = BOOSTS.find((b) => b.id === boostId);
+  const W = 320;
+  const root = new Container();
+  if (!def) { root.addChild(panel(W, 80, COLORS.hud, 18)); return root; }
+
+  const render = (): void => {
+    root.removeChildren();
+    const charges = boostCharges(ctx.state, def.id);
+    const items: Container[] = [];
+
+    const title = label(`${def.glyph} ${def.label}`, 19, COLORS.ink, '800');
+    title.position.set(W / 2, 30);
+    items.push(title);
+
+    const desc = new Text({
+      text: def.desc,
+      style: {
+        fontFamily: FONT, fontSize: 14, fontWeight: '600', fill: COLORS.inkSoft,
+        align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 19,
+      },
+    });
+    desc.anchor.set(0.5, 0);
+    desc.position.set(W / 2, 48);
+    items.push(desc);
+    let y = 48 + desc.height + 14;
+
+    const status = label(
+      charges > 0
+        ? `⚡ заряжено${charges > 1 ? ` ×${charges}` : ''} · сработает на следующей вязке`
+        : 'не заряжено · активируй усилитель',
+      12, charges > 0 ? COLORS.good : COLORS.inkSoft, '700',
+    );
+    status.position.set(W / 2, y);
+    items.push(status);
+    y += 26;
+
+    const buyWith = (currency: 'dna' | 'crystals'): void => {
+      const r = buyBoost(ctx.state, def.id, currency);
+      if (r.ok) { ctx.commit(); ctx.toast(`${def.glyph} ${def.label} заряжен`); render(); }
+      else ctx.toast(r.reason);
+    };
+
+    const pad = 24, gap = 12;
+    const bw = (W - pad * 2 - gap) / 2;
+    const geneBtn = new Button({ text: `Гены\n🧬 ${def.dna}`, w: bw, h: 54, color: COLORS.dna, fontSize: 14 });
+    geneBtn.enabled = ctx.state.dna >= def.dna;
+    geneBtn.onTap = () => buyWith('dna');
+    geneBtn.position.set(pad + bw / 2, y + 27);
+    const crysBtn = new Button({ text: `Кристаллы\n💎 ${def.crystals}`, w: bw, h: 54, color: COLORS.crystals, fontSize: 14 });
+    crysBtn.enabled = ctx.state.crystals >= def.crystals;
+    crysBtn.onTap = () => buyWith('crystals');
+    crysBtn.position.set(pad + bw + gap + bw / 2, y + 27);
+    items.push(geneBtn, crysBtn);
+    y += 66;
+
+    const closeBtn = new Button({ text: 'Закрыть', w: W - pad * 2, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+    closeBtn.position.set(W / 2, y + 20);
+    closeBtn.onTap = close;
+    items.push(closeBtn);
+    y += 50;
+
+    root.addChild(panel(W, y, COLORS.hud, 18), ...items);
   };
 
   render();
@@ -256,10 +336,11 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   const root = new Container();
   const tierCol = TIER_COLOR[cat.rarityTier];
 
-  const title = label(breedName(cat.breed), 19, tierCol, '800');
-  title.position.set(W / 2, 28);
+  const title = label(stackWords(breedName(cat.breed)), 19, tierCol, '800');
+  title.anchor.set(0.5, 0);
+  title.position.set(W / 2, 16);
 
-  const boxY = 50, boxH = 130;
+  const boxY = 16 + title.height + 10, boxH = 130;
   const cradle = new Graphics();
   cradle.roundRect(W / 2 - 78, boxY, 156, boxH, 18)
     .fill({ color: COLORS.card })
@@ -326,6 +407,122 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   return root;
 }
 
+/**
+ * Дерево родословной кота: колонки-поколения слева направо
+ * (сам кот → родители → деды → прадеды). Рисуется только то, что известно;
+ * с каждым поколением вязок дерево заполняется глубже. Если столбцы не влезают —
+ * Game автоматически вписывает панель в экран (showOverlay масштабирует).
+ */
+export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void): Container {
+  const root = new Container();
+
+  const ped = catAncestors(cat);
+  const subject: Ancestor = { breed: cat.breed, mother: ped.mother, father: ped.father };
+  const maxDepth = PEDIGREE_DEPTH; // 0=кот, 1=родители, 2=деды, 3=прадеды
+
+  // геометрия ячеек/колонок
+  const cellW = 108, cellH = 42, colGap = 16, rowGap = 9;
+  const slotH = cellH + rowGap;
+  const padX = 16, padTop = 64, headerY = 46;
+  const colX = (d: number): number => padX + d * (cellW + colGap) + cellW / 2;
+
+  type Placed = { node: Ancestor; depth: number; x: number; y: number; isRoot: boolean };
+  const placed: Placed[] = [];
+  const links: Array<[number, number, number, number]> = []; // x1,y1,x2,y2
+  let leafIndex = 0;
+  let usedDepth = 0;
+
+  const layout = (node: Ancestor, depth: number, isRoot: boolean): number => {
+    usedDepth = Math.max(usedDepth, depth);
+    const kids: Ancestor[] = [];
+    if (depth < maxDepth) {
+      if (node.mother) kids.push(node.mother);
+      if (node.father) kids.push(node.father);
+    }
+    let y: number;
+    if (kids.length === 0) {
+      y = padTop + (leafIndex + 0.5) * slotH;
+      leafIndex++;
+    } else {
+      const ys = kids.map((k) => layout(k, depth + 1, false));
+      y = ys.reduce((a, b) => a + b, 0) / ys.length;
+      for (const cy of ys) links.push([colX(depth) + cellW / 2, y, colX(depth + 1) - cellW / 2, cy]);
+    }
+    placed.push({ node, depth, x: colX(depth), y, isRoot });
+    return y;
+  };
+  layout(subject, 0, true);
+
+  const W = padX * 2 + (usedDepth + 1) * cellW + usedDepth * colGap;
+  const treeBottom = padTop + leafIndex * slotH;
+  const known = pedigreeDepth(cat); // известных поколений предков
+
+  // соединители (рисуем под ячейками)
+  const wires = new Graphics();
+  for (const [x1, y1, x2, y2] of links) {
+    const midX = (x1 + x2) / 2;
+    wires.moveTo(x1, y1).lineTo(midX, y1).lineTo(midX, y2).lineTo(x2, y2);
+  }
+  wires.stroke({ width: 1.5, color: COLORS.cardEdge, alpha: 0.9 });
+
+  // ячейка-предок: рамка в цвет тира + точка тира + имя породы (с переносом)
+  const cell = (p: Placed): Container => {
+    const c = new Container();
+    const tier = tierOfBreed(p.node.breed);
+    const col = TIER_COLOR[tier];
+    const g = new Graphics();
+    g.roundRect(-cellW / 2, -cellH / 2, cellW, cellH, 9)
+      .fill({ color: p.isRoot ? COLORS.card : COLORS.hud })
+      .stroke({ width: p.isRoot ? 3 : 2, color: col, alpha: 0.95 });
+    g.circle(-cellW / 2 + 11, 0, 4).fill({ color: col });
+    const name = p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
+    const t = new Text({
+      text: name,
+      style: {
+        fontFamily: FONT, fontSize: 11, fontWeight: '700', fill: COLORS.ink,
+        wordWrap: true, breakWords: true, wordWrapWidth: cellW - 26, lineHeight: 12, align: 'center',
+      },
+    });
+    t.anchor.set(0.5);
+    t.position.set(5, 0);
+    c.addChild(g, t);
+    c.position.set(p.x, p.y);
+    return c;
+  };
+
+  // заголовки колонок поколений
+  const COL_RU = ['', 'родители', 'деды', 'прадеды'];
+  const headers: Container[] = [];
+  for (let d = 1; d <= usedDepth; d++) {
+    const h = label(COL_RU[d] ?? '', 12, COLORS.inkSoft, '800');
+    h.position.set(colX(d), headerY);
+    headers.push(h);
+  }
+
+  const title = label('🌳 Родословная', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 26);
+
+  let y = treeBottom + 8;
+  const footer: Container[] = [];
+  if (known < maxDepth) {
+    const hint = label('родословная пополняется с каждым поколением', 11, COLORS.inkSoft, '600');
+    hint.position.set(W / 2, y + 8);
+    footer.push(hint);
+    y += 22;
+  }
+
+  const closeBtn = new Button({ text: 'Закрыть', w: 160, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 24);
+  closeBtn.onTap = close;
+  y += 44;
+
+  const H = y;
+  root.addChild(panel(W, H, COLORS.hud, 18), title, ...headers, wires);
+  for (const p of placed) root.addChild(cell(p));
+  root.addChild(...footer, closeBtn);
+  return root;
+}
+
 /** Меню действий над котом. */
 export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Container {
   if (!isAdult(cat, ctx.now())) return buildKittenCard(ctx, cat, close);
@@ -338,11 +535,21 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   root.addChild(panel(W, H, COLORS.hud, 18));
 
   const named = cat.name?.trim();
-  const title = label(named || describeCat(cat), 17, named ? TIER_COLOR[cat.rarityTier] : COLORS.ink, '800');
-  title.position.set(W / 2, 28);
+  // Заголовок переносится по словам и не вылезает за карточку (длинные названия
+  // пород); двусловное имя — в две строки. Привязка по верху — сдвигаем y на высоту.
+  const title = new Text({
+    text: named ? stackWords(named) : describeCat(cat),
+    style: {
+      fontFamily: FONT, fontSize: 17, fontWeight: '800',
+      fill: named ? TIER_COLOR[cat.rarityTier] : COLORS.ink,
+      align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 21,
+    },
+  });
+  title.anchor.set(0.5, 0);
+  title.position.set(W / 2, 18);
   root.addChild(title);
 
-  let y = 52;
+  let y = 18 + title.height + 10;
   if (named) {
     const sub = label(describeCat(cat), 12, COLORS.inkSoft, '700');
     sub.position.set(W / 2, y);
@@ -354,6 +561,22 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   st.position.set(W / 2, y);
   root.addChild(st);
   y += 26;
+
+  // строка «Возраст»: 5 сердечек — потраченные вязки закрашены чёрным (🖤),
+  // оставшиеся красные (❤️). Исчерпал лимит → рядом статус «Старый».
+  const left = breedsLeft(cat);
+  const used = MAX_BREEDS - left;
+  const ageLabel = label('Возраст ' + '🖤'.repeat(used) + '❤️'.repeat(left), 14, COLORS.inkSoft, '700');
+  ageLabel.position.set(W / 2, y);
+  root.addChild(ageLabel);
+  if (isOld(cat)) {
+    const oldT = label('Старый', 12, COLORS.warn, '800');
+    oldT.anchor.set(0, 0.5);
+    oldT.position.set(W / 2 + ageLabel.width / 2 + 8, y);
+    root.addChild(oldT);
+  }
+  y += 26;
+
   // строки облика: перенос по словам, чтобы текст не вылезал за край меню
   for (const line of traits) {
     const t = new Text({
@@ -399,6 +622,11 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
       ctx.openCatMenu(cat);                      // переоткрыть с новым именем
     });
   });
+
+  // Родословная: дерево предков до прадедов (только если родители известны).
+  if (cat.motherBreed || cat.fatherBreed) {
+    addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+  }
 
   // Кот стоит в слоте вязки → быстрый возврат в питомник (без перетаскивания).
   if (!busy && isInSlot(ctx.state, cat.id)) {

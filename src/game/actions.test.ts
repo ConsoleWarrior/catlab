@@ -5,8 +5,9 @@ import {
   collectReady, adoptCat, moveCat,
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, unlockResearch,
+  isOld, breedsLeft,
 } from './index.js';
-import { STARTER_CAT_COST } from './config.js';
+import { STARTER_CAT_COST, MAX_BREEDS } from './config.js';
 import type { GameState } from './index.js';
 
 function pair(s: GameState) {
@@ -112,6 +113,47 @@ describe('инкубатор', () => {
   });
 });
 
+describe('лимит вязок (статус «Старый»)', () => {
+  it('каждая вязка засчитывается обоим родителям', () => {
+    const rng = makeRng(70);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    expect(female.breedCount).toBe(0);
+    expect(startBreeding(s, 0, female.id, male.id, 0).ok).toBe(true);
+    expect(female.breedCount).toBe(1);
+    expect(male.breedCount).toBe(1);
+  });
+
+  it('после MAX_BREEDS вязок кот становится «Старым» и не идёт в вязку', () => {
+    const rng = makeRng(71);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    const dur = incubationDuration(s);
+    let now = 0;
+    for (let k = 0; k < MAX_BREEDS; k++) {
+      expect(startBreeding(s, 0, female.id, male.id, now).ok).toBe(true);
+      collectReady(s, now + dur, rng); // освобождаем слот к следующей вязке
+      now += dur;
+    }
+    expect(female.breedCount).toBe(MAX_BREEDS);
+    expect(breedsLeft(female)).toBe(0);
+    expect(isOld(female)).toBe(true);
+    // «Старого» нельзя ни свести, ни поставить в слот
+    expect(startBreeding(s, 0, female.id, male.id, now).ok).toBe(false);
+    expect(assignBreeder(s, 0, female.id, now).ok).toBe(false);
+  });
+
+  it('«Старого» кота блокируют startBreeding и assignBreeder', () => {
+    const s = createInitialState(makeRng(72), 0);
+    const { female, male } = pair(s);
+    female.breedCount = MAX_BREEDS; // искусственно состарили
+    expect(isOld(female)).toBe(true);
+    expect(assignBreeder(s, 0, female.id, 0).ok).toBe(false);
+    expect(startBreeding(s, 0, female.id, male.id, 0).ok).toBe(false);
+    expect(male.breedCount).toBe(0); // несостоявшаяся вязка не засчиталась партнёру
+  });
+});
+
 describe('комнаты', () => {
   it('пристройство даёт монеты и ДНК, кот уходит', () => {
     const s = createInitialState(makeRng(3), 0);
@@ -207,6 +249,16 @@ describe('генная инженерия', () => {
     expect(buyBoost(s, 'tierUp').ok).toBe(true);
     expect(s.boosts.tierUp).toBe(1);
     expect(s.dna).toBe(40); // 60 🧬 списано
+  });
+
+  it('buyBoost заряжает усилитель за кристаллы (премиум-альтернатива)', () => {
+    const s = createInitialState(makeRng(40), 0);
+    s.crystals = 4; s.dna = 0;
+    expect(buyBoost(s, 'tierUp', 'crystals').ok).toBe(false); // нужно 5 💎
+    expect(buyBoost(s, 'luckyUp', 'crystals').ok).toBe(true); // 3 💎
+    expect(s.boosts.luckyUp).toBe(1);
+    expect(s.crystals).toBe(1); // 3 💎 списано
+    expect(s.dna).toBe(0);      // гены не тронуты
   });
 
   it('🔼 Форсаж в инкубаторе поднимает тир котёнка и тратит заряд', () => {

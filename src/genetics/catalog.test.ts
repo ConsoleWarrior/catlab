@@ -135,3 +135,33 @@ describe('усилители вязки (генная инженерия)', () =
     expect(lucky).toBeGreaterThan(base);
   });
 });
+
+describe('бонус родословной (extraUp)', () => {
+  it('повышает шанс тира-вверх у одинаковой пары', () => {
+    const rb = makeRng(80);
+    let base = 0;
+    for (let i = 0; i < 3000; i++) {
+      if (tierOfBreed(breedKitten('persian', 'persian', rb)) === 'rare') base++; // uncommon → rare
+    }
+    const re = makeRng(80); // тот же сид — честное сравнение
+    let boosted = 0;
+    for (let i = 0; i < 3000; i++) {
+      if (tierOfBreed(breedKitten('persian', 'persian', re, {}, undefined, 0.3)) === 'rare') boosted++;
+    }
+    expect(boosted).toBeGreaterThan(base);
+  });
+
+  it('повышает шанс тира старшего у разнотировой пары', () => {
+    const rb = makeRng(81);
+    let base = 0;
+    for (let i = 0; i < 3000; i++) {
+      if (tierOfBreed(breedKitten('moggie', 'persian', rb)) === 'uncommon') base++; // common × uncommon
+    }
+    const re = makeRng(81);
+    let boosted = 0;
+    for (let i = 0; i < 3000; i++) {
+      if (tierOfBreed(breedKitten('moggie', 'persian', re, {}, undefined, 0.3)) === 'uncommon') boosted++;
+    }
+    expect(boosted).toBeGreaterThan(base);
+  });
+});

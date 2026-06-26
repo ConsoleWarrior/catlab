@@ -5,8 +5,9 @@
 
 import { tierOfBreed } from '../genetics/index.js';
 import type { Genotype, BreedBoosts } from '../genetics/index.js';
-import type { BreedingSlot, Cat, Currency, GameState, LiveRoom } from './types.js';
+import type { Ancestor, BreedingSlot, Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
+import { catAncestors } from './pedigree.js';
 
 /** Уровень апгрейда (0, если не куплен). */
 export function lvl(state: GameState, id: string): number {
@@ -198,5 +199,38 @@ export function makeCatInstance(
     location,
     rarityTier: tierOfBreed(breed),
     analyzed: false,
+    breedCount: 0,
   };
+}
+
+// --- Возраст / лимит вязок ---
+
+/** Сколько вязок коту ещё доступно (0 — уже «Старый»). */
+export function breedsLeft(cat: Cat): number {
+  return Math.max(0, C.MAX_BREEDS - (cat.breedCount ?? 0));
+}
+
+/** Кот исчерпал лимит вязок и стал «Старым» — в слот вязки его не поставить. */
+export function isOld(cat: Cat): boolean {
+  return breedsLeft(cat) <= 0;
+}
+
+/**
+ * Бонус родословной кота к шансу «тир-вверх» у его потомства: сумма по ВСЕМ предкам
+ * (до прадедов), где вклад каждого = цвет (тир) × вес поколения (родители ×1,
+ * деды ×0.5, прадеды ×0.25). У кота без родословной (купленный/стартовый) — 0.
+ * Применяется в breedKitten к обоим родителям вязки. См. C.PEDIGREE_TIER_BONUS.
+ */
+export function pedigreeBonus(cat: Cat): number {
+  let bonus = 0;
+  const walk = (a: Ancestor | undefined, gen: number): void => {
+    if (!a) return;
+    bonus += C.PEDIGREE_TIER_BONUS[tierOfBreed(a.breed)] * C.PEDIGREE_GEN_FALLOFF ** (gen - 1);
+    walk(a.mother, gen + 1);
+    walk(a.father, gen + 1);
+  };
+  const ped = catAncestors(cat);
+  walk(ped.mother, 1);
+  walk(ped.father, 1);
+  return bonus;
 }

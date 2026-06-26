@@ -11,7 +11,7 @@ import { isBusy, growthScale, isAdult } from '../game/index.js';
 import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { catSprite, aiSitSpriteFor } from './catTextures.js';
-import { COLORS, FONT, label, TIER_COLOR } from './theme.js';
+import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
 export interface Band { x: number; y: number; w: number; h: number; }
 
@@ -72,7 +72,7 @@ export function createLivingFloor(
     if (adult) {
       const tierCol = TIER_COLOR[cat.rarityTier];
       const sexGlyph = cat.genotype.sex === 'female' ? '♀' : '♂';
-      const display = cat.name?.trim() || breedName(cat.breed);
+      const display = stackWords(cat.name?.trim() || breedName(cat.breed));
       const mk = (text: string, size: number): Text => new Text({
         text,
         style: {
