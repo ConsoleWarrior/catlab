@@ -6,11 +6,11 @@
 
 import { Container } from 'pixi.js';
 import {
-  catsIn, nurseryCapacity, passiveRatePerMin, buyCat, buyCatCost, isInSlot,
+  catsIn, nurseryCapacity, buyCat, buyCatCost, isInSlot,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane } from './shell.js';
-import { Button, COLORS, label } from '../theme.js';
+import { Button, COLORS } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 
 export function createNursery(ctx: UiContext): Room {
@@ -31,15 +31,8 @@ export function createNursery(ctx: UiContext): Room {
     // на полу — без тех, кто сейчас стоит в слоте инкубатора (они «в отъезде»)
     const present = owned.filter((c) => !isInSlot(ctx.state, c.id));
     const cap = nurseryCapacity(ctx.state);
-    const rate = passiveRatePerMin(ctx.state);
-
-    const info = label(
-      `${present.length}/${cap} котиков   ·   💰 +${rate.toFixed(rate < 10 ? 1 : 0)}/мин`,
-      15, COLORS.ink, '700',
-    );
-    info.anchor.set(0, 0.5);
-    info.position.set(2, 14);
-    shell.body.addChild(info);
+    // вместимость комнаты — счётчиком справа в плашке названия
+    shell.setTitleBadge(`🐱 ${present.length}/${cap}`);
 
     const cost = buyCatCost(ctx.state);
     const buy = new Button({
@@ -48,18 +41,13 @@ export function createNursery(ctx: UiContext): Room {
     });
     // покупку ограничиваем по «владению» (как buyCat) — слотовые коты ещё наши
     buy.enabled = owned.length < cap && ctx.state.coins >= cost;
-    buy.position.set(shell.contentW - 252, 16);
+    buy.position.set(shell.contentW - 114, 16);
     buy.onTap = () => {
       const r = buyCat(ctx.state, ctx.rng, ctx.now());
       if (r.ok) { ctx.commit(); ctx.toast('Новый котик в питомнике 🐱'); }
       else ctx.toast(r.reason);
     };
     shell.body.addChild(buy);
-
-    const gear = new Button({ text: '⚙️ Улучшить', w: 140, h: 40, color: COLORS.secondary, fontSize: 14 });
-    gear.position.set(shell.contentW - 78, 16);
-    gear.onTap = () => ctx.openUpgrades('🏆 Улучшения питомника', ['nurseryCap', 'show']);
-    shell.body.addChild(gear);
 
     floor.refresh();
   }

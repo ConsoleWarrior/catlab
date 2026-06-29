@@ -1,7 +1,8 @@
 /**
  * Комната «Генолаб» — хаб для 🧬 ДНК. Разбита на под-секции (табы):
  *   📖 Котодекс    — альбом всех пород по тирам (силуэт, пока не выведена);
- *   🔬 Исследования — дерево постоянных бонусов лаборатории за 🧬;
+ *   🔬 Исследования — многоуровневые апгрейды за 💰 (вместимость питомника/приюта,
+ *                     слоты инкубатора); бонусные ветки за 🧬 — в планах;
  *   🧫 Клон-банк    — клонирование пристроенных котов (скоро).
  *
  * Работают Котодекс и Исследования; Клон-банк — заглушка «скоро».
@@ -12,8 +13,7 @@ import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { FederatedWheelEvent } from 'pixi.js';
 import { BREEDS, BREEDS_BY_TIER, breedName } from '../../genetics/index.js';
 import type { RarityTier } from '../../genetics/index.js';
-import { RESEARCH, unlockResearch, UPGRADES, buyUpgrade, upgradeCost, upgradeMaxed } from '../../game/index.js';
-import type { ResearchDef } from '../../game/index.js';
+import { UPGRADES, buyUpgrade, upgradeCost, upgradeMaxed, NURSERY_CAP_STEP, SHELTER_CAP_STEP } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel, TIER_RU, TIER_COLOR, TIERS } from '../theme.js';
@@ -22,8 +22,56 @@ import { CUR_GLYPH } from '../upgradeButton.js';
 
 type Section = 'codex' | 'research' | 'clone';
 
-/** Иконки апгрейдов Инкубатора (4-я ветка Исследований). */
-const UPGRADE_GLYPH: Record<string, string> = { slots: '💞', speed: '⏩' };
+/**
+ * Многоуровневые апгрейды вкладки «Исследования»: иконка, отображаемое имя и
+ * прибавка за уровень (для подписи в карточке). Имена здесь — локальные, чтобы не
+ * трогать `label` в config.ts (его же показывает Инкубатор и кнопки апгрейдов).
+ */
+const UPGRADE_INFO: Record<string, { glyph: string; name: string; perLevel: string }> = {
+  nurseryCap: { glyph: '🏠', name: 'Вместимость питомника', perLevel: `+${NURSERY_CAP_STEP} места за уровень` },
+  shelterCap: { glyph: '🏚️', name: 'Вместимость приюта', perLevel: `+${SHELTER_CAP_STEP} места за уровень` },
+  slots: { glyph: '💞', name: 'Слоты инкубатора', perLevel: '+1 слот за уровень' },
+};
+
+/** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
+function shade(color: number, f: number): number {
+  const r = Math.round(((color >> 16) & 0xff) * f);
+  const g = Math.round(((color >> 8) & 0xff) * f);
+  const b = Math.round((color & 0xff) * f);
+  return (r << 16) | (g << 8) | b;
+}
+
+/** Осветлить цвет к белому на долю t (0 — без изменений, 1 — белый). */
+function lighten(color: number, t: number): number {
+  const ch = (c: number): number => Math.round(c + (255 - c) * t);
+  return (ch((color >> 16) & 0xff) << 16) | (ch((color >> 8) & 0xff) << 8) | ch(color & 0xff);
+}
+
+/**
+ * Подпись на полупрозрачной «таблетке» (фон под текстом) — чтобы читалась поверх
+ * ИИ-фона комнаты. Сегменты выкладываются в строку, фон обтекает их по ширине.
+ * Контейнер крепится за левый край; его вертикальный центр ставится на нужный y.
+ */
+function pillRow(segs: { text: string; size: number; color: number; weight: '400' | '600' | '700' | '800' }[]): Container {
+  const c = new Container();
+  const padX = 9, gap = 7;
+  const parts: Text[] = [];
+  let x = padX, maxSize = 0;
+  for (const s of segs) {
+    const t = label(s.text, s.size, s.color, s.weight);
+    t.anchor.set(0, 0.5);
+    t.position.set(x, 0);
+    x += t.width + gap;
+    maxSize = Math.max(maxSize, s.size);
+    parts.push(t);
+  }
+  const w = x - gap + padX;
+  const h = maxSize + 11;
+  const bg = new Graphics();
+  bg.roundRect(0, -h / 2, w, h, h / 2).fill({ color: COLORS.card, alpha: 0.9 });
+  c.addChild(bg, ...parts);
+  return c;
+}
 
 export function createGenolab(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'genolab', '🔬 Генолаб');
@@ -66,9 +114,11 @@ export function createGenolab(ctx: UiContext): Room {
     const open = discovered(key);
 
     const bg = new Graphics();
+    // фон всегда непрозрачный (под ним — ИИ-арт комнаты): открытая клетка светлая,
+    // неоткрытая — затемнённая (силуэт-замок), без просвечивания фона.
     bg.roundRect(-size / 2, -size / 2, size, size, 8)
-      .fill({ color: open ? COLORS.card : 0x000000, alpha: open ? 1 : 0.1 })
-      .stroke({ width: 2, color: TIER_COLOR[tier], alpha: open ? 0.9 : 0.25 });
+      .fill({ color: open ? COLORS.card : shade(COLORS.card, 0.72), alpha: 1 })
+      .stroke({ width: 2, color: TIER_COLOR[tier], alpha: open ? 0.9 : 0.5 });
     c.addChild(bg);
 
     if (open) {
@@ -85,7 +135,7 @@ export function createGenolab(ctx: UiContext): Room {
       }
     } else {
       const q = label('?', size * 0.42, TIER_COLOR[tier], '800');
-      q.alpha = 0.55;
+      q.alpha = 0.7;
       c.addChild(q);
     }
 
@@ -106,9 +156,8 @@ export function createGenolab(ctx: UiContext): Room {
   function renderCodex(): void {
     const top = 46;
     const haveCount = BREEDS.filter((b) => discovered(b.key)).length;
-    const header = label(`Открыто пород: ${haveCount} / ${BREEDS.length}`, 15, COLORS.ink, '800');
-    header.anchor.set(0, 0.5);
-    header.position.set(2, top + 10);
+    const header = pillRow([{ text: `Открыто пород: ${haveCount} / ${BREEDS.length}`, size: 15, color: COLORS.ink, weight: '800' }]);
+    header.position.set(2, top + 11);
     shell.body.addChild(header);
 
     // окно прокрутки (маска) + прокручиваемое содержимое — как в renderResearch
@@ -139,13 +188,12 @@ export function createGenolab(ctx: UiContext): Room {
       const list = BREEDS_BY_TIER[tier];
       const got = list.filter((b) => discovered(b.key)).length;
 
-      const tl = label(TIER_RU[tier], 14, TIER_COLOR[tier], '800');
-      tl.anchor.set(0, 0.5);
-      tl.position.set(2, y + 9);
-      const cnt = label(`${got} / ${list.length}`, 12, COLORS.inkSoft, '700');
-      cnt.anchor.set(0, 0.5);              // сразу за названием редкости, не у края экрана
-      cnt.position.set(2 + tl.width + 8, y + 9);
-      content.addChild(tl, cnt);
+      const tierChip = pillRow([
+        { text: TIER_RU[tier], size: 14, color: TIER_COLOR[tier], weight: '800' },
+        { text: `${got} / ${list.length}`, size: 12, color: COLORS.inkSoft, weight: '700' },
+      ]);
+      tierChip.position.set(2, y + 9);
+      content.addChild(tierChip);
       y += 26;
 
       list.forEach((b, i) => {
@@ -173,65 +221,16 @@ export function createGenolab(ctx: UiContext): Room {
     return t;
   }
 
-  /** Узел дерева исследований: состояние (изучено/доступно/дорого/заблокировано) + тап. */
-  function researchNode(def: ResearchDef, nw: number, nh: number): Container {
-    const c = new Container();
-    const owned = ctx.state.research.includes(def.id);
-    const reqMet = def.requires.every((r) => ctx.state.research.includes(r));
-    const affordable = ctx.state.dna >= def.dna;
-    const available = reqMet && !owned;
-    const highlight = owned || (available && affordable);
-
-    const bg = new Graphics();
-    bg.roundRect(-nw / 2, -nh / 2, nw, nh, 12)
-      .fill({ color: owned ? COLORS.good : COLORS.card, alpha: owned ? 0.22 : available ? 1 : 0.5 })
-      .stroke({
-        width: highlight ? 3 : 2,
-        color: owned ? COLORS.good : available && affordable ? COLORS.dna : COLORS.cardEdge,
-        alpha: reqMet ? 0.95 : 0.4,
-      });
-    c.addChild(bg);
-
-    // Узлы всегда широкие (игра ландшафтная), но низкие на мобиле — отступы
-    // делаем пропорциональными высоте, чтобы 3 строки помещались при любом nh.
-    const dim = reqMet ? 1 : 0.5;
-    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(14, nh * 0.2), COLORS.ink, '800', nw - 14);
-    title.position.set(0, -nh / 2 + nh * 0.24);
-    title.alpha = dim;
-    c.addChild(title);
-
-    const desc = wrapped(def.desc, Math.min(11, nh * 0.16), COLORS.inkSoft, '600', nw - 12);
-    desc.position.set(0, -nh / 2 + nh * 0.52);
-    desc.alpha = dim;
-    c.addChild(desc);
-
-    const status = owned
-      ? label('✓ изучено', Math.min(11, nh * 0.16), COLORS.good, '800')
-      : reqMet
-        ? label(`${def.dna} 🧬`, Math.min(13, nh * 0.18), affordable ? COLORS.dna : COLORS.inkSoft, '800')
-        : label('🔒', Math.min(14, nh * 0.2), COLORS.inkSoft, '700');
-    status.position.set(0, -nh / 2 + nh * 0.8);
-    c.addChild(status);
-
-    c.eventMode = 'static';
-    c.cursor = 'pointer';
-    c.on('pointertap', () => {
-      if (suppressTap) return;          // это был скролл, а не тап
-      if (owned) { ctx.toast(`${def.title}: ${def.desc}`); return; }
-      const r = unlockResearch(ctx.state, def.id);
-      if (r.ok) { ctx.commit(); ctx.toast(`Изучено: ${def.title} ✅`); }
-      else ctx.toast(r.reason);
-    });
-    return c;
-  }
-
   /**
-   * Узел-апгрейд Инкубатора (4-я ветка): слоты вязки / скорость инкубации.
-   * В отличие от исследований — многоуровневый (за 💰), показывает уровень/макс
-   * и цену следующего уровня; по тапу покупает следующий уровень.
+   * Карточка многоуровневого апгрейда (за 💰): вместимость питомника/приюта и слоты
+   * инкубатора. Показывает имя, прибавку за уровень, текущий уровень/макс и цену
+   * следующего; по тапу покупает следующий уровень. Фон непрозрачный (под ним —
+   * ИИ-арт комнаты): доступное — светлая карточка, максимум — мягко-зелёная,
+   * «не по карману» — приглушённая (затемнение вместо прозрачности).
    */
   function upgradeNode(id: string, nw: number, nh: number): Container {
     const def = UPGRADES[id]!;
+    const info = UPGRADE_INFO[id];
     const maxLvl = id === 'slots' ? UPGRADES.slots!.max : def.max;
     const curLvl = id === 'slots' ? ctx.state.slots.length - 1 : (ctx.state.upgrades[id] ?? 0);
     const maxed = upgradeMaxed(ctx.state, id);
@@ -240,9 +239,12 @@ export function createGenolab(ctx: UiContext): Room {
     const highlight = !maxed && affordable;
 
     const c = new Container();
+    const fill = maxed ? lighten(COLORS.good, 0.5)
+      : affordable ? COLORS.card
+        : shade(COLORS.card, 0.9);
     const bg = new Graphics();
     bg.roundRect(-nw / 2, -nh / 2, nw, nh, 12)
-      .fill({ color: maxed ? COLORS.good : COLORS.card, alpha: maxed ? 0.22 : 1 })
+      .fill({ color: fill, alpha: 1 })
       .stroke({
         width: highlight ? 3 : 2,
         color: maxed ? COLORS.good : affordable ? COLORS.coins : COLORS.cardEdge,
@@ -250,27 +252,32 @@ export function createGenolab(ctx: UiContext): Room {
       });
     c.addChild(bg);
 
-    const title = wrapped(`${UPGRADE_GLYPH[id] ?? '⚙️'} ${def.label}`, Math.min(14, nh * 0.2), COLORS.ink, '800', nw - 14);
-    title.position.set(0, -nh / 2 + nh * 0.24);
+    const title = wrapped(`${info?.glyph ?? '⚙️'} ${info?.name ?? def.label}`, Math.min(15, nh * 0.16), COLORS.ink, '800', nw - 14);
+    title.position.set(0, -nh / 2 + nh * 0.2);
     c.addChild(title);
 
-    const lvlT = wrapped(`уровень ${curLvl} / ${maxLvl}`, Math.min(11, nh * 0.16), COLORS.inkSoft, '600', nw - 12);
-    lvlT.position.set(0, -nh / 2 + nh * 0.52);
+    const per = wrapped(info?.perLevel ?? '', Math.min(12, nh * 0.12), COLORS.inkSoft, '700', nw - 12);
+    per.position.set(0, -nh / 2 + nh * 0.45);
+    c.addChild(per);
+
+    const lvlT = wrapped(`уровень ${curLvl} / ${maxLvl}`, Math.min(11, nh * 0.11), COLORS.inkSoft, '600', nw - 12);
+    lvlT.position.set(0, -nh / 2 + nh * 0.64);
     c.addChild(lvlT);
 
     const status = maxed
-      ? label('✓ максимум', Math.min(11, nh * 0.16), COLORS.good, '800')
-      : label(`${cost!.amount} ${CUR_GLYPH[cost!.currency]}`, Math.min(13, nh * 0.18), affordable ? COLORS.coins : COLORS.inkSoft, '800');
-    status.position.set(0, -nh / 2 + nh * 0.8);
+      ? label('✓ максимум', Math.min(12, nh * 0.12), COLORS.good, '800')
+      : label(`${cost!.amount} ${CUR_GLYPH[cost!.currency]}`, Math.min(14, nh * 0.14), affordable ? COLORS.coins : COLORS.inkSoft, '800');
+    status.position.set(0, -nh / 2 + nh * 0.85);
     c.addChild(status);
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
     c.on('pointertap', () => {
       if (suppressTap) return;          // это был скролл, а не тап
-      if (maxed) { ctx.toast(`${def.label}: максимум`); return; }
+      const name = info?.name ?? def.label;
+      if (maxed) { ctx.toast(`${name}: максимум`); return; }
       const r = buyUpgrade(ctx.state, id);
-      if (r.ok) { ctx.commit(); ctx.toast(`${def.label} улучшено ✅`); }
+      if (r.ok) { ctx.commit(); ctx.toast(`${name} улучшено ✅`); }
       else ctx.toast(r.reason);
     });
     return c;
@@ -333,21 +340,15 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /**
-   * 🔬 Дерево исследований: 3 ветки бонусов (за 🧬) + 4-я ветка апгрейдов
-   * Инкубатора (за 💰). Содержимое прокручивается по вертикали, если не влезает.
+   * 🔬 Исследования: многоуровневые апгрейды за 💰 — вместимость питомника, приюта
+   * и слоты инкубатора (по одной карточке в ряд). Бонусные ветки за 🧬 убраны —
+   * вернутся, когда появятся настоящие апгрейды. Содержимое прокручивается, если
+   * карточки не влезают по высоте.
    */
   function renderResearch(): void {
-    const top = 50;
-    const header = label(
-      `🔬 Бонусы лаборатории  ·  🧬 ${ctx.state.dna}  ·  💰 ${ctx.state.coins}`,
-      13, COLORS.ink, '700',
-    );
-    header.anchor.set(0, 0.5);
-    header.position.set(2, top);
-    shell.body.addChild(header);
-
-    // окно прокрутки (маска) + прокручиваемое содержимое
-    const viewTop = top + 18;
+    // окно прокрутки (маска) + прокручиваемое содержимое — сразу под табами
+    // (🧬 ДНК и 💰 деньги уже показаны в верхней строке состояния)
+    const viewTop = 46;
     const viewW = shell.contentW;
     const viewH = shell.contentH - viewTop;
     const viewport = new Container();
@@ -359,46 +360,22 @@ export function createGenolab(ctx: UiContext): Room {
     content.mask = maskG;
     shell.body.addChild(viewport);
 
-    // сетка: 3 ветки бонусов (строки 0..2) + ветка апгрейдов Инкубатора (строка upRow).
-    // Высота узла фиксированная и читаемая — содержимое прокручивается, если не влезает.
-    const cols = Math.max(...RESEARCH.map((r) => r.col)) + 1;
-    const upRow = Math.max(...RESEARCH.map((r) => r.row)) + 1;
-    const rows = upRow + 1;
-    const colGap = 12, rowGap = 12;
+    const ids = ['nurseryCap', 'shelterCap', 'slots'];
+    const cols = ids.length;
+    const colGap = 12;
     const nw = (viewW - colGap * (cols - 1)) / cols;
-    const nh = Math.max(96, Math.min(126, viewH * 0.42));
+    // высота карточки: вмещает 4 строки (имя, прибавка, уровень, цена), но не выше
+    // разумного — иначе на десктопе карточки растягиваются на весь экран.
+    const nh = Math.max(150, Math.min(200, viewH * 0.62));
     const cx = (col: number): number => col * (nw + colGap) + nw / 2;
-    const cy = (row: number): number => row * (nh + rowGap) + nh / 2;
 
-    // связи (под узлами): от предпосылки к узлу
-    const links = new Graphics();
-    for (const def of RESEARCH) {
-      for (const reqId of def.requires) {
-        const req = RESEARCH.find((r) => r.id === reqId);
-        if (!req) continue;
-        const owned = ctx.state.research.includes(reqId);
-        links.moveTo(cx(req.col) + nw / 2, cy(req.row))
-          .lineTo(cx(def.col) - nw / 2, cy(def.row))
-          .stroke({ width: 3, color: owned ? COLORS.good : COLORS.cardEdge, alpha: owned ? 0.9 : 0.5 });
-      }
-    }
-    content.addChild(links);
-
-    for (const def of RESEARCH) {
-      const node = researchNode(def, nw, nh);
-      node.position.set(cx(def.col), cy(def.row));
-      content.addChild(node);
-    }
-
-    // 4-я ветка: апгрейды Инкубатора (независимые, без связей между собой)
-    ['slots', 'speed'].forEach((id, i) => {
+    ids.forEach((id, i) => {
       const node = upgradeNode(id, nw, nh);
-      node.position.set(cx(i), cy(upRow));
+      node.position.set(cx(i), nh / 2);
       content.addChild(node);
     });
 
-    const contentH = cy(rows - 1) + nh / 2;
-    setupScroll(scroll, 'research', viewport, content, viewW, viewH, contentH);
+    setupScroll(scroll, 'research', viewport, content, viewW, viewH, nh);
   }
 
   function renderStub(title: string, desc: string[]): void {

@@ -22,6 +22,9 @@ const texs = new Map<string, Texture>();
 
 export function setDecorTexture(name: string, tex: Texture): void { texs.set(name, tex); }
 
+/** Текстура декор-спрайта по ключу (имя файла без .png) или undefined. */
+export function decorTexture(name: string): Texture | undefined { return texs.get(name); }
+
 export type DecorRole = 'adopt';
 
 export interface DecorItem {

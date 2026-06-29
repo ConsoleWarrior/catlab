@@ -11,17 +11,19 @@
  * поднимается, коты сходятся к центру и трутся боками, вверх всплывают сердечки.
  */
 
-import { Container, Graphics } from 'pixi.js';
-import type { Sprite, Text } from 'pixi.js';
+import { Container, Graphics, Sprite } from 'pixi.js';
+import type { Text } from 'pixi.js';
 import type { Cat, BoostDef } from '../../game/index.js';
 import {
   startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, growthScale,
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
+  buyUpgrade, upgradeCost, upgradeMaxed,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, label, panel } from '../theme.js';
 import { catSprite, rarityGlow, GLOW_OUT } from '../catTextures.js';
+import { decorTexture } from '../decorArt.js';
 import { darken } from '../../render/palette.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
@@ -119,13 +121,13 @@ export function createIncubator(ctx: UiContext): Room {
     return c;
   }
 
-  function renderBoostChips(): void {
+  function renderBoostChips(plateW: number): void {
     boostBar.removeChildren();
     boostGlows = [];
     const size = 34, gap = 6;
     // чипы стоят справа от плашки названия, вплотную (boostBar — в локальных
-    // координатах titleBar, плашка шириной shell.titleW).
-    const firstCx = shell.titleW + 12 + size / 2;
+    // координатах titleBar; plateW — ширина плашки со счётчиком слотов).
+    const firstCx = plateW + 12 + size / 2;
     BOOSTS.forEach((def, i) => {
       const chip = boostChip(def, size);
       chip.position.set(firstCx + i * (size + gap), shell.titleH / 2);
@@ -433,32 +435,104 @@ export function createIncubator(ctx: UiContext): Room {
     return card;
   }
 
+  /**
+   * Закрытое окно вязки (слот ещё не куплен). Выглядит как притушённая мини-комната
+   * с замком. Следующий по очереди слот можно открыть прямо здесь за 💰 (тот же
+   * апгрейд «Слоты вязки», что и в Генолабе → Исследования); более дальний — ждёт,
+   * пока откроют предыдущий.
+   */
+  function buildLockedSlot(i: number, w: number, h: number): Container {
+    const card = new Container();
+    card.addChild(panel(w, h, COLORS.card, 16, 0.55));
+
+    const head = label(`Слот ${i + 1}`, 13, COLORS.inkSoft, '700');
+    head.position.set(w / 2, 13);
+    card.addChild(head);
+
+    const lock = label('🔒', Math.min(w, h) * 0.26, COLORS.inkSoft, '700');
+    lock.alpha = 0.5;
+    lock.position.set(w / 2, h * 0.42);
+    card.addChild(lock);
+
+    const isNext = i === ctx.state.slots.length && !upgradeMaxed(ctx.state, 'slots');
+    if (isNext) {
+      const cost = upgradeCost(ctx.state, 'slots');
+      const afford = !!cost && ctx.state.coins >= cost.amount;
+      const btn = new Button({
+        text: cost ? `Открыть · ${cost.amount} 💰` : 'Открыть слот',
+        w: w - 24, h: 38, color: afford ? COLORS.good : COLORS.cardEdge,
+        textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 14,
+      });
+      btn.enabled = afford;
+      btn.position.set(w / 2, h - 26);
+      btn.onTap = () => {
+        const r = buyUpgrade(ctx.state, 'slots');
+        if (r.ok) { ctx.commit(); ctx.toast('Новый слот вязки 💞'); }
+        else ctx.toast(r.reason);
+      };
+      card.addChild(btn);
+    } else {
+      const hint = label('откроется после предыдущего', 11.5, COLORS.inkSoft, '600');
+      hint.position.set(w / 2, h - 26);
+      card.addChild(hint);
+    }
+    return card;
+  }
+
   function refresh(): void {
     for (const c of shell.body.removeChildren()) c.destroy({ children: true });
     live = [];
-    const n = ctx.state.slots.length;
-    const gap = 16;
-    // Раньше слоты брали лишь 0.66 высоты и капились 230×260 — на ландшафтном
-    // мобиле пропадала треть высоты, на ПК слоты висели маленькими по центру.
-    // Теперь тянем под доступное место (высота — главный лимит на мобиле), с
-    // потолком, чтобы на большом ПК не было гигантских карточек.
-    const colW = (shell.contentW - gap * (n - 1)) / n;
-    let slotW = Math.min(340, colW);
-    let slotH = Math.min(360, shell.contentH);
-    // держим пропорцию карточки в разумных рамках: коты внутри лимитированы
-    // шириной (шире — крупнее коты), но совсем плоские/узкие слоты выглядят плохо.
-    if (slotW > slotH * 1.35) slotW = slotH * 1.35;
-    if (slotW < slotH * 0.8) slotH = slotW / 0.8;
-    const totalW = slotW * n + gap * (n - 1);
+    // Всегда показываем 3 аккуратных окна вязки (триптих по центру). Открытые —
+    // рабочие слоты, ещё не купленные — притушённые с замком. Под каждым окном —
+    // спрайт-подставка, чтобы окна «стояли на тумбах».
+    const N = 3;
+    const owned = ctx.state.slots.length;
+    const gap = 18;
+    // счётчик открытых/всего слотов вязки — справа в плашке названия
+    const plateW = shell.setTitleBadge(`💞 ${owned}/${N}`);
+
+    const standTex = decorTexture('slotstand');
+    const standAspect = standTex ? standTex.width / standTex.height : 480 / 330; // ширина/высота
+
+    const colW = (shell.contentW - gap * (N - 1)) / N;
+    const slotW = Math.min(300, colW);
+
+    // Подставка чуть уже окна; её видимая (торчащая ниже окна) высота ограничена,
+    // чтобы на коротких экранах окна не схлопывались. Окно «утоплено» в платформу.
+    const seatFrac = 0.12;
+    const fullStandW = slotW * 0.96;
+    const fullUnder = (fullStandW / standAspect) * (1 - seatFrac);
+    const standUnder = Math.min(fullUnder, shell.contentH * 0.26);
+    const standH = standUnder / (1 - seatFrac);
+    const standW = standH * standAspect;
+
+    // Высота окна — под оставшееся место, с потолком (чтобы на ПК не разъезжалось).
+    const slotH = Math.min(slotW * 1.15, shell.contentH - standUnder);
+
+    const blockH = slotH + standUnder;
+    const totalW = slotW * N + gap * (N - 1);
     const startX = Math.max(0, (shell.contentW - totalW) / 2);
-    const startY = Math.max(0, (shell.contentH - slotH) / 2); // центрируем по высоте
-    for (let i = 0; i < n; i++) {
-      const c = buildSlot(i, slotW, slotH);
+    const startY = Math.max(0, (shell.contentH - blockH) / 2);
+    const colX = (i: number): number => startX + i * (slotW + gap) + slotW / 2;
+
+    // Подставки рисуем первыми — они под окнами (окно перекрывает верх платформы).
+    if (standTex) {
+      for (let i = 0; i < N; i++) {
+        const s = new Sprite(standTex);
+        s.anchor.set(0.5, 1);
+        s.scale.set(standW / standTex.width);
+        s.position.set(colX(i), startY + slotH + standUnder); // низ подставки = низ блока
+        shell.body.addChild(s);
+      }
+    }
+
+    for (let i = 0; i < N; i++) {
+      const c = i < owned ? buildSlot(i, slotW, slotH) : buildLockedSlot(i, slotW, slotH);
       c.position.set(startX + i * (slotW + gap), startY);
       shell.body.addChild(c);
     }
 
-    renderBoostChips(); // подсветка чипов усилителей зависит от зарядов
+    renderBoostChips(plateW); // подсветка чипов усилителей зависит от зарядов
   }
 
   function tick(dt: number): void {

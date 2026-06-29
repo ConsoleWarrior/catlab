@@ -76,11 +76,14 @@ export class Game implements UiContext {
 
   // HUD-ссылки
   private coinsT!: Text;
+  private rateT!: Text;          // доход/мин рядом с деньгами
   private crystalsT!: Text;
   private dnaT!: Text;
   private levelT!: Text;
   private ordersBtn!: Button;
   private dots: Graphics[] = [];
+  private hudPad = 0;            // левый отступ ряда ресурсов
+  private hudGap = 0;            // зазор между ресурсами в ряду
 
   // прочее
   private incomeAcc = 0;
@@ -218,7 +221,7 @@ export class Game implements UiContext {
   /** DEV: наполнить сцену котами и активной вязкой для скриншотов/проверки. */
   private demo(): void {
     this.state.coins += 8000; this.state.crystals += 60; this.state.dna += 800;
-    this.state.upgrades.nurseryCap = 4; // запас места
+    this.state.upgrades.nurseryCap = 3; // запас места (макс. уровень слотов питомника)
     const now = this.now();
     const spawn = (room: 'nursery' | 'shelter'): void => {
       const b = pick(this.rng, BREEDS);
@@ -571,18 +574,21 @@ export class Game implements UiContext {
     // адаптивные размеры под ширину экрана (один интерфейс для ПК и мобилы)
     const fs = Math.round(Math.max(13, Math.min(18, ti * 0.3)));
     const pad = Math.round(Math.max(8, Math.min(18, w * 0.014)));
-    const gap = Math.max(82, Math.min(150, w / 6));
-    const mk = (x: number, color: number): Text => {
-      const t = label('', fs, color, '800');
+    this.hudPad = pad;
+    // ресурсы выкладываются в ряд по реальной ширине (см. updateHud), зазор — компактный
+    this.hudGap = Math.round(Math.max(16, Math.min(30, w * 0.024)));
+    const mk = (color: number, size = fs): Text => {
+      const t = label('', size, color, '800');
       t.anchor.set(0, 0.5);
-      t.position.set(x, ti / 2);
+      t.position.set(pad, ti / 2);
       this.hud.addChild(t);
       return t;
     };
-    this.coinsT = mk(pad, 0xc9912a);
-    this.crystalsT = mk(pad + gap, 0x3a93c9);
-    this.dnaT = mk(pad + gap * 2, 0x7a4fd0);
-    this.levelT = mk(pad + gap * 3, COLORS.ink);
+    this.coinsT = mk(0xc9912a);
+    this.rateT = mk(0x4f9d63, Math.max(11, fs - 3)); // доход/мин — мельче и зелёный
+    this.crystalsT = mk(0x3a93c9);
+    this.dnaT = mk(0x7a4fd0);
+    this.levelT = mk(COLORS.ink);
 
     const bh = Math.round(ti * 0.72);
     const helpW = Math.round(ti * 0.92);
@@ -599,11 +605,26 @@ export class Game implements UiContext {
 
   private updateHud(): void {
     if (!this.coinsT) return;
+    const rate = passiveRatePerMin(this.state);
     this.coinsT.text = `💰 ${fmt(this.state.coins)}`;
+    this.rateT.text = rate > 0 ? `+${rate.toFixed(rate < 10 ? 1 : 0)}/мин` : '';
     this.crystalsT.text = `💎 ${fmt(this.state.crystals)}`;
     this.dnaT.text = `🧬 ${fmt(this.state.dna)}`;
     this.levelT.text = `⭐ Ур. ${this.state.level}`;
     this.ordersBtn.setText(`📋 Заказы (${this.state.orders.length})`);
+
+    // ряд ресурсов слева: деньги и доход/мин стоят рядом, дальше кристаллы/ДНК/уровень.
+    // Раскладка по реальной ширине текста — компактнее фиксированных слотов и без наезда.
+    let x = this.hudPad;
+    this.coinsT.position.x = x;
+    x += this.coinsT.width + (this.rateT.text ? 8 : this.hudGap);
+    if (this.rateT.text) {
+      this.rateT.position.x = x;
+      x += this.rateT.width + this.hudGap;
+    }
+    this.crystalsT.position.x = x; x += this.crystalsT.width + this.hudGap;
+    this.dnaT.position.x = x; x += this.dnaT.width + this.hudGap;
+    this.levelT.position.x = x;
   }
 
   private buildNav(): void {

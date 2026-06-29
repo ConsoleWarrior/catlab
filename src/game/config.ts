@@ -50,7 +50,7 @@ export const MUTATION_MAX = 0.1;
 export const NURSERY_BASE_CAP = 6;
 export const NURSERY_CAP_STEP = 2;
 export const SHELTER_BASE_CAP = 8;
-export const SHELTER_CAP_STEP = 3;
+export const SHELTER_CAP_STEP = 2;
 
 // --- Доход ---
 export const OFFLINE_CAP_BASE_MIN = 120;   // потолок накопления, мин
@@ -151,14 +151,14 @@ export interface UpgradeDef {
 
 /** Дерево прокачки. Слоты вязки — особый случай (см. economy.upgradeCost). */
 export const UPGRADES: Record<string, UpgradeDef> = {
-  slots: { label: 'Слоты вязки', currency: 'coins', baseCost: 500, mult: 4, max: 5 },
+  slots: { label: 'Слоты вязки', currency: 'coins', baseCost: 500, mult: 4, max: 2 },
   speed: { label: 'Скорость инкубации', currency: 'coins', baseCost: 150, mult: 1.8, max: 6 },
   mutation: { label: 'Мутагенез', currency: 'dna', baseCost: 40, mult: 1.7, max: 9 },
   litter: { label: 'Размер помёта', currency: 'coins', baseCost: 1000, mult: 3, max: 3 },
-  nurseryCap: { label: 'Вместимость питомника', currency: 'coins', baseCost: 200, mult: 1.6, max: 10 },
+  nurseryCap: { label: 'Слоты питомника', currency: 'coins', baseCost: 200, mult: 1.6, max: 3 },
   show: { label: 'Выставка (доход)', currency: 'coins', baseCost: 300, mult: 1.7, max: 8 },
   eliteFund: { label: 'Элитный фонд', currency: 'dna', baseCost: 60, mult: 1.8, max: 5 },
-  shelterCap: { label: 'Вместимость приюта', currency: 'coins', baseCost: 120, mult: 1.5, max: 10 },
+  shelterCap: { label: 'Слоты приюта', currency: 'coins', baseCost: 120, mult: 1.5, max: 3 },
   connections: { label: 'Связи (цена пристройства)', currency: 'coins', baseCost: 250, mult: 1.6, max: 8 },
   biobank: { label: 'Биобанк (выход ДНК)', currency: 'dna', baseCost: 50, mult: 1.7, max: 6 },
   selection: { label: 'Селекция (+редкость)', currency: 'dna', baseCost: 80, mult: 1.9, max: 5 },

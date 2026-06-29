@@ -3,7 +3,7 @@
  * титульная плашка. Возвращает тело (body) для контента комнаты.
  */
 
-import { Container, Graphics, Sprite } from 'pixi.js';
+import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { UiContext } from '../context.js';
 import { COLORS, label, ROOM_ACCENT } from '../theme.js';
 import { roomBg } from '../roomArt.js';
@@ -19,6 +19,10 @@ export interface Shell {
   titleBar: Container;
   titleW: number;
   titleH: number;
+  /** Счётчик-бейдж справа в плашке названия (напр. вместимость комнаты «N/M»).
+   * Создаётся лениво; плашка расширяется под название + счётчик. Возвращает
+   * итоговую ширину плашки — чтобы пристроить элементы справа от неё (чипы). */
+  setTitleBadge: (text: string) => number;
 }
 
 const PAD = 18;
@@ -172,6 +176,25 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
   titleBar.position.set(PAD, topInset + 8);
   container.addChild(titleBar);
 
+  // Счётчик-бейдж справа в плашке: создаётся по первому вызову, при необходимости
+  // расширяет фон плашки, чтобы «название … N/M» помещалось с отступами.
+  let badge: Text | null = null;
+  const setTitleBadge = (text: string): number => {
+    if (!badge) {
+      badge = label(text, 15, COLORS.inkSoft, '800');
+      badge.anchor.set(1, 0.5);
+      badge.position.set(bw - 14, TITLE_H / 2);
+      titleBar.addChild(badge);
+    }
+    badge.text = text;
+    const newW = Math.max(bw, 16 + t.width + 16 + badge.width + 14);
+    bg.clear();
+    bg.roundRect(0, 0, newW, TITLE_H, 14).fill({ color: COLORS.hud, alpha: 0.92 });
+    bg.roundRect(0, 0, newW, TITLE_H, 14).stroke({ width: 2, color: COLORS.cardEdge });
+    badge.position.x = newW - 14;
+    return newW;
+  };
+
   const body = new Container();
   const top = topInset + 8 + TITLE_H + 12;
   body.position.set(PAD, top);
@@ -185,6 +208,7 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
     titleBar,
     titleW: bw,
     titleH: TITLE_H,
+    setTitleBadge,
   };
 }
 
