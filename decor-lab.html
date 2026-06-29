@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Декор-лаб · расстановка интерьера</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; font-family: system-ui, "Segoe UI", sans-serif; background: #2a2320; color: #5a4a42; }
+    #stage { position: fixed; inset: 0; touch-action: none; }
+
+    /* левая палитра спрайтов — берём отсюда и тащим в комнату */
+    #palette {
+      position: fixed; top: 56px; left: 8px; bottom: 8px; width: 124px;
+      display: flex; flex-direction: column; gap: 8px; padding: 8px;
+      background: rgba(255,255,255,.92); border: 2px solid #e9d8c6; border-radius: 14px;
+      overflow-y: auto; z-index: 10; -webkit-overflow-scrolling: touch;
+    }
+    #palette .hint { font-size: 11px; color: #8a7a70; text-align: center; line-height: 1.3; }
+    .thumb {
+      position: relative; background: #fffaf3; border: 2px solid #e9d8c6; border-radius: 10px;
+      padding: 4px; cursor: grab; touch-action: none; user-select: none;
+    }
+    .thumb:active { cursor: grabbing; border-color: #ff9eb5; }
+    .thumb img { display: block; width: 100%; height: 64px; object-fit: contain; pointer-events: none;
+      background-image: linear-gradient(45deg,#eee 25%,transparent 25%),linear-gradient(-45deg,#eee 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#eee 75%),linear-gradient(-45deg,transparent 75%,#eee 75%);
+      background-size: 14px 14px; background-position: 0 0,0 7px,7px -7px,-7px 0px; border-radius: 6px; }
+    .thumb .cap { font-size: 10px; text-align: center; color: #8a7a70; margin-top: 2px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* верхняя панель инструментов */
+    #toolbar {
+      position: fixed; top: 8px; left: 140px; right: 8px; height: 40px; z-index: 10;
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+      padding: 0 8px; background: rgba(255,255,255,.92); border: 2px solid #e9d8c6; border-radius: 12px;
+    }
+    #toolbar .sep { width: 1px; height: 22px; background: #e9d8c6; margin: 0 2px; }
+    #toolbar .grp { display: flex; gap: 4px; align-items: center; }
+    #toolbar .lbl { font-size: 12px; color: #8a7a70; font-weight: 700; }
+    button.btn {
+      border: none; border-radius: 9px; padding: 6px 11px; font-size: 13px; font-weight: 700;
+      color: #5a4a42; background: #f3ece2; cursor: pointer; -webkit-tap-highlight-color: transparent;
+    }
+    button.btn:hover { background: #e9d8c6; }
+    button.btn.on { background: #ff9eb5; color: #fff; }
+    button.btn.accent { background: #9ec5ff; color: #fff; }
+    button.btn.warn { background: #ffc56e; }
+
+    /* нижняя строка с координатами выделенного спрайта */
+    #info {
+      position: fixed; left: 140px; bottom: 8px; z-index: 10;
+      padding: 6px 12px; font-size: 12px; font-weight: 700; color: #5a4a42;
+      background: rgba(255,255,255,.92); border: 2px solid #e9d8c6; border-radius: 10px;
+      max-width: calc(100vw - 160px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    /* модалка экспорта JSON */
+    #export { border: none; border-radius: 16px; padding: 0; max-width: 640px; width: 90vw; }
+    #export::backdrop { background: rgba(42,35,32,.55); }
+    #export .head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 2px solid #e9d8c6; }
+    #export h2 { font-size: 16px; }
+    #export textarea { width: 100%; height: 50vh; border: none; padding: 14px 16px; font-family: ui-monospace, "Cascadia Code", monospace; font-size: 12px; resize: none; outline: none; color: #5a4a42; }
+    #export .foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 2px solid #e9d8c6; }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div id="palette">
+    <div class="hint">Тащи спрайт в&nbsp;комнату →</div>
+  </div>
+
+  <div id="toolbar">
+    <div class="grp">
+      <span class="lbl">Комната:</span>
+      <span id="rooms"></span>
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <button class="btn" id="flip" title="Отразить (F)">↔ Отразить</button>
+      <button class="btn" id="front" title="На передний план (])">⬆ Вперёд</button>
+      <button class="btn" id="back" title="На задний план ([)">⬇ Назад</button>
+      <button class="btn warn" id="del" title="Удалить (Del)">🗑 Удалить</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp">
+      <button class="btn" id="clear">Очистить</button>
+      <button class="btn accent" id="exp">⬇ Экспорт JSON</button>
+    </div>
+  </div>
+
+  <div id="info">Перетащи спрайт из палитры в комнату. Колесо/угол — масштаб, перетаскивание — позиция.</div>
+
+  <dialog id="export">
+    <div class="head">
+      <h2>Расстановка декора</h2>
+      <button class="btn" id="exp-close">✕</button>
+    </div>
+    <textarea id="exp-text" readonly spellcheck="false"></textarea>
+    <div class="foot">
+      <button class="btn accent" id="exp-copy">📋 Скопировать</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/src/decorLab/main.ts"></script>
+</body>
+</html>

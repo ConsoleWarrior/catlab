@@ -9,6 +9,7 @@
  */
 
 import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
+import type { FederatedWheelEvent } from 'pixi.js';
 import { BREEDS, BREEDS_BY_TIER, breedName } from '../../genetics/index.js';
 import type { RarityTier } from '../../genetics/index.js';
 import { RESEARCH, unlockResearch, UPGRADES, buyUpgrade, upgradeCost, upgradeMaxed } from '../../game/index.js';
@@ -27,7 +28,8 @@ const UPGRADE_GLYPH: Record<string, string> = { slots: '💞', speed: '⏩' };
 export function createGenolab(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'genolab', '🔬 Генолаб');
   let section: Section = 'codex';
-  let scrollY = 0;          // вертикальный скролл Исследований (сохраняется между перерисовками)
+  // вертикальный скролл по секциям (сохраняется между перерисовками; у каждой свой)
+  const scroll: Record<'codex' | 'research', number> = { codex: 0, research: 0 };
   let suppressTap = false;  // был свайп-скролл — гасим случайную покупку по тапу
 
   function tabBar(): Container {
@@ -89,10 +91,18 @@ export function createGenolab(ctx: UiContext): Room {
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
-    c.on('pointertap', () => ctx.toast(open ? `${breedName(key)} · ${TIER_RU[tier]}` : 'ещё не выведена'));
+    c.on('pointertap', () => {
+      if (suppressTap) return;          // это был скролл/свайп, а не тап
+      ctx.toast(open ? `${breedName(key)} · ${TIER_RU[tier]}` : 'ещё не выведена');
+    });
     return c;
   }
 
+  /**
+   * 📖 Котодекс: альбом пород по тирам. Клетки крупные и читаемые (особенно на
+   * мобиле); каждый тир — подзаголовок + сетка с переносом по строкам, всё лишнее
+   * уходит под вертикальную прокрутку (как в Исследованиях).
+   */
   function renderCodex(): void {
     const top = 46;
     const haveCount = BREEDS.filter((b) => discovered(b.key)).length;
@@ -101,33 +111,53 @@ export function createGenolab(ctx: UiContext): Room {
     header.position.set(2, top + 10);
     shell.body.addChild(header);
 
-    const gridTop = top + 28;
-    const gridH = shell.contentH - gridTop;
-    const rowH = gridH / TIERS.length;
-    const gutter = Math.min(96, shell.contentW * 0.22);
-    const gap = 6;
-    const maxInTier = Math.max(...TIERS.map((t) => BREEDS_BY_TIER[t].length));
-    const stripW = shell.contentW - gutter;
-    const cell = Math.min(rowH - 10, (stripW - gap * (maxInTier - 1)) / maxInTier);
+    // окно прокрутки (маска) + прокручиваемое содержимое — как в renderResearch
+    const viewTop = top + 28;
+    const viewW = shell.contentW;
+    const viewH = shell.contentH - viewTop;
+    const viewport = new Container();
+    viewport.position.set(0, viewTop);
+    const maskG = new Graphics();
+    maskG.rect(0, 0, viewW, viewH).fill(0xffffff);
+    const content = new Container();
+    viewport.addChild(content, maskG);
+    content.mask = maskG;
+    shell.body.addChild(viewport);
 
-    TIERS.forEach((tier, ti) => {
-      const y = gridTop + ti * rowH;
+    // размер клетки: целимся в крупный читаемый размер, число колонок подбираем
+    // под ширину окна. Клетки на 5% меньше «впритык», а сетку центрируем — так у
+    // краёв экрана остаётся небольшой отступ, иконки не липнут к стенкам.
+    const gap = 8;
+    const targetCell = Math.max(84, Math.min(132, viewW * 0.16));
+    const cols = Math.max(3, Math.floor((viewW + gap) / (targetCell + gap)));
+    const cell = ((viewW - gap * (cols - 1)) / cols) * 0.95;
+    const gridW = cols * cell + gap * (cols - 1);
+    const gridX = (viewW - gridW) / 2;
+
+    let y = 4;
+    TIERS.forEach((tier) => {
       const list = BREEDS_BY_TIER[tier];
       const got = list.filter((b) => discovered(b.key)).length;
 
-      const tl = label(TIER_RU[tier], 12, TIER_COLOR[tier], '800');
+      const tl = label(TIER_RU[tier], 14, TIER_COLOR[tier], '800');
       tl.anchor.set(0, 0.5);
-      tl.position.set(2, y + rowH / 2 - 8);
-      const cnt = label(`${got}/${list.length}`, 11, COLORS.inkSoft, '700');
-      cnt.anchor.set(0, 0.5);
-      cnt.position.set(2, y + rowH / 2 + 8);
-      shell.body.addChild(tl, cnt);
+      tl.position.set(2, y + 9);
+      const cnt = label(`${got} / ${list.length}`, 12, COLORS.inkSoft, '700');
+      cnt.anchor.set(0, 0.5);              // сразу за названием редкости, не у края экрана
+      cnt.position.set(2 + tl.width + 8, y + 9);
+      content.addChild(tl, cnt);
+      y += 26;
 
       list.forEach((b, i) => {
-        const cx = gutter + i * (cell + gap) + cell / 2;
-        shell.body.addChild(codexCell(b.key, tier, cx, y + rowH / 2, cell));
+        const cx = gridX + (i % cols) * (cell + gap) + cell / 2;
+        const cy = y + Math.floor(i / cols) * (cell + gap) + cell / 2;
+        content.addChild(codexCell(b.key, tier, cx, cy, cell));
       });
+      const rows = Math.ceil(list.length / cols);
+      y += rows * (cell + gap) - gap + 16; // ряды тира + отступ до следующего тира
     });
+
+    setupScroll(scroll, 'codex', viewport, content, viewW, viewH, y);
   }
 
   /** Многострочный центрированный текст (узкие узлы дерева). */
@@ -246,13 +276,25 @@ export function createGenolab(ctx: UiContext): Room {
     return c;
   }
 
-  /** Вертикальный скролл содержимого окна (drag-перетаскивание + индикатор). */
-  function setupScroll(viewport: Container, content: Container, viewW: number, viewH: number, contentH: number): void {
+  /**
+   * Вертикальный скролл содержимого окна: drag-перетаскивание (палец/мышь),
+   * колесо мыши (ПК) и тонкий индикатор справа. Позиция хранится в `store[key]`,
+   * чтобы у каждой секции был свой скролл между перерисовками.
+   *
+   * Перетаскивание реагирует только когда жест выбран как вертикальный
+   * (`ctx.gestureAxis === 'v'`): если игрок повёл вбок, навигация уводит в
+   * соседнюю комнату, а контент не дёргается — либо вниз меню, либо вбок комната.
+   */
+  function setupScroll(
+    store: Record<'codex' | 'research', number>, key: 'codex' | 'research',
+    viewport: Container, content: Container, viewW: number, viewH: number, contentH: number,
+  ): void {
     const maxScroll = Math.max(0, contentH - viewH);
-    if (maxScroll <= 0) { scrollY = 0; content.y = 0; return; }
+    const clamp = (v: number): number => Math.max(-maxScroll, Math.min(0, v));
+    if (maxScroll <= 0) { store[key] = 0; content.y = 0; return; }
 
-    scrollY = Math.max(-maxScroll, Math.min(0, scrollY));
-    content.y = scrollY;
+    store[key] = clamp(store[key]);
+    content.y = store[key];
 
     viewport.eventMode = 'static';
     viewport.hitArea = new Rectangle(0, 0, viewW, viewH);
@@ -263,25 +305,31 @@ export function createGenolab(ctx: UiContext): Room {
     viewport.addChild(thumb);
     const drawThumb = (): void => {
       const th = Math.max(24, viewH * (viewH / contentH));
-      const ty = (-scrollY / maxScroll) * (viewH - th);
+      const ty = (-store[key] / maxScroll) * (viewH - th);
       thumb.clear();
       thumb.roundRect(sbX, ty, sbW, th, 2).fill({ color: COLORS.cardEdge, alpha: 0.9 });
     };
     drawThumb();
 
+    const apply = (y: number): void => { store[key] = clamp(y); content.y = store[key]; drawThumb(); };
+
     let dragging = false, lastY = 0, startY = 0;
     viewport.on('pointerdown', (e) => { dragging = true; lastY = e.global.y; startY = e.global.y; suppressTap = false; });
     viewport.on('globalpointermove', (e) => {
       if (!dragging) return;
-      scrollY = Math.max(-maxScroll, Math.min(0, scrollY + (e.global.y - lastY)));
+      const dy = e.global.y - lastY;
       lastY = e.global.y;
-      content.y = scrollY;
-      if (Math.abs(e.global.y - startY) > 6) suppressTap = true; // двинули — это скролл
-      drawThumb();
+      if (ctx.gestureAxis === 'h') suppressTap = true;     // ушли в свайп комнат
+      if (ctx.gestureAxis !== 'v') return;                 // не решено или горизонталь — не скроллим
+      apply(store[key] + dy);
+      if (Math.abs(e.global.y - startY) > 6) suppressTap = true; // двинули — это скролл, не тап
     });
     const stop = (): void => { dragging = false; };
     viewport.on('pointerup', stop);
     viewport.on('pointerupoutside', stop);
+
+    // колесо мыши (ПК)
+    viewport.on('wheel', (e: FederatedWheelEvent) => apply(store[key] - e.deltaY));
   }
 
   /**
@@ -350,7 +398,7 @@ export function createGenolab(ctx: UiContext): Room {
     });
 
     const contentH = cy(rows - 1) + nh / 2;
-    setupScroll(viewport, content, viewW, viewH, contentH);
+    setupScroll(scroll, 'research', viewport, content, viewW, viewH, contentH);
   }
 
   function renderStub(title: string, desc: string[]): void {

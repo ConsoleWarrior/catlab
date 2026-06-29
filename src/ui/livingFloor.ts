@@ -2,6 +2,11 @@
  * «Живой пол» комнаты: котики ходят по полу, дышат, их можно взять за шкирку
  * (поза виса + перетаскивание) и тапнуть для меню действий. Как в первом тесте,
  * но поверх игровой логики. Питомник и Приют используют это вместо карточек.
+ *
+ * Псевдо-3D: пол — не линия, а уходящая вглубь плоскость (см. `floorPlane` в
+ * rooms/shell.ts). У каждого кота есть глубина z∈[0,1]: вдали (z=1) он выше по
+ * экрану, мельче и разброс по X уже; вблизи (z=0) — крупнее, ниже, шире. Ближние
+ * коты рисуются поверх дальних (сортировка по экранному Y).
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
@@ -10,10 +15,9 @@ import type { Cat } from '../game/index.js';
 import { isBusy, growthScale, isAdult } from '../game/index.js';
 import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
+import type { FloorPlane } from './rooms/shell.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
-
-export interface Band { x: number; y: number; w: number; h: number; }
 
 interface Actor {
   cat: Cat;
@@ -23,8 +27,10 @@ interface Actor {
   baseScale: number;
   busy: boolean;
   adult: boolean;            // вырос ли (для подписи и эффекта взросления)
-  x: number;
-  targetX: number;
+  ox: number;                // смещение от центра по X (пиксели на своей глубине)
+  z: number;                 // глубина 0 (ближе) … 1 (дальше)
+  targetOx: number;
+  targetZ: number;
   facing: 1 | -1;
   phase: number;
   nextWander: number;
@@ -33,23 +39,33 @@ interface Actor {
 
 interface GrowFx { view: Container; sparks: Text[]; ring: Graphics; life: number; ttl: number; }
 
-const SPEED = 64; // px/с
+const SPEED = 64;       // px/с по горизонтали (у ближнего края; вдали медленнее)
+const Z_SPEED = 0.18;   // доля глубины в секунду (медленный дрейф «вглубь/наружу»)
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 export function createLivingFloor(
   ctx: UiContext,
   layer: Container,
-  band: Band,
+  plane: FloorPlane,
   getCats: () => Cat[],
 ): { refresh(): void; tick(dt: number): void } {
   let actors: Actor[] = [];
   const effects: GrowFx[] = [];
-  const catH = Math.max(70, Math.min(150, band.h * 0.7));
-  const pad = catH * 0.45;
-  const minX = band.x + pad;
-  const maxX = band.x + band.w - pad;
-  const baseline = band.y + band.h;
+  const { centerX, yNear, yFar, nearHalfW, farHalfW, catH, farScale } = plane;
+  layer.sortableChildren = true; // ближние коты (больший Y) рисуются поверх дальних
 
-  function makeActor(cat: Cat, savedX?: number, savedFacing?: 1 | -1, savedPhase?: number): Actor {
+  // геометрия глубины
+  const yAt = (z: number): number => lerp(yNear, yFar, z);
+  const depthScale = (z: number): number => lerp(1, farScale, z);
+  // максимальное смещение по X на данной глубине (с отступом под полспрайта,
+  // чтобы кот не «вылезал» на боковую стену)
+  const maxOx = (z: number): number => {
+    const pad = catH * 0.3 * depthScale(z);
+    return Math.max(10, lerp(nearHalfW, farHalfW, z) - pad);
+  };
+
+  function makeActor(cat: Cat, savedOx?: number, savedZ?: number, savedFacing?: 1 | -1, savedPhase?: number): Actor {
     const busy = isBusy(ctx.state, cat.id);
     const adult = isAdult(cat, ctx.now());
     const selected = ctx.selection.includes(cat.id);
@@ -110,15 +126,17 @@ export function createLivingFloor(
       view.addChild(z);
     }
 
-    const x = savedX ?? (minX + Math.random() * (maxX - minX));
-    view.position.set(x, baseline);
-    view.scale.set(growthScale(cat, ctx.now())); // котёнок появляется маленьким
+    const z = savedZ ?? Math.random();
+    const ox = savedOx ?? (Math.random() * 2 - 1) * maxOx(z);
+    view.position.set(centerX + ox, yAt(z));
+    view.scale.set(growthScale(cat, ctx.now()) * depthScale(z)); // котёнок мал + перспектива
+    view.zIndex = Math.round(yAt(z));
     view.eventMode = 'static';
     view.cursor = busy ? 'pointer' : 'grab';
 
     const actor: Actor = {
       cat, view, sprite, glow, baseScale, busy, adult,
-      x, targetX: x, facing: savedFacing ?? 1,
+      ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? 1,
       phase: savedPhase ?? Math.random() * 6,
       nextWander: 0.5 + Math.random() * 2.5, walking: false,
     };
@@ -128,15 +146,23 @@ export function createLivingFloor(
     } else {
       view.on('pointerdown', (e) => ctx.startGrab({
         cat,
-        displayH: catH * growthScale(cat, ctx.now()), // котёнка берём «маленьким»
+        // «на весу» кот того же размера, что и на полу (с учётом роста и глубины)
+        displayH: catH * growthScale(cat, ctx.now()) * depthScale(actor.z),
         hide: () => { view.visible = false; },
         show: () => { view.visible = true; },
         onTap: () => ctx.openCatMenu(cat),
-        onDrop: (gx) => {
-          const lx = layer.toLocal({ x: gx, y: 0 }).x;
-          actor.x = Math.max(minX, Math.min(maxX, lx));
-          actor.targetX = actor.x;
-          view.x = actor.x;
+        onDrop: (gx, gy) => {
+          const lp = layer.toLocal({ x: gx, y: gy ?? yAt(actor.z) });
+          // глубина из точки сброса по Y (вне диапазона — прижимаем к краю)
+          const nz = Math.max(0, Math.min(1, (yNear - lp.y) / Math.max(1, yNear - yFar)));
+          const m = maxOx(nz);
+          actor.z = nz;
+          actor.ox = Math.max(-m, Math.min(m, lp.x - centerX));
+          actor.targetZ = nz;
+          actor.targetOx = actor.ox;
+          view.scale.set(growthScale(cat, ctx.now()) * depthScale(nz));
+          view.position.set(centerX + actor.ox, yAt(nz));
+          view.zIndex = Math.round(yAt(nz));
         },
       }, e));
     }
@@ -147,6 +173,7 @@ export function createLivingFloor(
   function spawnGrowFx(x: number, y: number): void {
     const c = new Container();
     c.position.set(x, y);
+    c.zIndex = 1e6; // искорки поверх всех котов
     const ring = new Graphics();
     c.addChild(ring);
     const sparks: Text[] = [];
@@ -168,7 +195,7 @@ export function createLivingFloor(
     actors = cats.map((cat) => {
       const p = prev.get(cat.id);
       if (p) p.view.destroy({ children: true }); // пересобираем (выбор/занятость могли измениться)
-      const a = makeActor(cat, p?.x, p?.facing, p?.phase);
+      const a = makeActor(cat, p?.ox, p?.z, p?.facing, p?.phase);
       layer.addChild(a.view);
       return a;
     });
@@ -179,38 +206,52 @@ export function createLivingFloor(
     const matured: Actor[] = [];
     for (const a of actors) {
       a.phase += dt;
-      a.view.scale.set(growthScale(a.cat, now)); // котята подрастают со временем
+      const ds = depthScale(a.z);
+      a.view.scale.set(growthScale(a.cat, now) * ds); // котята подрастают + перспектива
+      a.view.zIndex = Math.round(yAt(a.z));
       // момент взросления: эффект + пересборка актёра (появятся имя/пол над головой)
       if (!a.adult && isAdult(a.cat, now)) {
         a.adult = true;
-        spawnGrowFx(a.x, baseline - catH * 0.55);
+        spawnGrowFx(centerX + a.ox, yAt(a.z) - catH * 0.55 * ds);
         matured.push(a);
       }
       if (a.busy || !a.view.visible) continue;
       a.nextWander -= dt;
       if (a.nextWander <= 0) {
-        a.targetX = Math.max(minX, Math.min(maxX, a.x + (Math.random() - 0.5) * band.w * 0.5));
+        a.targetZ = Math.random();
+        a.targetOx = (Math.random() * 2 - 1) * maxOx(a.targetZ);
         a.nextWander = 1.4 + Math.random() * 3;
       }
-      const dx = a.targetX - a.x;
-      a.walking = Math.abs(dx) > 3;
-      if (a.walking) {
-        a.facing = (Math.sign(dx) || 1) as 1 | -1;
-        a.x += a.facing * Math.min(Math.abs(dx), SPEED * dt);
+      // дрейф вглубь/наружу
+      const dz = a.targetZ - a.z;
+      const movingZ = Math.abs(dz) > 0.01;
+      if (movingZ) a.z += Math.sign(dz) * Math.min(Math.abs(dz), Z_SPEED * dt);
+      const dsz = depthScale(a.z);
+      // ход по горизонтали (скорость в пикселях падает с глубиной)
+      const dox = a.targetOx - a.ox;
+      const movingX = Math.abs(dox) > 3;
+      if (movingX) {
+        a.facing = (Math.sign(dox) || 1) as 1 | -1;
+        a.ox += a.facing * Math.min(Math.abs(dox), SPEED * dsz * dt);
       }
-      a.view.x = a.x;
+      const m = maxOx(a.z);
+      a.ox = Math.max(-m, Math.min(m, a.ox));
+      a.walking = movingX || movingZ;
+
+      a.view.x = centerX + a.ox;
+      const baseY = yAt(a.z);
       const sp = a.sprite;
       if (a.walking) {
         // живой «подскок»: дуга вверх + сквош-стретч + наклон вперёд по ходу
         const hop = Math.abs(Math.sin(a.phase * 10));
-        a.view.y = baseline - hop * catH * 0.07;
+        a.view.y = baseY - hop * catH * 0.07 * dsz;
         const sy = 1 + (hop - 0.5) * 0.12;          // в воздухе тянется, на земле приплюснут
         sp.scale.x = a.baseScale * a.facing * (1 / sy);
         sp.scale.y = a.baseScale * sy;
         sp.rotation += (a.facing * 0.06 - sp.rotation) * Math.min(1, dt * 8);
       } else {
         // покой: мягкое дыхание, выпрямляемся
-        a.view.y = baseline;
+        a.view.y = baseY;
         const breathe = 1 + Math.sin(a.phase * 2) * 0.02;
         sp.scale.x = a.baseScale * a.facing;
         sp.scale.y = a.baseScale * breathe;
@@ -227,7 +268,7 @@ export function createLivingFloor(
       if (i < 0) continue;
       if (!a.view.visible) continue; // кота держат за шкирку — подпись появится при refresh
       a.view.destroy({ children: true });
-      const na = makeActor(a.cat, a.x, a.facing, a.phase);
+      const na = makeActor(a.cat, a.ox, a.z, a.facing, a.phase);
       actors[i] = na;
       layer.addChild(na.view);
     }

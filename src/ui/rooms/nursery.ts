@@ -9,7 +9,7 @@ import {
   catsIn, nurseryCapacity, passiveRatePerMin, buyCat, buyCatCost, isInSlot,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorBaseline } from './shell.js';
+import { roomShell, floorPlane } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 
@@ -18,11 +18,9 @@ export function createNursery(ctx: UiContext): Room {
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
-  const baseline = floorBaseline(ctx.roomH);
-  const bandTop = ctx.topInset + 96;
   const floor = createLivingFloor(
     ctx, floorLayer,
-    { x: 24, y: bandTop, w: ctx.roomW - 48, h: Math.max(80, baseline - bandTop) },
+    floorPlane(ctx.roomW, ctx.roomH, ctx.topInset),
     // коты, поставленные в слот вязки, физически в инкубаторе — на полу их не показываем
     () => catsIn(ctx.state, 'nursery').filter((c) => !isInSlot(ctx.state, c.id)),
   );

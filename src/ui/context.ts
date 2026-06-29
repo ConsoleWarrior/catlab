@@ -14,7 +14,7 @@ export interface GrabOpts {
   hide(): void;              // спрятать наземного котика на время виса
   show(): void;              // вернуть котика
   onTap(): void;             // тап без перетаскивания → меню кота
-  onDrop(globalX: number): void; // отпустили → приземлить по X
+  onDrop(globalX: number, globalY?: number): void; // отпустили → приземлить (X + глубина по Y)
 }
 
 export interface Room {
@@ -54,7 +54,18 @@ export interface UiContext {
   toggleSelect(catId: string): void;
   clearSelection(): void;
   goRoom(index: number): void;
+  /**
+   * Ось текущего жеста перетаскивания, выбирается по первому движению:
+   *   'h' — горизонтальный свайп между комнатами (навигация ведёт его сама);
+   *   'v' — вертикальная прокрутка контента внутри комнаты;
+   *   'none' — ещё не решено / жеста нет.
+   * Комнаты со скроллом читают её, чтобы прокрутка и навигация не срабатывали
+   * одновременно (либо тянем меню вниз, либо уходим в соседнюю комнату).
+   */
+  readonly gestureAxis: 'none' | 'h' | 'v';
   openCatMenu(cat: Cat): void;
+  /** Подтверждение пристройства кота («в добрые руки»): открывается из зоны переноски. */
+  openAdoptConfirm(cat: Cat): void;
   /** Дерево родословной кота (до прадедов). */
   openPedigree(cat: Cat): void;
   /** Карточка(и) новорождённых после «Забрать» в инкубаторе. */

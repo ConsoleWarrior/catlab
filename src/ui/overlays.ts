@@ -11,6 +11,7 @@ import {
   isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, MAX_BREEDS,
   roomCount, nurseryCapacity, shelterCapacity,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
+  adoptCat, adoptReward,
 } from '../game/index.js';
 import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
 import type { UiContext } from './context.js';
@@ -712,6 +713,49 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // фактическая высота могла отличаться — подгоним подложку (перерисуем)
   root.removeChildAt(0);
   root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  return root;
+}
+
+/**
+ * Подтверждение пристройства: «Отдать котика в добрые руки?» + награда (💰 + 🧬)
+ * и кнопки Да/Нет. Открывается, когда кота перетащили на переноску в Приюте.
+ * Логика и суммы — те же, что были у кнопки в меню кота (adoptCat/adoptReward).
+ */
+export function buildAdoptConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const { coins, dna } = adoptReward(ctx.state, cat);
+
+  const title = label('Отдать котика в добрые руки?', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 30);
+
+  // мини-портрет + имя/описание кота
+  const sp = catSprite(ctx.app, cat, 84);
+  sp.position.set(W / 2, 150);
+  const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
+  who.position.set(W / 2, 172);
+
+  const reward = label(`Вы получите:   💰 ${coins}     🧬 ${dna}`, 16, COLORS.ink, '800');
+  reward.position.set(W / 2, 206);
+
+  const pad = 24, gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  let y = 236;
+  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  noBtn.position.set(pad + bw / 2, y + 24);
+  noBtn.onTap = close;
+  const yesBtn = new Button({ text: 'Да 🤝', w: bw, h: 48, color: COLORS.good, fontSize: 16 });
+  yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
+  yesBtn.onTap = () => {
+    const r = adoptCat(ctx.state, cat.id);
+    if (!r.ok) { ctx.toast(r.reason); close(); return; }
+    ctx.commit();
+    ctx.toast(`Котика пристроили 🏠  +💰${r.coins}  +🧬${r.dna}`);
+    close();
+  };
+  y += 56;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), title, sp, who, reward, noBtn, yesBtn);
   return root;
 }
 

@@ -23,13 +23,15 @@ import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
+import { setRoomBg } from './roomArt.js';
+import { setDecorTexture } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
 import {
   buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel, buildBirthCard, buildPedigreePanel,
-  buildBoostMenu,
+  buildBoostMenu, buildAdoptConfirm,
 } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
@@ -58,7 +60,11 @@ export class Game implements UiContext {
   private pointerActive = false;
   private dragging = false;
   private startPx = 0;
+  private startPy = 0;
   private startWorldX = 0;
+  // ось жеста: выбираем по первому движению, чтобы свайп комнат и вертикальная
+  // прокрутка контента не срабатывали одновременно (см. UiContext.gestureAxis).
+  private axisLock: 'none' | 'h' | 'v' = 'none';
 
   // взятие котика за шкирку
   private pendingGrab: { opts: GrabOpts; sx: number; sy: number } | null = null;
@@ -113,6 +119,26 @@ export class Game implements UiContext {
       const name = path.split('/').pop()!.replace('.png', ''); // <sex>__<n>
       const sex: Sex = name.startsWith('female') ? 'female' : 'male';
       try { addBaseTexture(sex, await Assets.load(url)); } catch { /* фолбэк */ }
+    }));
+
+    // Готовые фоны комнат («комната-коробка» в нашей перспективе) — по имени файла
+    // = id комнаты. Нет фона → процедурная коробка (фолбэк в roomShell).
+    const roomAssets = import.meta.glob('../assets/rooms/*.png', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+    await Promise.all(Object.entries(roomAssets).map(async ([path, url]) => {
+      const id = path.split('/').pop()!.replace('.png', '');
+      try { setRoomBg(id, await Assets.load(url)); } catch { /* фолбэк на коробку */ }
+    }));
+
+    // Декор комнат (интерьерные спрайты, расставленные в Декор-лабе) — по имени файла
+    // = ключ текстуры. Расстановка задана в decorArt.ts; нет текстуры → спрайт пропускается.
+    const decorAssets = import.meta.glob('../assets/decor/*.png', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+    await Promise.all(Object.entries(decorAssets).map(async ([path, url]) => {
+      const name = path.split('/').pop()!.replace('.png', '');
+      try { setDecorTexture(name, await Assets.load(url)); } catch { /* спрайт пропустится */ }
     }));
 
     this.app.stage.eventMode = 'static';
@@ -358,6 +384,11 @@ export class Game implements UiContext {
     this.showOverlay(buildCatMenu(this, cat, close));
   }
 
+  openAdoptConfirm(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildAdoptConfirm(this, cat, close));
+  }
+
   openPedigree(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildPedigreePanel(this, cat, close));
@@ -437,7 +468,7 @@ export class Game implements UiContext {
     // не пристроили — кот возвращается назад, в свою комнату
     if (this.currentRoom !== originRoom) this.goRoom(originRoom);
     opts.show();
-    opts.onDrop(gx);
+    opts.onDrop(gx, gy);
   }
 
   private roomIndex(id: string): number {
@@ -458,11 +489,13 @@ export class Game implements UiContext {
     else if (g.x > this.roomW - edge && this.currentRoom < hi) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
   }
 
-  /** Куда уронили кота: Инкубатор → слот вязки, Приют/Питомник → переезд. */
+  /** Куда уронили кота: Инкубатор → слот вязки, Приют → переноска (пристройство), Приют/Питомник → переезд. */
   private handleCatDrop(cat: Cat, gx: number, gy: number): boolean {
     const room = this.rooms[this.currentRoom];
     if (!room) return false;
-    if (room.tryDropCat) return room.tryDropCat(cat, gx, gy); // Инкубатор: в слот вязки
+    // спец-зона комнаты (слот вязки в Инкубаторе / переноска в Приюте). Не сработала —
+    // ниже обычный переезд по комнате.
+    if (room.tryDropCat?.(cat, gx, gy)) return true;
     if (room.id === 'shelter') return this.relocateCat(cat, 'shelter');
     if (room.id === 'nursery') return this.relocateCat(cat, 'nursery');
     return false; // Генолаб и пр. — ставить некуда
@@ -674,6 +707,8 @@ export class Game implements UiContext {
 
   private get overlayOpen(): boolean { return this.overlayLayer.children.length > 0; }
 
+  get gestureAxis(): 'none' | 'h' | 'v' { return this.axisLock; }
+
   // --- ввод (свайп) ---
 
   private installInput(): void {
@@ -681,7 +716,9 @@ export class Game implements UiContext {
       if (this.overlayOpen || this.pendingGrab) return; // котика берём — комнату не свайпим
       this.pointerActive = true;
       this.dragging = false;
+      this.axisLock = 'none';
       this.startPx = e.global.x;
+      this.startPy = e.global.y;
       this.startWorldX = this.world.x;
     });
     this.app.stage.on('pointermove', (e: FederatedPointerEvent) => {
@@ -696,8 +733,14 @@ export class Game implements UiContext {
       // свайп комнат
       if (!this.pointerActive) return;
       const sdx = e.global.x - this.startPx;
-      if (Math.abs(sdx) > 10) this.dragging = true;
-      if (this.dragging) {
+      const sdy = e.global.y - this.startPy;
+      // выбираем ось по первому заметному движению: преобладание X — свайп комнат,
+      // преобладание Y — отдаём жест вертикальной прокрутке контента комнаты.
+      if (this.axisLock === 'none' && (Math.abs(sdx) > 8 || Math.abs(sdy) > 8)) {
+        this.axisLock = Math.abs(sdx) >= Math.abs(sdy) ? 'h' : 'v';
+      }
+      if (this.axisLock === 'h') {
+        this.dragging = true;
         const minX = -(this.rooms.length - 1) * this.roomW;
         this.world.x = Math.max(minX, Math.min(0, this.startWorldX + sdx));
       }
@@ -707,6 +750,7 @@ export class Game implements UiContext {
       if (this.pendingGrab) { this.pendingGrab.opts.onTap(); this.pendingGrab = null; return; }
       if (!this.pointerActive) return;
       this.pointerActive = false;
+      this.axisLock = 'none';
       if (!this.dragging) return;
       const moved = this.startWorldX - this.world.x; // >0 — свайп влево (к следующей)
       if (Math.abs(moved) > this.roomW * 0.18) this.goRoom(this.currentRoom + Math.sign(moved));

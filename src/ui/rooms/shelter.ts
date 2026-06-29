@@ -4,26 +4,52 @@
  * Можно взять за шкирку и потаскать. Улучшения — в оверлее ⚙️.
  */
 
-import { Container } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import { catsIn, shelterCapacity, isInSlot } from '../../game/index.js';
+import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorBaseline } from './shell.js';
+import { roomShell, floorPlane } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
+import { decorZone } from '../decorArt.js';
 
 export function createShelter(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'shelter', '🏠 Приют');
+
+  // Зона пристройства — переноска у двери (декор с role:'adopt'). Перетащил кота
+  // сюда → подтверждение «Отдать в добрые руки?» (см. tryDropCat). Над переноской
+  // — лёгкая подпись-подсказка, чтобы зона читалась.
+  const adoptZone = decorZone('shelter', 'adopt', ctx.roomW, ctx.roomH);
+  if (adoptZone) {
+    const tag = label('🤝 в добрые руки', 13, COLORS.ink, '800');
+    const pillBg = new Graphics();
+    const pw = tag.width + 18;
+    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).fill({ color: COLORS.hud, alpha: 0.9 });
+    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).stroke({ width: 2, color: COLORS.cardEdge });
+    const badge = new Container();
+    badge.addChild(pillBg, tag);
+    badge.position.set(adoptZone.x + adoptZone.width / 2, adoptZone.y - 6);
+    shell.container.addChild(badge);
+  }
+
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
-  const baseline = floorBaseline(ctx.roomH);
-  const bandTop = ctx.topInset + 96;
   const floor = createLivingFloor(
     ctx, floorLayer,
-    { x: 24, y: bandTop, w: ctx.roomW - 48, h: Math.max(80, baseline - bandTop) },
+    floorPlane(ctx.roomW, ctx.roomH, ctx.topInset),
     // коты, поставленные в слот вязки, физически в инкубаторе — на полу их не показываем
     () => catsIn(ctx.state, 'shelter').filter((c) => !isInSlot(ctx.state, c.id)),
   );
+
+  /** Уронили кота на переноску → подтверждение пристройства. Иначе — обычный переезд. */
+  function tryDropCat(cat: Cat, gx: number, gy: number): boolean {
+    const zone = decorZone('shelter', 'adopt', ctx.roomW, ctx.roomH);
+    if (!zone || !zone.contains(gx, gy)) return false;
+    ctx.commit();                 // grab-спрайт уже уничтожен — вернём наземного кота на пол
+    ctx.openAdoptConfirm(cat);     // «Отдать котика в добрые руки?» (Да → adoptCat)
+    return true;
+  }
 
   function refresh(): void {
     shell.body.removeChildren();
@@ -49,6 +75,6 @@ export function createShelter(ctx: UiContext): Room {
 
   return {
     id: 'shelter', title: '🏠 Приют', container: shell.container,
-    refresh, tick: (dt) => floor.tick(dt),
+    refresh, tick: (dt) => floor.tick(dt), tryDropCat,
   };
 }
