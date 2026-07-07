@@ -144,6 +144,16 @@ export class Game implements UiContext {
       try { setDecorTexture(name, await Assets.load(url)); } catch { /* спрайт пропустится */ }
     }));
 
+    // ИИ-текстуры инкубатора: фоны-боксы слотов вязки (slotbox_*) и текстуры
+    // кнопок усилителей (boost_<id>). Тот же реестр decorArt, ключ = имя файла.
+    const incubatorAssets = import.meta.glob('../assets/{slotbox,boost}/*.webp', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+    await Promise.all(Object.entries(incubatorAssets).map(async ([path, url]) => {
+      const name = path.split('/').pop()!.replace('.webp', '');
+      try { setDecorTexture(name, await Assets.load(url)); } catch { /* фолбэк на процедурный вид */ }
+    }));
+
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox);
     // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер

@@ -11,8 +11,7 @@
  * поднимается, коты сходятся к центру и трутся боками, вверх всплывают сердечки.
  */
 
-import { Container, Graphics, Sprite } from 'pixi.js';
-import type { Text } from 'pixi.js';
+import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { Cat, BoostDef } from '../../game/index.js';
 import {
   startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, growthScale,
@@ -21,12 +20,21 @@ import {
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { Button, COLORS, label, panel } from '../theme.js';
+import { Button, COLORS, FONT, label, panel } from '../theme.js';
 import { catSprite, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { decorTexture } from '../decorArt.js';
 import { darken } from '../../render/palette.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
+
+// ИИ-фоны боксов вязки (src/assets/slotbox/*.webp): пока на смотринах у каждого
+// слота свой вариант — потом оставить один на все три (или перечислить выбранные).
+const SLOT_BOX_SPRITES = ['slotbox_glass', 'slotbox_pods', 'slotbox_bears'];
+
+// Акцент свечения заряженного усилителя — в тон его текстуры (boost_<id>.webp).
+const BOOST_ACCENT: Record<string, number> = {
+  noDown: 0x59b1ff, luckyUp: 0x3fe08c, tierUp: 0xffab3d,
+};
 
 interface Heart { view: Text; life: number; ttl: number; vx: number; }
 interface Spark { view: Text; life: number; ttl: number; vx: number; vy: number; rot: number; }
@@ -84,34 +92,67 @@ export function createIncubator(ctx: UiContext): Room {
   shell.titleBar.addChild(boostBar);
   let boostGlows: { halo: Graphics; phase: number }[] = [];
 
-  function boostChip(def: BoostDef, size: number): Container {
+  // Чип усилителя — кнопка с ИИ-текстурой (boost_<id>.webp) и читаемым названием.
+  const CHIP_W = 118, CHIP_H = 38;
+
+  function boostChip(def: BoostDef): Container {
     const c = new Container();
     const charges = boostCharges(ctx.state, def.id);
     const active = charges > 0;
+    const accent = BOOST_ACCENT[def.id] ?? COLORS.dna;
+    const w = CHIP_W, h = CHIP_H;
 
     if (active) {
       const halo = new Graphics();
-      halo.roundRect(-size / 2 - 5, -size / 2 - 5, size + 10, size + 10, 13)
-        .fill({ color: COLORS.dna, alpha: 0.5 });
+      halo.roundRect(-w / 2 - 5, -h / 2 - 5, w + 10, h + 10, 14)
+        .fill({ color: accent, alpha: 0.55 });
       c.addChild(halo);
       boostGlows.push({ halo, phase: Math.random() * 6 });
     }
 
-    const bg = new Graphics();
-    bg.roundRect(-size / 2, -size / 2, size, size, 9)
-      .fill({ color: active ? COLORS.dna : COLORS.card, alpha: active ? 1 : 0.92 })
-      .stroke({ width: 2, color: active ? 0xffffff : COLORS.cardEdge, alpha: active ? 0.95 : 0.8 });
-    c.addChild(bg);
+    const tex = decorTexture(`boost_${def.id}`);
+    if (tex) {
+      // текстурная подложка: cover-вписывание + скруглённая маска.
+      // Незаряженный чип «потушен» (серый тинт), заряженный горит в полный цвет.
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5);
+      sp.scale.set(Math.max(w / tex.width, h / tex.height));
+      const m = new Graphics();
+      m.roundRect(-w / 2, -h / 2, w, h, 11).fill(0xffffff);
+      sp.mask = m;
+      if (!active) { sp.tint = 0x8f8f8f; sp.alpha = 0.9; }
+      const edge = new Graphics();
+      edge.roundRect(-w / 2, -h / 2, w, h, 11)
+        .stroke({ width: 2, color: active ? 0xffffff : COLORS.cardEdge, alpha: active ? 0.95 : 0.9 });
+      c.addChild(sp, m, edge);
+    } else {
+      const bg = new Graphics();
+      bg.roundRect(-w / 2, -h / 2, w, h, 11)
+        .fill({ color: active ? COLORS.dna : COLORS.card, alpha: active ? 1 : 0.92 })
+        .stroke({ width: 2, color: active ? 0xffffff : COLORS.cardEdge, alpha: active ? 0.95 : 0.8 });
+      c.addChild(bg);
+    }
 
-    const glyph = label(def.glyph, size * 0.5, active ? 0xffffff : COLORS.ink, '700');
-    glyph.alpha = active ? 1 : 0.7;
-    c.addChild(glyph);
+    const glyph = label(def.glyph, 15, 0xffffff, '700');
+    glyph.position.set(-w / 2 + 15, 0);
+    glyph.alpha = active ? 1 : 0.85;
+    // название — белым с тёмной обводкой: читается на любой текстуре
+    const name = new Text({
+      text: def.label,
+      style: {
+        fontFamily: FONT, fontSize: 11.5, fontWeight: '800', fill: 0xffffff,
+        stroke: { color: 0x2c2438, width: 3, join: 'round' }, align: 'center',
+      },
+    });
+    name.anchor.set(0.5);
+    name.position.set(8, 0);
+    c.addChild(glyph, name);
 
     if (charges > 1) {
       const badge = new Graphics();
-      badge.circle(size / 2 - 3, -size / 2 + 3, 8).fill({ color: COLORS.good });
+      badge.circle(w / 2 - 3, -h / 2 + 3, 8).fill({ color: COLORS.good });
       const cnt = label(String(charges), 11, 0xffffff, '800');
-      cnt.position.set(size / 2 - 3, -size / 2 + 3);
+      cnt.position.set(w / 2 - 3, -h / 2 + 3);
       c.addChild(badge, cnt);
     }
 
@@ -124,13 +165,13 @@ export function createIncubator(ctx: UiContext): Room {
   function renderBoostChips(plateW: number): void {
     boostBar.removeChildren();
     boostGlows = [];
-    const size = 34, gap = 6;
+    const gap = 8;
     // чипы стоят справа от плашки названия, вплотную (boostBar — в локальных
     // координатах titleBar; plateW — ширина плашки со счётчиком слотов).
-    const firstCx = plateW + 12 + size / 2;
+    const firstCx = plateW + 12 + CHIP_W / 2;
     BOOSTS.forEach((def, i) => {
-      const chip = boostChip(def, size);
-      chip.position.set(firstCx + i * (size + gap), shell.titleH / 2);
+      const chip = boostChip(def);
+      chip.position.set(firstCx + i * (CHIP_W + gap), shell.titleH / 2);
       boostBar.addChild(chip);
     });
   }
@@ -199,7 +240,10 @@ export function createIncubator(ctx: UiContext): Room {
     const cx = rx + 6, cy = ry + 4;         // внутренняя камера
     const cw = rw - 12, ch = rh - 8;
     const centerX = cx + cw / 2;
-    const floorY = cy + ch - 6;             // линия пола (низ лап)
+    // ИИ-бокс слота (стеклянный бокс с подстилками); нет текстуры → процедурный вид
+    const boxTex = decorTexture(SLOT_BOX_SPRITES[i % SLOT_BOX_SPRITES.length]!);
+    // линия пола (низ лап): на ИИ-фоне чуть выше — лапы встают на подстилки
+    const floorY = boxTex ? cy + ch * 0.9 : cy + ch - 6;
     const catH = Math.min(ch * 0.8, cw * 0.42);
 
     // камера с маской: всё внутри обрезается рамкой комнаты
@@ -209,13 +253,22 @@ export function createIncubator(ctx: UiContext): Room {
     card.addChild(chamber, mask);
     chamber.mask = mask;
 
-    // задняя стена + пол
-    const wallCol = 0xffeaf1;
-    const bg = new Graphics();
-    bg.roundRect(cx, cy, cw, ch, 10).fill(wallCol);
-    bg.rect(cx, floorY - 2, cw, cy + ch - (floorY - 2)).fill(darken(wallCol, 0.12));
-    bg.rect(cx, floorY - 2, cw, 3).fill({ color: 0x000000, alpha: 0.06 });
-    chamber.addChild(bg);
+    if (boxTex) {
+      // ИИ-фон: cover-вписывание в камеру, прижат к низу (подстилки важнее потолка)
+      const bgSp = new Sprite(boxTex);
+      bgSp.anchor.set(0.5, 1);
+      bgSp.scale.set(Math.max(cw / boxTex.width, ch / boxTex.height));
+      bgSp.position.set(centerX, cy + ch);
+      chamber.addChild(bgSp);
+    } else {
+      // задняя стена + пол (процедурный фолбэк)
+      const wallCol = 0xffeaf1;
+      const bg = new Graphics();
+      bg.roundRect(cx, cy, cw, ch, 10).fill(wallCol);
+      bg.rect(cx, floorY - 2, cw, cy + ch - (floorY - 2)).fill(darken(wallCol, 0.12));
+      bg.rect(cx, floorY - 2, cw, 3).fill({ color: 0x000000, alpha: 0.06 });
+      chamber.addChild(bg);
+    }
 
     // позиции котов: по сторонам (покой) ↔ к центру, чуть внахлёст (вязка).
     // Самец (Отец) — слева, самка (Мать) — справа.
@@ -225,13 +278,19 @@ export function createIncubator(ctx: UiContext): Room {
     const dadMeetX = centerX - rub;
     const momMeetX = centerX + rub;
 
-    // подписи ролей сторон: куда нести самца, куда самку
+    // подписи ролей сторон: куда нести самца, куда самку. Под ними — белые
+    // плашки, чтобы надписи «Отец/Мать» читались на любом ИИ-фоне бокса.
     const roleY = cy + 12;
-    const dadRole = label('Отец ♂', 11, COLORS.inkSoft, '700');
+    const dadRole = label('Отец ♂', 11, COLORS.ink, '700');
     dadRole.position.set(dadHomeX, roleY);
-    const momRole = label('Мать ♀', 11, COLORS.inkSoft, '700');
+    const momRole = label('Мать ♀', 11, COLORS.ink, '700');
     momRole.position.set(momHomeX, roleY);
-    chamber.addChild(dadRole, momRole);
+    const rolePlate = new Graphics();
+    for (const r of [dadRole, momRole]) {
+      rolePlate.roundRect(r.x - r.width / 2 - 7, r.y - r.height / 2 - 2, r.width + 14, r.height + 4, 8)
+        .fill({ color: 0xffffff, alpha: 0.72 });
+    }
+    chamber.addChild(rolePlate, dadRole, momRole);
 
     // Кто в слоте: поставленные в слот (staged/идёт вязка), иначе — превью
     // глобального выбора пары из Питомника (легаси-способ «Выбрать для вязки»).
@@ -541,7 +600,7 @@ export function createIncubator(ctx: UiContext): Room {
     // пульс ореола заряженных усилителей у названия комнаты («ярко горит»)
     for (const bg of boostGlows) {
       bg.phase += dt;
-      bg.halo.alpha = 0.3 + 0.25 * (0.5 + 0.5 * Math.sin(bg.phase * 4));
+      bg.halo.alpha = 0.35 + 0.4 * (0.5 + 0.5 * Math.sin(bg.phase * 4));
     }
 
     for (const ls of live) {
