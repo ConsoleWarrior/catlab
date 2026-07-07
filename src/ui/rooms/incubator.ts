@@ -289,7 +289,7 @@ export function createIncubator(ctx: UiContext): Room {
 
     // подписи ролей сторон: куда нести самца, куда самку. Под ними — белые
     // плашки, чтобы надписи «Отец/Мать» читались на любом ИИ-фоне бокса.
-    const roleY = cy + 12;
+    const roleY = cy + 16;
     const dadRole = label('Отец ♂', 11, COLORS.ink, '700');
     dadRole.position.set(dadHomeX, roleY);
     const momRole = label('Мать ♀', 11, COLORS.ink, '700');
@@ -339,7 +339,7 @@ export function createIncubator(ctx: UiContext): Room {
       dad = catSprite(ctx.app, dadCat, catH);
       dadBase = Math.abs(dad.scale.x);
       dad.scale.x = dadBase;              // слева — смотрит вправо, к центру
-      dad.position.set(busy ? dadMeetX : dadHomeX, floorY);
+      dad.position.set(busy ? dadMeetX : dadHomeX, floorY + catH * 0.03);
       dadGlow = rarityGlow(dad, dadCat.rarityTier, catH);
       dadGlow.position.copyFrom(dad.position);
       chamber.addChild(dadGlow, dad);
@@ -349,7 +349,7 @@ export function createIncubator(ctx: UiContext): Room {
       mom = catSprite(ctx.app, momCat, catH);
       momBase = Math.abs(mom.scale.x);
       mom.scale.x = -momBase;             // справа — смотрит влево, к центру
-      mom.position.set(busy ? momMeetX : momHomeX, floorY);
+      mom.position.set(busy ? momMeetX : momHomeX, floorY + catH * 0.03);
       momGlow = rarityGlow(mom, momCat.rarityTier, catH);
       momGlow.position.copyFrom(mom.position);
       chamber.addChild(momGlow, mom);
@@ -359,11 +359,14 @@ export function createIncubator(ctx: UiContext): Room {
     // перегородка по центру (поднимается при старте вязки)
     const partW = Math.max(7, cw * 0.05);
     const partTop = cy + 2;
-    const partH = (floorY - partTop) * 1.375;
+    const partR = Math.max(3, partW * 0.5);        // пилюля: полукруглый верх и низ
+    const maskBot = cy + ch + (hasBoxTex ? catH * 0.3 : 0);
+    // полная длина (множитель нравится пользователю) но не вылезаем за маску минус радиус
+    const partH = Math.min((floorY - partTop) * 1.375, maskBot - partTop - partR);
     const partCol = 0xcdb6a3;
     const partition = new Graphics();
-    partition.roundRect(centerX - partW / 2, partTop, partW, partH, 4).fill(partCol);
-    partition.roundRect(centerX - partW / 2, partTop, partW, partH, 4)
+    partition.roundRect(centerX - partW / 2, partTop, partW, partH, partR).fill(partCol);
+    partition.roundRect(centerX - partW / 2, partTop, partW, partH, partR)
       .stroke({ width: 2, color: darken(partCol, 0.28) });
     partition.rect(centerX - partW / 2, partTop + partH * 0.5 - 1, partW, 2)
       .fill({ color: darken(partCol, 0.22) });
