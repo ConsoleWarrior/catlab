@@ -263,7 +263,9 @@ export function createIncubator(ctx: UiContext): Room {
     // камера с маской: всё внутри обрезается (коты не вылезают за края)
     const chamber = new Container();
     const mask = new Graphics();
-    mask.roundRect(cx, cy, cw, ch, 10).fill(0xffffff);
+    // На ИИ-боксе маска чуть выше, чтобы лапки котёнка на подстилках не срезались
+    const maskBotExt = hasBoxTex ? catH * 0.3 : 0;
+    mask.roundRect(cx, cy, cw, ch + maskBotExt, 10).fill(0xffffff);
     card.addChild(chamber, mask);
     chamber.mask = mask;
 
@@ -357,7 +359,7 @@ export function createIncubator(ctx: UiContext): Room {
     // перегородка по центру (поднимается при старте вязки)
     const partW = Math.max(7, cw * 0.05);
     const partTop = cy + 2;
-    const partH = (floorY - partTop) * 1.1;
+    const partH = (floorY - partTop) * 1.375;
     const partCol = 0xcdb6a3;
     const partition = new Graphics();
     partition.roundRect(centerX - partW / 2, partTop, partW, partH, 4).fill(partCol);
@@ -390,7 +392,7 @@ export function createIncubator(ctx: UiContext): Room {
       kitten = catSprite(ctx.app, heldKitten, catH);
       kittenBase = Math.abs(kitten.scale.x);
       kitten.scale.set(kittenBase * growthScale(heldKitten, now));
-      kitten.position.set(centerX, floorY + catH * 0.25);
+      kitten.position.set(centerX, floorY + catH * 0.15);
       kitGlow = rarityGlow(kitten, heldKitten.rarityTier, catH);
       kitGlow.position.copyFrom(kitten.position);
       chamber.addChild(kitGlow, kitten);
