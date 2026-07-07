@@ -357,7 +357,7 @@ export function createIncubator(ctx: UiContext): Room {
     // перегородка по центру (поднимается при старте вязки)
     const partW = Math.max(7, cw * 0.05);
     const partTop = cy + 2;
-    const partH = floorY - partTop;
+    const partH = (floorY - partTop) * 1.1;
     const partCol = 0xcdb6a3;
     const partition = new Graphics();
     partition.roundRect(centerX - partW / 2, partTop, partW, partH, 4).fill(partCol);
@@ -390,7 +390,7 @@ export function createIncubator(ctx: UiContext): Room {
       kitten = catSprite(ctx.app, heldKitten, catH);
       kittenBase = Math.abs(kitten.scale.x);
       kitten.scale.set(kittenBase * growthScale(heldKitten, now));
-      kitten.position.set(centerX, floorY);
+      kitten.position.set(centerX, floorY + catH * 0.25);
       kitGlow = rarityGlow(kitten, heldKitten.rarityTier, catH);
       kitGlow.position.copyFrom(kitten.position);
       chamber.addChild(kitGlow, kitten);
@@ -459,8 +459,9 @@ export function createIncubator(ctx: UiContext): Room {
     } else if (hasKitten) {
       // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
       // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
+      const stripTop = h - ctrlH - 6 + ctrlShift;
       const hint = label('🐾 малыш с роднёй — пристрой его', 12, COLORS.inkSoft, '700');
-      hint.position.set(w / 2, barY + 4);
+      hint.position.set(w / 2, stripTop + 14);
       card.addChild(hint);
 
       const placeBtn = (text: string, room: 'nursery' | 'shelter', color: number, yy: number): void => {
@@ -476,9 +477,9 @@ export function createIncubator(ctx: UiContext): Room {
         card.addChild(b);
       };
       placeBtn(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
-        'nursery', COLORS.primary, h - 44 + ctrlShift);
+        'nursery', COLORS.primary, stripTop + 38);
       placeBtn(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
-        'shelter', COLORS.secondary, h - 14 + ctrlShift);
+        'shelter', COLORS.secondary, stripTop + 70);
     } else {
       // пара = поставленные в слот коты (или превью глобального выбора)
       const mother = momCat;
