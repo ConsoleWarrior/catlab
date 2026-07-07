@@ -28,8 +28,8 @@ import { darken } from '../../render/palette.js';
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
 
 // ИИ-фоны боксов вязки (src/assets/slotbox/*_cut.webp) — вырезки с прозрачностью,
-// используются как полноценный фон всей карточки слота. Каждому слоту свой вариант.
-const SLOT_BOX_SPRITES = ['slotbox_glass_cut', 'slotbox_pods_cut', 'slotbox_bears_cut'];
+// используются как полноценный фон всей карточки слота. Один вариант на все слоты.
+const SLOT_BOX_SPRITES = ['slotbox_glass_cut', 'slotbox_glass_cut', 'slotbox_glass_cut'];
 
 // Акцент свечения заряженного усилителя — в тон его текстуры (boost_<id>.webp).
 // После перемаппинга: стабилизатор→зелёный, катализатор→синий, активатор→оранжевый.
@@ -249,6 +249,7 @@ export function createIncubator(ctx: UiContext): Room {
     // --- геометрия мини-комнаты ---
     const titleH = 24;
     const ctrlH = 80;                       // под комнатой: прогресс + кнопка
+    const ctrlShift = hasBoxTex ? Math.round((ctrlH + 6) / 2) : 0; // сдвиг панели вниз (≈43px)
     const rx = 9, ry = titleH;
     const rw = w - 18;
     const rh = Math.max(70, h - titleH - ctrlH);
@@ -420,19 +421,25 @@ export function createIncubator(ctx: UiContext): Room {
 
     // --- контролы под комнатой ---
     const barX = rx + 4;
-    const barY = ry + rh + 12;
+    const barY = ry + rh + 12 + ctrlShift;
     const barW = rw - 8;
 
     // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
     if (hasBoxTex) {
+      const stripH = ctrlH + 6;
+      const stripW = Math.round(w * 0.86);
+      const stripX = Math.round((w - stripW) / 2);
+      const stripY = h - ctrlH - 6 + ctrlShift;
+      const GREEN_LIGHT = 0xaee6c8;
+      const GREEN_EDGE = 0x8fd6a8;
       const ctrlBg = new Graphics();
-      ctrlBg.roundRect(0, h - ctrlH - 6, w, ctrlH + 6, 12)
-        .fill({ color: COLORS.card, alpha: 0.94 });
-      ctrlBg.roundRect(0, h - ctrlH - 6, w, ctrlH + 6, 12)
-        .stroke({ width: 1.5, color: COLORS.cardEdge, alpha: 0.55 });
+      ctrlBg.roundRect(stripX, stripY, stripW, stripH, 12)
+        .fill({ color: GREEN_LIGHT });
+      ctrlBg.roundRect(stripX, stripY, stripW, stripH, 12)
+        .stroke({ width: 1.5, color: GREEN_EDGE, alpha: 0.55 });
       // тонкая линия-разделитель над полосой
-      ctrlBg.rect(0, h - ctrlH - 6, w, 2)
-        .fill({ color: COLORS.cardEdge, alpha: 0.35 });
+      ctrlBg.rect(stripX, stripY, stripW, 2)
+        .fill({ color: GREEN_EDGE, alpha: 0.35 });
       card.addChild(ctrlBg);
     }
 
@@ -469,9 +476,9 @@ export function createIncubator(ctx: UiContext): Room {
         card.addChild(b);
       };
       placeBtn(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
-        'nursery', COLORS.primary, h - 44);
+        'nursery', COLORS.primary, h - 44 + ctrlShift);
       placeBtn(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
-        'shelter', COLORS.secondary, h - 14);
+        'shelter', COLORS.secondary, h - 14 + ctrlShift);
     } else {
       // пара = поставленные в слот коты (или превью глобального выбора)
       const mother = momCat;
@@ -483,7 +490,7 @@ export function createIncubator(ctx: UiContext): Room {
         textColor: ok ? 0xffffff : COLORS.inkSoft, fontSize: 15,
       });
       btn.enabled = ok;
-      btn.position.set(w / 2, h - 22);
+      btn.position.set(w / 2, h - 22 + ctrlShift);
       btn.onTap = () => {
         const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
         if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast('Вязка началась 🐾'); }
