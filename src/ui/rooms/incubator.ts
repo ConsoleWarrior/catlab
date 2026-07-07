@@ -420,18 +420,18 @@ export function createIncubator(ctx: UiContext): Room {
     card.addChild(fx);
 
     // --- контролы под комнатой ---
-    const barX = rx + 4;
+    const barW = Math.round((rw - 8) * 0.85);
+    const barX = rx + 4 + Math.round(((rw - 8) - barW) / 2);
     const barY = ry + rh + 12 + ctrlShift;
-    const barW = rw - 8;
 
     // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
     if (hasBoxTex) {
       const stripH = ctrlH + 6;
-      const stripW = Math.round(w * 0.86);
+      const stripW = Math.round(w * 0.92);
       const stripX = Math.round((w - stripW) / 2);
       const stripY = h - ctrlH - 6 + ctrlShift;
-      const GREEN_LIGHT = 0xaee6c8;
-      const GREEN_EDGE = 0x8fd6a8;
+      const GREEN_LIGHT = 0xc8f0da;
+      const GREEN_EDGE = 0xa8e0b8;
       const ctrlBg = new Graphics();
       ctrlBg.roundRect(stripX, stripY, stripW, stripH, 12)
         .fill({ color: GREEN_LIGHT });
@@ -464,7 +464,7 @@ export function createIncubator(ctx: UiContext): Room {
       card.addChild(hint);
 
       const placeBtn = (text: string, room: 'nursery' | 'shelter', color: number, yy: number): void => {
-        const b = new Button({ text, w: w - 24, h: 28, color, fontSize: 12.5 });
+        const b = new Button({ text, w: Math.round((w - 24) * 0.85), h: 28, color, fontSize: 12.5 });
         b.position.set(w / 2, yy);
         b.onTap = () => {
           if (!heldKitten) return;
@@ -486,7 +486,7 @@ export function createIncubator(ctx: UiContext): Room {
       const ok = !!mother && !!father;
       const btn = new Button({
         text: ok ? 'Свести 🐾' : 'Перетащи пару',
-        w: w - 24, h: 38, color: ok ? COLORS.primary : COLORS.cardEdge,
+        w: Math.round((w - 24) * 0.85), h: 38, color: ok ? COLORS.primary : COLORS.cardEdge,
         textColor: ok ? 0xffffff : COLORS.inkSoft, fontSize: 15,
       });
       btn.enabled = ok;
