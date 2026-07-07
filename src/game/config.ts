@@ -81,7 +81,7 @@ export interface BoostDef {
 export const BOOSTS: readonly BoostDef[] = [
   { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не опустится по тиру', dna: 15, crystals: 2 },
   { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Резкий рост шанса тира-вверх', dna: 30, crystals: 3 },
-  { id: 'tierUp', glyph: '🔼', label: 'Форсаж тира', desc: 'Гарантия тира выше (если есть куда)', dna: 60, crystals: 5 },
+  { id: 'tierUp', glyph: '🔼', label: 'Активатор', desc: 'Гарантия тира выше (если есть куда)', dna: 60, crystals: 5 },
 ];
 
 // --- Рост котят ---

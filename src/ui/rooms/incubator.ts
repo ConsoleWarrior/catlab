@@ -27,13 +27,14 @@ import { darken } from '../../render/palette.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
 
-// ИИ-фоны боксов вязки (src/assets/slotbox/*.webp): пока на смотринах у каждого
-// слота свой вариант — потом оставить один на все три (или перечислить выбранные).
-const SLOT_BOX_SPRITES = ['slotbox_glass', 'slotbox_pods', 'slotbox_bears'];
+// ИИ-фоны боксов вязки (src/assets/slotbox/*_cut.webp) — вырезки с прозрачностью,
+// используются как полноценный фон всей карточки слота. Каждому слоту свой вариант.
+const SLOT_BOX_SPRITES = ['slotbox_glass_cut', 'slotbox_pods_cut', 'slotbox_bears_cut'];
 
 // Акцент свечения заряженного усилителя — в тон его текстуры (boost_<id>.webp).
+// После перемаппинга: стабилизатор→зелёный, катализатор→синий, активатор→оранжевый.
 const BOOST_ACCENT: Record<string, number> = {
-  noDown: 0x59b1ff, luckyUp: 0x3fe08c, tierUp: 0xffab3d,
+  noDown: 0x3fe08c, luckyUp: 0x59b1ff, tierUp: 0xffab3d,
 };
 
 interface Heart { view: Text; life: number; ttl: number; vx: number; }
@@ -105,7 +106,7 @@ export function createIncubator(ctx: UiContext): Room {
     if (active) {
       const halo = new Graphics();
       halo.roundRect(-w / 2 - 5, -h / 2 - 5, w + 10, h + 10, 14)
-        .fill({ color: accent, alpha: 0.55 });
+        .fill({ color: accent, alpha: 0.68 });
       c.addChild(halo);
       boostGlows.push({ halo, phase: Math.random() * 6 });
     }
@@ -218,7 +219,21 @@ export function createIncubator(ctx: UiContext): Room {
 
   function buildSlot(i: number, w: number, h: number): Container {
     const card = new Container();
-    card.addChild(panel(w, h, COLORS.card, 16));
+    // ИИ-бокс слота (вырезка с прозрачностью): полный фон всей карточки.
+    // Нет текстуры → процедурный panel-фолбэк.
+    const boxTex = decorTexture(SLOT_BOX_SPRITES[i % SLOT_BOX_SPRITES.length]!);
+    const hasBoxTex = !!boxTex;
+
+    if (hasBoxTex) {
+      const bgSp = new Sprite(boxTex);
+      bgSp.anchor.set(0.5);
+      bgSp.scale.set(Math.max(w / boxTex.width, h / boxTex.height));
+      bgSp.position.set(w / 2, h / 2);
+      card.addChild(bgSp);
+    } else {
+      card.addChild(panel(w, h, COLORS.card, 16));
+    }
+
     const slot = ctx.state.slots[i]!;
     const now = ctx.now();
     const busy = slot.readyAt > 0;
@@ -240,27 +255,18 @@ export function createIncubator(ctx: UiContext): Room {
     const cx = rx + 6, cy = ry + 4;         // внутренняя камера
     const cw = rw - 12, ch = rh - 8;
     const centerX = cx + cw / 2;
-    // ИИ-бокс слота (стеклянный бокс с подстилками); нет текстуры → процедурный вид
-    const boxTex = decorTexture(SLOT_BOX_SPRITES[i % SLOT_BOX_SPRITES.length]!);
     // линия пола (низ лап): на ИИ-фоне чуть выше — лапы встают на подстилки
-    const floorY = boxTex ? cy + ch * 0.9 : cy + ch - 6;
+    const floorY = hasBoxTex ? cy + ch * 0.9 : cy + ch - 6;
     const catH = Math.min(ch * 0.8, cw * 0.42);
 
-    // камера с маской: всё внутри обрезается рамкой комнаты
+    // камера с маской: всё внутри обрезается (коты не вылезают за края)
     const chamber = new Container();
     const mask = new Graphics();
     mask.roundRect(cx, cy, cw, ch, 10).fill(0xffffff);
     card.addChild(chamber, mask);
     chamber.mask = mask;
 
-    if (boxTex) {
-      // ИИ-фон: cover-вписывание в камеру, прижат к низу (подстилки важнее потолка)
-      const bgSp = new Sprite(boxTex);
-      bgSp.anchor.set(0.5, 1);
-      bgSp.scale.set(Math.max(cw / boxTex.width, ch / boxTex.height));
-      bgSp.position.set(centerX, cy + ch);
-      chamber.addChild(bgSp);
-    } else {
+    if (!hasBoxTex) {
       // задняя стена + пол (процедурный фолбэк)
       const wallCol = 0xffeaf1;
       const bg = new Graphics();
@@ -401,12 +407,14 @@ export function createIncubator(ctx: UiContext): Room {
       }, e));
     }
 
-    // рамка комнаты поверх содержимого
-    const frame = new Graphics();
-    frame.roundRect(cx, cy, cw, ch, 10).stroke({ width: 2, color: COLORS.cardEdge });
-    card.addChild(frame);
+    // Рамка камеры — только в процедурном фолбэке (на ИИ-боксе нет лишних рамок)
+    if (!hasBoxTex) {
+      const frame = new Graphics();
+      frame.roundRect(cx, cy, cw, ch, 10).stroke({ width: 2, color: COLORS.cardEdge });
+      card.addChild(frame);
+    }
 
-    // слой эффекта рождения — поверх рамки (искры могут вылетать за пределы комнаты)
+    // слой эффекта рождения — поверх камеры (искры могут вылетать за пределы)
     const fx = new Container();
     card.addChild(fx);
 
@@ -414,6 +422,20 @@ export function createIncubator(ctx: UiContext): Room {
     const barX = rx + 4;
     const barY = ry + rh + 12;
     const barW = rw - 8;
+
+    // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
+    if (hasBoxTex) {
+      const ctrlBg = new Graphics();
+      ctrlBg.roundRect(0, h - ctrlH - 6, w, ctrlH + 6, 12)
+        .fill({ color: COLORS.card, alpha: 0.94 });
+      ctrlBg.roundRect(0, h - ctrlH - 6, w, ctrlH + 6, 12)
+        .stroke({ width: 1.5, color: COLORS.cardEdge, alpha: 0.55 });
+      // тонкая линия-разделитель над полосой
+      ctrlBg.rect(0, h - ctrlH - 6, w, 2)
+        .fill({ color: COLORS.cardEdge, alpha: 0.35 });
+      card.addChild(ctrlBg);
+    }
+
     let bar: Graphics | undefined, time: Text | undefined;
 
     if (busy) {
@@ -600,7 +622,7 @@ export function createIncubator(ctx: UiContext): Room {
     // пульс ореола заряженных усилителей у названия комнаты («ярко горит»)
     for (const bg of boostGlows) {
       bg.phase += dt;
-      bg.halo.alpha = 0.35 + 0.4 * (0.5 + 0.5 * Math.sin(bg.phase * 4));
+      bg.halo.alpha = 0.38 + 0.56 * (0.5 + 0.5 * Math.sin(bg.phase * 4));
     }
 
     for (const ls of live) {
