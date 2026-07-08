@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Комната «Инкубатор»: места вязки (выбор пары → таймер → котёнок).
  * Пара выбирается в Питомнике (ctx.selection). Апгрейды слотов вязки и
  * скорости инкубации переехали в Генолаб → Исследования (4-я ветка).
@@ -134,20 +134,17 @@ export function createIncubator(ctx: UiContext): Room {
       c.addChild(bg);
     }
 
-    const glyph = label(def.glyph, 15, 0xffffff, '700');
-    glyph.position.set(-w / 2 + 15, 0);
-    glyph.alpha = active ? 1 : 0.85;
     // название — белым с тёмной обводкой: читается на любой текстуре
     const name = new Text({
       text: def.label,
       style: {
-        fontFamily: FONT, fontSize: 11.5, fontWeight: '800', fill: 0xffffff,
+        fontFamily: FONT, fontSize: 13.5, fontWeight: '800', fill: 0xffffff,
         stroke: { color: 0x2c2438, width: 3, join: 'round' }, align: 'center',
       },
     });
     name.anchor.set(0.5);
-    name.position.set(8, 0);
-    c.addChild(glyph, name);
+    name.position.set(0, 0);
+    c.addChild(name);
 
     if (charges > 1) {
       const badge = new Graphics();
@@ -241,10 +238,6 @@ export function createIncubator(ctx: UiContext): Room {
     // родители по бокам остаются, слот блокирован под новую пару.
     const heldKitten = slot.kittenId ? ctx.state.cats.find((c) => c.id === slot.kittenId) : undefined;
     const hasKitten = !!heldKitten && !busy;
-
-    const head = label(`Слот ${i + 1}`, 13, COLORS.inkSoft, '700');
-    head.position.set(w / 2, 13);
-    card.addChild(head);
 
     // --- геометрия мини-комнаты ---
     const titleH = 24;
@@ -358,7 +351,7 @@ export function createIncubator(ctx: UiContext): Room {
 
     // перегородка по центру (поднимается при старте вязки)
     const partW = Math.max(7, cw * 0.05);
-    const partTop = cy + 2;
+    const partTop = cy + 6;
     const partR = Math.max(3, partW * 0.5);        // пилюля: полукруглый верх и низ
     const maskBot = cy + ch + (hasBoxTex ? catH * 0.3 : 0);
     // полная длина (множитель нравится пользователю) но не вылезаем за маску минус радиус
@@ -432,19 +425,22 @@ export function createIncubator(ctx: UiContext): Room {
     // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
     if (hasBoxTex) {
       const stripH = ctrlH + 6;
-      const stripW = Math.round(w * 0.92);
+      const stripW = Math.round(w * 0.92) + 2; // +2px шире, прилегает к краям слота
       const stripX = Math.round((w - stripW) / 2);
       const stripY = h - ctrlH - 6 + ctrlShift;
-      const GREEN_LIGHT = 0xc8f0da;
-      const GREEN_EDGE = 0xa8e0b8;
+      const GOLDEN_ROSE = 0xedc8b0; // золотисто-розовый, в тон краёв слота
+      const R = 12;
       const ctrlBg = new Graphics();
-      ctrlBg.roundRect(stripX, stripY, stripW, stripH, 12)
-        .fill({ color: GREEN_LIGHT });
-      ctrlBg.roundRect(stripX, stripY, stripW, stripH, 12)
-        .stroke({ width: 1.5, color: GREEN_EDGE, alpha: 0.55 });
-      // тонкая линия-разделитель над полосой
-      ctrlBg.rect(stripX, stripY, stripW, 2)
-        .fill({ color: GREEN_EDGE, alpha: 0.35 });
+      // путь: верх прямой (без скруглений), низ скруглён
+      ctrlBg.moveTo(stripX, stripY);
+      ctrlBg.lineTo(stripX + stripW, stripY);
+      ctrlBg.lineTo(stripX + stripW, stripY + stripH - R);
+      ctrlBg.quadraticCurveTo(stripX + stripW, stripY + stripH, stripX + stripW - R, stripY + stripH);
+      ctrlBg.lineTo(stripX + R, stripY + stripH);
+      ctrlBg.quadraticCurveTo(stripX, stripY + stripH, stripX, stripY + stripH - R);
+      ctrlBg.closePath();
+      ctrlBg.fill({ color: GOLDEN_ROSE })
+         .stroke({ width: 2, color: COLORS.cardEdge, alpha: 0.85 });
       card.addChild(ctrlBg);
     }
 
@@ -490,19 +486,24 @@ export function createIncubator(ctx: UiContext): Room {
       const mother = momCat;
       const father = dadCat;
       const ok = !!mother && !!father;
-      const btn = new Button({
-        text: ok ? 'Свести 🐾' : 'Перетащи пару',
-        w: Math.round((w - 24) * 0.85), h: 38, color: ok ? COLORS.primary : COLORS.cardEdge,
-        textColor: ok ? 0xffffff : COLORS.inkSoft, fontSize: 15,
-      });
-      btn.enabled = ok;
-      btn.position.set(w / 2, h - 22 + ctrlShift);
-      btn.onTap = () => {
-        const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
-        if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast('Вязка началась 🐾'); }
-        else ctx.toast(r.reason);
-      };
-      card.addChild(btn);
+      if (ok) {
+        const btn = new Button({
+          text: 'Свести 🐾',
+          w: Math.round((w - 24) * 0.85), h: 38, color: COLORS.primary,
+          textColor: 0xffffff, fontSize: 15,
+        });
+        btn.position.set(w / 2, h - 22 + ctrlShift);
+        btn.onTap = () => {
+          const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
+          if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast('Вязка началась 🐾'); }
+          else ctx.toast(r.reason);
+        };
+        card.addChild(btn);
+      } else {
+        const hint = label('Добавь котов для скрещивания', 13, COLORS.inkSoft, '600');
+        hint.position.set(w / 2, h - 22 + ctrlShift);
+        card.addChild(hint);
+      }
     }
 
     live.push({
@@ -538,10 +539,6 @@ export function createIncubator(ctx: UiContext): Room {
   function buildLockedSlot(i: number, w: number, h: number): Container {
     const card = new Container();
     card.addChild(panel(w, h, COLORS.card, 16, 0.55));
-
-    const head = label(`Слот ${i + 1}`, 13, COLORS.inkSoft, '700');
-    head.position.set(w / 2, 13);
-    card.addChild(head);
 
     const lock = label('🔒', Math.min(w, h) * 0.26, COLORS.inkSoft, '700');
     lock.alpha = 0.5;
@@ -620,9 +617,11 @@ export function createIncubator(ctx: UiContext): Room {
       }
     }
 
+    const LOCKED_DY = 17; // неактивные слоты опущены до уровня открытых
     for (let i = 0; i < N; i++) {
-      const c = i < owned ? buildSlot(i, slotW, slotH) : buildLockedSlot(i, slotW, slotH);
-      c.position.set(startX + i * (slotW + gap), startY);
+      const locked = i >= owned;
+      const c = locked ? buildLockedSlot(i, slotW, slotH) : buildSlot(i, slotW, slotH);
+      c.position.set(startX + i * (slotW + gap), startY + (locked ? LOCKED_DY : 0));
       shell.body.addChild(c);
     }
 

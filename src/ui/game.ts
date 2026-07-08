@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Game — контроллер игрового UI (Этап 4).
  * Разрез лаборатории: 4 комнаты в ряд, свайп-навигация, фиксированный HUD
  * ресурсов, оверлеи (меню кота, заказы), тикер с таймерами и пассивным
@@ -6,9 +6,9 @@
  */
 
 import {
-  Application, Assets, Container, Graphics, Rectangle, Sprite,
+  Application, Assets, Container, Graphics, Rectangle, Sprite, Text, BlurFilter,
 } from 'pixi.js';
-import type { Text, Texture, FederatedPointerEvent } from 'pixi.js';
+import type { Texture, FederatedPointerEvent } from 'pixi.js';
 import { makeRng, randomCat, expressPhenotype, pick, BREEDS } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { Sex } from '../genetics/index.js';
@@ -16,7 +16,7 @@ import { buildCat } from '../render/catSprite.js';
 import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
   passiveRatePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
-  emptySlot, moveCat, clearBreederSlot, keepKittenWithParents,
+  moveCat, clearBreederSlot, keepKittenWithParents,
 } from '../game/index.js';
 import { isBusy, isInSlot } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -24,7 +24,7 @@ import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { setRoomBg } from './roomArt.js';
-import { setDecorTexture } from './decorArt.js';
+import { setDecorTexture, decorZone } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
@@ -84,6 +84,12 @@ export class Game implements UiContext {
   private dots: Graphics[] = [];
   private hudPad = 0;            // левый отступ ряда ресурсов
   private hudGap = 0;            // зазор между ресурсами в ряду
+  private hudBgTex?: Texture;    // текстурный фон топ-бара
+
+  // подсветка переноски в приюте, когда кота тащат (лампа: мягкий ореол + ядро)
+  private adoptGlow = new Container();
+  private adoptGlowHalo = new Graphics();
+  private adoptBlur = new BlurFilter({ strength: 8, quality: 3, kernelSize: 5 });
 
   // прочее
   private incomeAcc = 0;
@@ -94,6 +100,9 @@ export class Game implements UiContext {
   now(): number { return Date.now(); }
 
   async start(reset = false): Promise<void> {
+    // Ждём готовности Rubik (локальный woff2, @font-face в index.html)
+    try { await document.fonts.ready; } catch { /* fallback */ }
+
     await this.app.init({
       background: COLORS.bg,
       antialias: true,
@@ -154,6 +163,14 @@ export class Game implements UiContext {
       try { setDecorTexture(name, await Assets.load(url)); } catch { /* фолбэк на процедурный вид */ }
     }));
 
+    // Текстура фона топ-бара HUD (пергамент/винтаж) — заменяет белый procedural fill.
+    const hudAssets = import.meta.glob('../assets/hud/*.png', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+    for (const url of Object.values(hudAssets)) {
+      try { this.hudBgTex = await Assets.load(url); break; } catch { /* останется белый фон */ }
+    }
+
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox);
     // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер
@@ -163,6 +180,11 @@ export class Game implements UiContext {
     // обработки событий, на отрисовку/анимацию тоста не влияет.
     this.toastBox.eventMode = 'none';
     this.dragLayer.eventMode = 'none';
+
+    // структура подсветки переноски: мягкий ореол (BlurFilter) + яркое ядро
+    this.adoptGlowHalo.filters = [this.adoptBlur];
+    this.adoptGlow.addChild(this.adoptGlowHalo);
+    this.adoptGlow.visible = false;
 
     this.resize();
     this.installInput();
@@ -318,7 +340,6 @@ export class Game implements UiContext {
           const s = deserialize(raw);
           if (s && s.version === SAVE_VERSION) {
             this.state = s;
-            this.ensureTestSlots();
             this.applyOffline();
             return;
           }
@@ -327,12 +348,6 @@ export class Game implements UiContext {
     }
     this.state = createInitialState(this.rng, this.now());
     this.freshGame = true;
-    this.ensureTestSlots();
-  }
-
-  /** ТЕСТ: гарантируем 3 места вязки в игре (логика/тесты используют createInitialState как есть). Убрать после тестов. */
-  private ensureTestSlots(): void {
-    while (this.state.slots.length < 3) this.state.slots.push(emptySlot());
   }
 
   /** Офлайн-прогресс: родившиеся котята + накопленный доход. */
@@ -475,6 +490,7 @@ export class Game implements UiContext {
     g.sprite.destroy({ children: true });
     this.grab = null;
     this.app.canvas.style.cursor = 'default';
+    this.updateAdoptGlow(false);
 
     // пристроить кота в текущей комнате (слот вязки / приют / питомник)
     if (this.handleCatDrop(opts.cat, gx, gy)) return; // успех → commit пересобрал комнаты
@@ -500,6 +516,35 @@ export class Game implements UiContext {
     // 2 c между сменами комнат — чтобы не проскакивать центральную комнату насквозь
     if (g.x < edge && this.currentRoom > lo) { this.goRoom(this.currentRoom - 1); g.edgeCd = 2; }
     else if (g.x > this.roomW - edge && this.currentRoom < hi) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
+  }
+
+  /** Подсветка переноски золотым свечением (как от лампы) при перетаскивании кота. */
+  private updateAdoptGlow(show: boolean, t = 0): void {
+    const room = this.rooms[this.currentRoom];
+    if (!room || !show || room.id !== 'shelter') {
+      this.adoptGlow.visible = false;
+      return;
+    }
+    const zone = decorZone('shelter', 'adopt', this.roomW, this.roomH);
+    if (!zone) { this.adoptGlow.visible = false; return; }
+    const cx = zone.x + zone.width / 2;
+    const cy = zone.y + zone.height / 2;
+
+    // перекладываем в контейнер нужной комнаты (первый раз / после смены комнаты)
+    if (this.adoptGlow.parent !== room.container) {
+      this.adoptGlow.removeFromParent();
+      // втыкаем перед декорациями, чтобы свечение было под спрайтом переноски (из-под неё)
+      room.container.addChildAt(this.adoptGlow, 3);
+    }
+
+    const pulse = 0.65 + 0.35 * Math.sin(t * 2.75);
+    this.adoptGlow.visible = true;
+
+    // Мягкий круг света от переноски - BlurFilter делает края тусклыми
+    this.adoptGlowHalo.clear();
+    this.adoptGlowHalo
+      .circle(cx, cy, Math.max(zone.width, zone.height) * 0.40)
+      .fill({ color: 0xffd700, alpha: 0.5 * pulse });
   }
 
   /** Куда уронили кота: Инкубатор → слот вязки, Приют → переноска (пристройство), Приют/Питомник → переезд. */
@@ -576,29 +621,45 @@ export class Game implements UiContext {
     this.hud.removeChildren();
     const w = this.roomW;
     const ti = this.topInset;
-    const bg = new Graphics();
-    bg.rect(0, 0, w, ti).fill({ color: COLORS.hud, alpha: 0.96 });
-    bg.rect(0, ti - 2, w, 2).fill({ color: COLORS.cardEdge });
-    this.hud.addChild(bg);
+    if (this.hudBgTex) {
+      const bg = new Sprite(this.hudBgTex);
+      bg.width = w;
+      bg.height = ti;
+      this.hud.addChild(bg);
+    } else {
+      const bg = new Graphics();
+      bg.rect(0, 0, w, ti).fill({ color: COLORS.hud, alpha: 0.96 });
+      this.hud.addChild(bg);
+    }
+    // нижняя линия-разделитель поверх фона
+    const edge = new Graphics();
+    edge.rect(0, ti - 2, w, 2).fill({ color: COLORS.cardEdge });
+    this.hud.addChild(edge);
 
     // адаптивные размеры под ширину экрана (один интерфейс для ПК и мобилы)
-    const fs = Math.round(Math.max(13, Math.min(18, ti * 0.3)));
+    const fs = Math.round(Math.max(15, Math.min(21, ti * 0.35)));
     const pad = Math.round(Math.max(8, Math.min(18, w * 0.014)));
     this.hudPad = pad;
     // ресурсы выкладываются в ряд по реальной ширине (см. updateHud), зазор — компактный
     this.hudGap = Math.round(Math.max(16, Math.min(30, w * 0.024)));
-    const mk = (color: number, size = fs): Text => {
-      const t = label('', size, color, '800');
+    const mk = (color: number, size = fs, strokeW = 1): Text => {
+      const t = new Text({
+        text: '',
+        style: {
+          fontFamily: "'Rubik', sans-serif", fontSize: size, fontWeight: '700', fill: color, align: 'center',
+          stroke: { color: 0x000000, width: strokeW, join: 'round' },
+        },
+      });
       t.anchor.set(0, 0.5);
       t.position.set(pad, ti / 2);
       this.hud.addChild(t);
       return t;
     };
     this.coinsT = mk(0xc9912a);
-    this.rateT = mk(0x4f9d63, Math.max(11, fs - 3)); // доход/мин — мельче и зелёный
+    this.rateT = mk(0x4f9d63, Math.max(11, fs - 3));
     this.crystalsT = mk(0x3a93c9);
     this.dnaT = mk(0x7a4fd0);
-    this.levelT = mk(COLORS.ink);
+    this.levelT = mk(COLORS.ink, fs);
 
     const bh = Math.round(ti * 0.72);
     const helpW = Math.round(ti * 0.92);
@@ -830,6 +891,11 @@ export class Game implements UiContext {
         g.glow.rotation = v.rotation;
       }
       this.carryEdgeScroll(dt); // у края экрана — переносим кота в соседнюю комнату
+
+      // подсветка переноски в приюте, когда тащим кота над комнатой
+      this.updateAdoptGlow(true, g.t);
+    } else {
+      this.updateAdoptGlow(false);
     }
 
     // таймеры/анимация текущей комнаты

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>+10 новых шрифтов для топ-бара</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;700&family=Jost:wght@400;700&family=Mali:wght@400;700&family=Cabin:wght@400;700&family=Heebo:wght@400;700&family=Asap:wght@400;700&family=Karla:wght@400;700&family=Exo+2:wght@400;700&family=Barlow:wght@400;700&family=Work+Sans:wght@400;700&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#1e1e1e; color:#eee; font:14px sans-serif; padding:16px; }
+h1 { text-align:center; margin-bottom:4px; font-size:22px; }
+.sub { text-align:center; margin-bottom:16px; color:#999; font-size:13px; }
+.card { background:#2a2a2a; border-radius:10px; margin-bottom:12px; padding:14px 18px; }
+.card h3 { font-size:15px; margin-bottom:8px; display:flex; gap:10px; align-items:center; }
+.card h3 span { font-size:12px; color:#888; font-weight:400; }
+.row { display:flex; flex-wrap:wrap; gap:8px 14px; padding:5px 0 8px; border-top:1px solid #3a3a3a; align-items:center; }
+.row:first-of-type { border-top:none; }
+.stroke-label { width:36px; font-size:12px; color:#888; flex-shrink:0; text-align:right; padding-right:6px; }
+.sample { white-space:nowrap; font-weight:700; font-size:20px; height:32px; line-height:32px;
+  padding:0 10px; border-radius:6px; background:url('hudbar.png') center/cover;
+  text-shadow: 0 0 6px rgba(0,0,0,0.5); }
+.sample-lg { white-space:nowrap; font-weight:700; font-size:17px; height:38px; line-height:38px;
+  padding:0 14px; border-radius:6px; background:url('hudbar.png') center/cover;
+  text-shadow: 0 0 6px rgba(0,0,0,0.5); }
+.tip { text-align:center; color:#777; font-size:12px; margin-top:20px; max-width:700px; margin-left:auto; margin-right:auto; }
+.switch { text-align:center; margin-bottom:16px; }
+.switch a { color:#7bbf86; text-decoration:none; font-size:14px; }
+.switch a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+<h1>➕ Ещё 10 шрифтов на пробу</h1>
+<div class="sub">новые кандидаты, все есть в @fontsource + есть bold (700)</div>
+<div class="switch"><a href="font-preview.html">← Обычные</a> · <a href="font-preview-cute.html">🧶 Милые</a></div>
+
+<div id="app"></div>
+<div class="tip">
+  💡 Все эти шрифты есть в <b>@fontsource</b> — подключу через npm + base64 за 2 минуты<br>
+  ⚡ <b>Comfortaa</b> / <b>Jost</b> / <b>Work Sans</b> — самые rounded из десятки<br>
+  ✍️ <b>Mali</b> — единственный handwritten, но аккуратный
+</div>
+<script>
+const COLORS = {
+  coins: '#c9912a', crystals: '#3a93c9', dna: '#7a4fd0', rate: '#4f9d63', level: '#5a4a42',
+};
+const FONTS = [
+  { name: 'Comfortaa', family: "'Comfortaa', sans-serif", desc: 'очень округлый, мягкий' },
+  { name: 'Jost', family: "'Jost', sans-serif", desc: 'современный rounded гротеск' },
+  { name: 'Mali', family: "'Mali', cursive", desc: 'рукописный, но аккуратный' },
+  { name: 'Cabin', family: "'Cabin', sans-serif", desc: 'скруглённый, чистый' },
+  { name: 'Heebo', family: "'Heebo', sans-serif", desc: 'округлый гротеск' },
+  { name: 'Asap', family: "'Asap', sans-serif", desc: 'ровный, компактный' },
+  { name: 'Karla', family: "'Karla', sans-serif", desc: 'мягкий, дружелюбный' },
+  { name: 'Exo 2', family: "'Exo 2', sans-serif", desc: 'полу-rounded, современный' },
+  { name: 'Barlow', family: "'Barlow', sans-serif", desc: 'пропорциональный, чистый' },
+  { name: 'Work Sans', family: "'Work Sans', sans-serif", desc: 'геометричный rounded' },
+];
+const STROKES = [{w:1,label:'1px'},{w:1.5,label:'1.5px'},{w:2.5,label:'2.5px'}];
+const SAMPLES = [
+  {text:'💰 12 450',color:COLORS.coins},{text:'💎 680',color:COLORS.crystals},
+  {text:'🧬 2 140',color:COLORS.dna},{text:'+45/мин',color:COLORS.rate},{text:'⭐ Ур. 7',color:COLORS.level},
+];
+const ALL = '💰 12 450  💎 680  🧬 2 140  +45/мин  ⭐ Ур. 7';
+function renderSamples(family) {
+  let html = '';
+  for (const sw of STROKES) {
+    html += `<div class="row"><div class="stroke-label">${sw.label}</div>`;
+    for (const s of SAMPLES) { html += `<div class="sample" style="font-family:${family};-webkit-text-stroke:${sw.w}px black;color:${s.color}">${s.text}</div>`; }
+    html += `</div>`;
+  }
+  html += `<div class="row" style="border-top:2px solid #4a4a4a;padding-top:8px;margin-top:4px">
+    <div class="stroke-label" style="width:auto;padding-right:8px">1.5px<br>все</div>
+    <div class="sample-lg" style="font-family:${family};-webkit-text-stroke:1.5px black;color:${COLORS.coins}">${ALL}</div>
+  </div>`;
+  return html;
+}
+document.getElementById('app').innerHTML = FONTS.map(f =>
+  `<div class="card"><h3>${f.name} <span>${f.desc}</span></h3>${renderSamples(f.family)}</div>`
+).join('');
+</script>
+</body>
+</html>

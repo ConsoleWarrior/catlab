@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>Милыe шрифты для топ-бара</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;700&family=Baloo+2:wght@500;800&family=Quicksand:wght@500;700&family=Varela+Round&family=M+PLUS+Rounded+1c:wght@500;800&family=Bubblegum+Sans&family=Patrick+Hand&family=Itim&family=Comic+Neue:wght@400;700&family=Happy+Monkey&family=Short+Stack&family=Sniglet:wght@400;800&display=swap" rel="stylesheet">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#1e1e1e; color:#eee; font:14px sans-serif; padding:16px; }
+h1 { text-align:center; margin-bottom:4px; font-size:22px; }
+.sub { text-align:center; margin-bottom:16px; color:#999; font-size:13px; }
+.card { background:#2a2a2a; border-radius:10px; margin-bottom:12px; padding:14px 18px; }
+.card h3 { font-size:15px; margin-bottom:8px; display:flex; gap:10px; align-items:center; }
+.card h3 span { font-size:12px; color:#888; font-weight:400; }
+.row { display:flex; flex-wrap:wrap; gap:8px 14px; padding:5px 0 8px; border-top:1px solid #3a3a3a; align-items:center; }
+.row:first-of-type { border-top:none; }
+.stroke-label { width:36px; font-size:12px; color:#888; flex-shrink:0; text-align:right; padding-right:6px; }
+.sample { white-space:nowrap; font-weight:800; font-size:20px; height:32px; line-height:32px;
+  padding:0 10px; border-radius:6px; background:url('hudbar.png') center/cover;
+  text-shadow: 0 0 6px rgba(0,0,0,0.5); }
+.sample-lg { white-space:nowrap; font-weight:800; font-size:17px; height:38px; line-height:38px;
+  padding:0 14px; border-radius:6px; background:url('hudbar.png') center/cover;
+  text-shadow: 0 0 6px rgba(0,0,0,0.5); }
+.tip { text-align:center; color:#777; font-size:12px; margin-top:20px; max-width:700px; margin-left:auto; margin-right:auto; }
+.switch { text-align:center; margin-bottom:16px; }
+.switch a { color:#7bbf86; text-decoration:none; font-size:14px; }
+.switch a:hover { text-decoration:underline; }
+</style>
+</head>
+<body>
+<h1>🧶 Милые / игривые шрифты</h1>
+<div class="sub">для игры про котиков &nbsp;|&nbsp; на фоне hudbar.png</div>
+<div class="switch"><a href="font-preview.html">← Обычные шрифты</a></div>
+
+<div id="app"></div>
+<div class="tip">
+  🎯 <b>Fredoka</b> / <b>Baloo 2</b> / <b>M PLUS Rounded 1c</b> — округлые, очень милые<br>
+  ✍️ <b>Patrick Hand</b> / <b>Itim</b> / <b>Comic Neue</b> — как от руки, тёплые<br>
+  💡 Обводка <b>1px</b> почти не слипается, но всё ещё читается на текстуре<br>
+  ↔️ <b>Varela Round</b> / <b>Quicksand</b> — мягкий гротеск, баланс милоты и читаемости
+</div>
+<script>
+const COLORS = {
+  coins: '#c9912a', crystals: '#3a93c9', dna: '#7a4fd0', rate: '#4f9d63', level: '#5a4a42',
+};
+const FONTS = [
+  { name: 'Fredoka', family: "'Fredoka', sans-serif", desc: 'очень округлый, дружелюбный' },
+  { name: 'Baloo 2', family: "'Baloo 2', cursive", desc: 'игривый, пухлый' },
+  { name: 'M PLUS Rounded 1c', family: "'M PLUS Rounded 1c', sans-serif", desc: 'японский rounded гротеск' },
+  { name: 'Varela Round', family: "'Varela Round', sans-serif", desc: 'круглый, чистый, мягкий' },
+  { name: 'Quicksand', family: "'Quicksand', sans-serif", desc: 'мягкий гротеск, аккуратный' },
+  { name: 'Bubblegum Sans', family: "'Bubblegum Sans', cursive", desc: 'игривый, комикс-стайл' },
+  { name: 'Comic Neue', family: "'Comic Neue', cursive", desc: 'современный comic, читаемый' },
+  { name: 'Patrick Hand', family: "'Patrick Hand', cursive", desc: 'рукописный, тёплый' },
+  { name: 'Itim', family: "'Itim', cursive", desc: 'рукописный, спокойный' },
+  { name: 'Short Stack', family: "'Short Stack', cursive", desc: 'детский, круглый' },
+  { name: 'Sniglet', family: "'Sniglet', sans-serif", desc: 'округлый, слегка необычный' },
+  { name: 'Happy Monkey', family: "'Happy Monkey', cursive", desc: 'игривый, весёлый' },
+];
+const STROKES = [{w:1,label:'1px'},{w:1.5,label:'1.5px'},{w:2.5,label:'2.5px'}];
+const SAMPLES = [
+  {text:'💰 12 450',color:COLORS.coins},{text:'💎 680',color:COLORS.crystals},
+  {text:'🧬 2 140',color:COLORS.dna},{text:'+45/мин',color:COLORS.rate},{text:'⭐ Ур. 7',color:COLORS.level},
+];
+const ALL = '💰 12 450  💎 680  🧬 2 140  +45/мин  ⭐ Ур. 7';
+function renderSamples(family) {
+  let html = '';
+  for (const sw of STROKES) {
+    html += `<div class="row"><div class="stroke-label">${sw.label}</div>`;
+    for (const s of SAMPLES) { html += `<div class="sample" style="font-family:${family};-webkit-text-stroke:${sw.w}px black;color:${s.color}">${s.text}</div>`; }
+    html += `</div>`;
+  }
+  html += `<div class="row" style="border-top:2px solid #4a4a4a;padding-top:8px;margin-top:4px">
+    <div class="stroke-label" style="width:auto;padding-right:8px">1.5px<br>все</div>
+    <div class="sample-lg" style="font-family:${family};-webkit-text-stroke:1.5px black;color:${COLORS.coins}">${ALL}</div>
+  </div>`;
+  return html;
+}
+document.getElementById('app').innerHTML = FONTS.map(f =>
+  `<div class="card"><h3>${f.name} <span>${f.desc}</span></h3>${renderSamples(f.family)}</div>`
+).join('');
+</script>
+</body>
+</html>

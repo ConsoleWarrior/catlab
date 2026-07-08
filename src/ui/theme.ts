@@ -141,7 +141,8 @@ export class Button extends Container {
   private redraw(): void {
     this.bg.clear();
     this.bg.roundRect(-this.w / 2, -this.h / 2, this.w, this.h, 12)
-      .fill({ color: this.color, alpha: this._enabled ? 1 : 0.35 });
+      .fill({ color: this.color, alpha: this._enabled ? 1 : 0.35 })
+      .stroke({ width: 2, color: COLORS.cardEdge, alpha: 0.85 });
     this.txt.alpha = this._enabled ? 1 : 0.55;
   }
 
