@@ -36,6 +36,23 @@ import {
 
 const SAVE_KEY = 'catlab:save:v1';
 
+// --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
+// Сцена всегда DESIGN_H виртуальных пикселей в высоту; ширина = высота × аспект
+// окна, зажатый в допустимый диапазон. Канвас занимает всё окно, а корневой
+// контейнер (root) равномерно масштабируется и центрируется: при ресайзе окна
+// вся картинка растёт/уменьшается пропорционально (п. 1.6.2.3), игровое поле
+// касается краёв окна хотя бы по одной оси (п. 1.6.2.1), остаток — леттербокс
+// цвета фона. Весь UI продолжает считать раскладку от roomW×roomH — но теперь
+// это стабильные виртуальные размеры, а не пиксели окна.
+const DESIGN_H = 720;
+// уже 4:3 не сжимаемся (полосы сверху/снизу) — напр. портрет на мобиле, где
+// платформа при одной поддерживаемой ориентации сама показывает заглушку
+const MIN_ASPECT = 4 / 3;
+// на десктопе длинная сторона поля не более чем вдвое больше короткой
+// (п. 1.6.2.2); на телефонах лимита нет (п. 1.6.1 — полный экран), поэтому на
+// тач-устройствах заполняем экран целиком (современные телефоны ≤ ~2.4:1)
+const MAX_ASPECT = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 2.5 : 2;
+
 export class Game implements UiContext {
   readonly app = new Application();
   state!: GameState;
@@ -46,11 +63,23 @@ export class Game implements UiContext {
   selection: string[] = [];
   private freshGame = false;
 
+  // Корень сцены — единственный узел, который масштабируется под окно (см.
+  // fitRoot). Всё игровое UI живёт внутри него в виртуальных координатах.
+  private readonly root = new Container();
+  // Маска по границе игрового поля: без неё в полосах леттербокса просвечивают
+  // соседние комнаты (лента world шире одной комнаты). Перерисовывается в layout().
+  private readonly rootMask = new Graphics();
+  private relayoutTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly world = new Container();
   private readonly hud = new Container();
   private readonly nav = new Container();
   private readonly dragLayer = new Container();
   private readonly overlayLayer = new Container();
+  // текущий открытый оверлей (для перекладки под новый размер экрана при ресайзе,
+  // см. layout()) — иначе после ресайза окна панель остаётся старого размера/
+  // позиции и «уезжает» от центра или обрезается краем экрана.
+  private overlayDim: Graphics | null = null;
+  private overlayContent: Container | null = null;
   private readonly toastBox = new Container();
   private rooms: Room[] = [];
   private currentRoom = 0;
@@ -172,7 +201,9 @@ export class Game implements UiContext {
     }
 
     this.app.stage.eventMode = 'static';
-    this.app.stage.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox);
+    this.app.stage.addChild(this.root);
+    this.root.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox, this.rootMask);
+    this.root.mask = this.rootMask;
     // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер
     // (по центру внизу, roomW/2 × roomH-56) своими границами перехватывал хит-тест и
     // не пускал тапы к кнопкам под ним — это и был баг «кнопки над навигацией не
@@ -328,7 +359,7 @@ export class Game implements UiContext {
       opts: { cat, displayH: 130, hide: () => {}, show: () => {}, onTap: () => {}, onDrop: () => {} },
       sx: cx, sy: cy,
     };
-    this.beginGrab({ global: { x: cx, y: cy } } as FederatedPointerEvent);
+    this.beginGrab(cx, cy);
     if (this.grab) { this.grab.x = cx; this.grab.y = cy - 30; }
   }
 
@@ -394,6 +425,8 @@ export class Game implements UiContext {
 
   catTexture(cat: Cat): Texture { return catTexture(this.app, cat); }
 
+  get uiRoot(): Container { return this.root; }
+
   toggleSelect(catId: string): void {
     const i = this.selection.indexOf(catId);
     if (i >= 0) { this.selection.splice(i, 1); return; }
@@ -452,14 +485,15 @@ export class Game implements UiContext {
 
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void {
     if (this.overlayOpen) return;
-    this.pendingGrab = { opts, sx: e.global.x, sy: e.global.y };
+    const p = this.root.toLocal(e.global); // окно → виртуальные координаты сцены
+    this.pendingGrab = { opts, sx: p.x, sy: p.y };
   }
 
-  private beginGrab(e: FederatedPointerEvent): void {
+  /** Начать вис кота «в руках»; gx/gy — виртуальные координаты сцены (root). */
+  private beginGrab(gx: number, gy: number): void {
     if (!this.pendingGrab) return;
     const opts = this.pendingGrab.opts;
     opts.hide();
-    const gx = e.global.x, gy = e.global.y;
     // «в руках»: спрайт породы (та же текстура, что на полу), иначе процедурный
     let sprite: Container = aiHeldSpriteFor(opts.cat, opts.displayH) ?? (() => {
       const proc = buildCat(expressPhenotype(opts.cat.genotype), 'hang', opts.cat.genotype.sex);
@@ -584,16 +618,63 @@ export class Game implements UiContext {
     if (this.app.screen.width !== w || this.app.screen.height !== h) {
       this.app.renderer.resize(w, h);
     }
-    this.layout();
+    // события ловим на всём окне (включая поля леттербокса)
+    this.app.stage.hitArea = new Rectangle(0, 0, w, h);
+
+    const aspect = Math.min(MAX_ASPECT, Math.max(MIN_ASPECT, w / h));
+    const vw = Math.round(DESIGN_H * aspect);
+    if (this.relayoutTimer) { clearTimeout(this.relayoutTimer); this.relayoutTimer = null; }
+    if (this.roomW === 0) {
+      // первый запуск — собираем сцену сразу
+      this.roomW = vw;
+      this.roomH = DESIGN_H;
+      this.layout();
+    } else if (vw !== this.roomW) {
+      // живой ресайз: пока окно тянут, картинка лишь равномерно масштабируется
+      // (fitRoot ниже) — пропорции не меняются. Пересборку под новую виртуальную
+      // ширину делаем один раз, когда размер устаканился: иначе комнаты
+      // пересоздаются десятки раз за жест и содержимое «прыгает».
+      this.relayoutTimer = setTimeout(() => {
+        this.relayoutTimer = null;
+        this.roomW = vw;
+        this.layout();
+        this.fitRoot();
+      }, 180);
+    }
+    this.fitRoot();
+  }
+
+  /** Равномерный масштаб + центрирование виртуальной сцены в реальном окне. */
+  private fitRoot(): void {
+    const w = this.app.screen.width;
+    const h = this.app.screen.height;
+    const s = Math.min(w / this.roomW, h / this.roomH);
+    this.root.scale.set(s);
+    this.root.position.set(Math.round((w - this.roomW * s) / 2), Math.round((h - this.roomH * s) / 2));
   }
 
   private layout(): void {
-    this.roomW = this.app.screen.width;
-    this.roomH = this.app.screen.height;
     this.topInset = Math.round(Math.max(48, Math.min(64, this.roomH * 0.085)));
-    this.app.stage.hitArea = new Rectangle(0, 0, this.roomW, this.roomH);
+    this.rootMask.clear();
+    this.rootMask.rect(0, 0, this.roomW, this.roomH).fill(0xffffff);
 
-    // пересобираем комнаты под новый размер
+    // комнаты сейчас пересоздадутся — прерываем перетаскивание кота, если шло:
+    // его hide/show-колбэки указывают в старое, уничтожаемое дерево
+    if (this.grab) {
+      this.grab.glow?.destroy();
+      this.grab.sprite.destroy({ children: true });
+      this.grab = null;
+      this.app.canvas.style.cursor = 'default';
+    }
+    this.pendingGrab = null;
+
+    // пересобираем комнаты под новый размер. adoptGlow — общий Game-объект,
+    // который updateAdoptGlow() временно подвешивает в контейнер комнаты
+    // «Приют»; открепляем его до destroy({children:true}), иначе он уничтожится
+    // вместе с комнатой и следующий clear() на мёртвой Graphics уронит весь
+    // тикер (после чего канвас просто перестаёт перерисовываться — снаружи это
+    // выглядит как «геометрия всего съехала» при ресайзе окна).
+    this.adoptGlow.removeFromParent();
     for (const r of this.rooms) r.container.destroy({ children: true });
     this.world.removeChildren();
     this.rooms = [
@@ -617,6 +698,7 @@ export class Game implements UiContext {
     this.world.x = this.targetX;
     this.updateHud();
     this.updateNav();
+    this.fitOverlay(); // открытая панель (если есть) — под новый размер экрана
   }
 
   private buildHud(): void {
@@ -780,23 +862,39 @@ export class Game implements UiContext {
   private showOverlay(content: Container): void {
     this.closeOverlay();
     const dim = new Graphics();
-    dim.rect(0, 0, this.roomW, this.roomH).fill({ color: COLORS.overlay, alpha: 0.5 });
     dim.eventMode = 'static';
     dim.on('pointertap', () => this.closeOverlay());
 
-    // вписываем панель в экран (на узких мобильных — уменьшаем)
+    this.overlayDim = dim;
+    this.overlayContent = content;
+    this.overlayLayer.addChild(dim, content);
+    this.fitOverlay();
+  }
+
+  /** Вписывает текущий оверлей (dim + панель) в актуальные roomW/roomH — при
+   * первом показе и заново при каждом ресайзе окна (см. layout()), иначе после
+   * ресайза панель остаётся старого размера и «уезжает» от центра экрана. */
+  private fitOverlay(): void {
+    const { overlayDim: dim, overlayContent: content } = this;
+    if (!dim || !content) return;
+    dim.clear();
+    dim.rect(0, 0, this.roomW, this.roomH).fill({ color: COLORS.overlay, alpha: 0.5 });
+
+    // вписываем панель в экран (на узких мобильных — уменьшаем); меряем от
+    // немасштабированного размера, чтобы повторный вызов не накапливал сжатие
+    content.scale.set(1);
     const margin = 12;
     let s = 1;
     if (content.height > this.roomH - margin * 2) s = Math.min(s, (this.roomH - margin * 2) / content.height);
     if (content.width > this.roomW - margin * 2) s = Math.min(s, (this.roomW - margin * 2) / content.width);
     content.scale.set(s);
     content.position.set((this.roomW - content.width) / 2, (this.roomH - content.height) / 2);
-
-    this.overlayLayer.addChild(dim, content);
   }
 
   private closeOverlay(): void {
     this.overlayLayer.removeChildren();
+    this.overlayDim = null;
+    this.overlayContent = null;
   }
 
   private get overlayOpen(): boolean { return this.overlayLayer.children.length > 0; }
@@ -811,23 +909,25 @@ export class Game implements UiContext {
       this.pointerActive = true;
       this.dragging = false;
       this.axisLock = 'none';
-      this.startPx = e.global.x;
-      this.startPy = e.global.y;
+      const p = this.root.toLocal(e.global); // окно → виртуальные координаты сцены
+      this.startPx = p.x;
+      this.startPy = p.y;
       this.startWorldX = this.world.x;
     });
     this.app.stage.on('pointermove', (e: FederatedPointerEvent) => {
       if (this.overlayOpen) return;
+      const p = this.root.toLocal(e.global); // окно → виртуальные координаты сцены
       // взятие котика за шкирку (приоритетнее свайпа)
       if (this.pendingGrab && !this.grab) {
-        const dx = e.global.x - this.pendingGrab.sx;
-        const dy = e.global.y - this.pendingGrab.sy;
-        if (dx * dx + dy * dy > 64) this.beginGrab(e);
+        const dx = p.x - this.pendingGrab.sx;
+        const dy = p.y - this.pendingGrab.sy;
+        if (dx * dx + dy * dy > 64) this.beginGrab(p.x, p.y);
       }
-      if (this.grab) { this.grab.x = e.global.x; this.grab.y = e.global.y; return; }
+      if (this.grab) { this.grab.x = p.x; this.grab.y = p.y; return; }
       // свайп комнат
       if (!this.pointerActive) return;
-      const sdx = e.global.x - this.startPx;
-      const sdy = e.global.y - this.startPy;
+      const sdx = p.x - this.startPx;
+      const sdy = p.y - this.startPy;
       // выбираем ось по первому заметному движению: преобладание X — свайп комнат,
       // преобладание Y — отдаём жест вертикальной прокрутке контента комнаты.
       if (this.axisLock === 'none' && (Math.abs(sdx) > 8 || Math.abs(sdy) > 8)) {

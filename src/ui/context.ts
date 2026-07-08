@@ -14,7 +14,7 @@ export interface GrabOpts {
   hide(): void;              // спрятать наземного котика на время виса
   show(): void;              // вернуть котика
   onTap(): void;             // тап без перетаскивания → меню кота
-  onDrop(globalX: number, globalY?: number): void; // отпустили → приземлить (X + глубина по Y)
+  onDrop(sceneX: number, sceneY?: number): void; // отпустили → приземлить (X + глубина по Y); коорд. виртуальной сцены (uiRoot)
 }
 
 export interface Room {
@@ -28,14 +28,23 @@ export interface Room {
   /** (Генолаб) переключить активную под-секцию — навигация/DEV. */
   setSection?(id: string): void;
   /**
-   * Уронили перетаскиваемого кота в этой комнате (глобальные экранные коорд.).
+   * Уронили перетаскиваемого кота в этой комнате (координаты виртуальной
+   * сцены — см. UiContext.uiRoot; НЕ пиксели окна: сцена масштабируется).
    * Вернуть true, если кот пристроен (состояние изменилось) — иначе он вернётся назад.
    */
-  tryDropCat?(cat: Cat, globalX: number, globalY: number): boolean;
+  tryDropCat?(cat: Cat, sceneX: number, sceneY: number): boolean;
 }
 
 export interface UiContext {
   readonly app: Application;
+  /**
+   * Корень виртуальной сцены. Окно и сцена — разные системы координат: сцена
+   * равномерно масштабируется под окно (фикс. виртуальная высота + леттербокс).
+   * Все координаты в контрактах UI (tryDropCat, onDrop) — в системе uiRoot;
+   * из событий их получают как `uiRoot.toLocal(e.global)`, а в локальные
+   * координаты контейнера — `container.toLocal(point, uiRoot)`.
+   */
+  readonly uiRoot: Container;
   /** Живое состояние (Game может заменить ссылку при загрузке/сбросе). */
   readonly state: GameState;
   readonly rng: Rng;

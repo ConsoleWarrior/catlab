@@ -45,7 +45,11 @@ export function createShelter(ctx: UiContext): Room {
   /** Уронили кота на переноску → подтверждение пристройства. Иначе — обычный переезд. */
   function tryDropCat(cat: Cat, gx: number, gy: number): boolean {
     const zone = decorZone('shelter', 'adopt', ctx.roomW, ctx.roomH);
-    if (!zone || !zone.contains(gx, gy)) return false;
+    if (!zone) return false;
+    // gx/gy — координаты виртуальной сцены; зона — в локальных координатах
+    // комнаты (комнаты сдвинуты внутри world на i·roomW) — переводим точку
+    const lp = shell.container.toLocal({ x: gx, y: gy }, ctx.uiRoot);
+    if (!zone.contains(lp.x, lp.y)) return false;
     ctx.commit();                 // grab-спрайт уже уничтожен — вернём наземного кота на пол
     ctx.openAdoptConfirm(cat);     // «Отдать котика в добрые руки?» (Да → adoptCat)
     return true;

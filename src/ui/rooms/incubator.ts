@@ -752,9 +752,12 @@ export function createIncubator(ctx: UiContext): Room {
 
   /** Кота уронили в инкубаторе: ищем слот под точкой и ставим кота в вязку. */
   function tryDropCat(cat: Cat, gx: number, gy: number): boolean {
+    // точка приходит в координатах виртуальной сцены, а getBounds() карточек —
+    // глобальные (пиксели окна); переводим точку в глобальные и сравниваем там
+    const p = ctx.uiRoot.toGlobal({ x: gx, y: gy });
     for (const ls of live) {
       const b = ls.card.getBounds();
-      if (gx >= b.minX && gx <= b.maxX && gy >= b.minY && gy <= b.maxY) {
+      if (p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY) {
         const r = assignBreeder(ctx.state, ls.index, cat.id, ctx.now());
         if (!r.ok) { ctx.toast(r.reason); return false; }
         ctx.commit();

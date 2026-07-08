@@ -42,6 +42,12 @@ interface GrowFx { view: Container; sparks: Text[]; ring: Graphics; life: number
 const SPEED = 64;       // px/с по горизонтали (у ближнего края; вдали медленнее)
 const Z_SPEED = 0.18;   // доля глубины в секунду (медленный дрейф «вглубь/наружу»)
 
+// Память поз котов между пересборками комнат (ресайз окна пересоздаёт «живой
+// пол» целиком). Смещение по X храним нормированным (u = ox/maxOx ∈ [-1..1]),
+// чтобы оно переносилось на другой размер комнаты. Без этого каждый ресайз
+// рассыпал котов по новым случайным местам.
+const posMemory = new Map<string, { u: number; z: number; facing: 1 | -1; phase: number }>();
+
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 export function createLivingFloor(
@@ -126,8 +132,9 @@ export function createLivingFloor(
       view.addChild(z);
     }
 
-    const z = savedZ ?? Math.random();
-    const ox = savedOx ?? (Math.random() * 2 - 1) * maxOx(z);
+    const mem = posMemory.get(cat.id);
+    const z = savedZ ?? mem?.z ?? Math.random();
+    const ox = savedOx ?? (mem ? mem.u * maxOx(z) : (Math.random() * 2 - 1) * maxOx(z));
     view.position.set(centerX + ox, yAt(z));
     view.scale.set(growthScale(cat, ctx.now()) * depthScale(z)); // котёнок мал + перспектива
     view.zIndex = Math.round(yAt(z));
@@ -136,8 +143,8 @@ export function createLivingFloor(
 
     const actor: Actor = {
       cat, view, sprite, glow, baseScale, busy, adult,
-      ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? 1,
-      phase: savedPhase ?? Math.random() * 6,
+      ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? mem?.facing ?? 1,
+      phase: savedPhase ?? mem?.phase ?? Math.random() * 6,
       nextWander: 0.5 + Math.random() * 2.5, walking: false,
     };
 
@@ -152,7 +159,9 @@ export function createLivingFloor(
         show: () => { view.visible = true; },
         onTap: () => ctx.openCatMenu(cat),
         onDrop: (gx, gy) => {
-          const lp = layer.toLocal({ x: gx, y: gy ?? yAt(actor.z) });
+          // gx/gy — координаты виртуальной сцены (uiRoot) → в систему слоя пола
+          const lp = layer.toLocal({ x: gx, y: gy ?? 0 }, ctx.uiRoot);
+          if (gy === undefined) lp.y = yAt(actor.z);
           // глубина из точки сброса по Y (вне диапазона — прижимаем к краю)
           const nz = Math.max(0, Math.min(1, (yNear - lp.y) / Math.max(1, yNear - yFar)));
           const m = maxOx(nz);
@@ -209,6 +218,8 @@ export function createLivingFloor(
       const ds = depthScale(a.z);
       a.view.scale.set(growthScale(a.cat, now) * ds); // котята подрастают + перспектива
       a.view.zIndex = Math.round(yAt(a.z));
+      // запоминаем позу — переживает пересборку комнаты при ресайзе окна
+      posMemory.set(a.cat.id, { u: a.ox / Math.max(1, maxOx(a.z)), z: a.z, facing: a.facing, phase: a.phase });
       // момент взросления: эффект + пересборка актёра (появятся имя/пол над головой)
       if (!a.adult && isAdult(a.cat, now)) {
         a.adult = true;

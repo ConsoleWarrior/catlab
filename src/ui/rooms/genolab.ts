@@ -22,6 +22,14 @@ import { CUR_GLYPH } from '../upgradeButton.js';
 
 type Section = 'codex' | 'research' | 'clone';
 
+// Активная секция и позиции скролла переживают пересборку комнаты (ресайз окна
+// пересоздаёт Генолаб целиком): без этого открытые «Исследования» слетали бы
+// обратно на Котодекс, а прокрутка — в начало, при каждом изменении окна.
+const remembered = {
+  section: 'codex' as Section,
+  scroll: { codex: 0, research: 0 } as Record<'codex' | 'research', number>,
+};
+
 /**
  * Многоуровневые апгрейды вкладки «Исследования»: иконка, отображаемое имя и
  * прибавка за уровень (для подписи в карточке). Имена здесь — локальные, чтобы не
@@ -75,9 +83,10 @@ function pillRow(segs: { text: string; size: number; color: number; weight: '400
 
 export function createGenolab(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'genolab', '🔬 Генолаб');
-  let section: Section = 'codex';
-  // вертикальный скролл по секциям (сохраняется между перерисовками; у каждой свой)
-  const scroll: Record<'codex' | 'research', number> = { codex: 0, research: 0 };
+  let section: Section = remembered.section;
+  // вертикальный скролл по секциям (сохраняется между перерисовками и
+  // пересборками комнаты — живёт в module-level `remembered`; у каждой свой)
+  const scroll = remembered.scroll;
   let suppressTap = false;  // был свайп-скролл — гасим случайную покупку по тапу
 
   function tabBar(): Container {
@@ -97,7 +106,7 @@ export function createGenolab(ctx: UiContext): Room {
         textColor: active ? 0xffffff : COLORS.ink, fontSize: 13,
       });
       b.position.set(bw / 2 + i * (bw + gap), 19);
-      b.onTap = () => { section = d.id; refresh(); };
+      b.onTap = () => { section = d.id; remembered.section = d.id; refresh(); };
       c.addChild(b);
     });
     return c;
@@ -321,15 +330,19 @@ export function createGenolab(ctx: UiContext): Room {
     const apply = (y: number): void => { store[key] = clamp(y); content.y = store[key]; drawThumb(); };
 
     let dragging = false, lastY = 0, startY = 0;
-    viewport.on('pointerdown', (e) => { dragging = true; lastY = e.global.y; startY = e.global.y; suppressTap = false; });
+    // e.global — пиксели окна, а контент живёт в виртуальных координатах сцены
+    // (она масштабируется под окно) — переводим позицию пальца в систему viewport,
+    // иначе скорость прокрутки расходится с пальцем на величину масштаба
+    viewport.on('pointerdown', (e) => { dragging = true; lastY = viewport.toLocal(e.global).y; startY = lastY; suppressTap = false; });
     viewport.on('globalpointermove', (e) => {
       if (!dragging) return;
-      const dy = e.global.y - lastY;
-      lastY = e.global.y;
+      const y = viewport.toLocal(e.global).y;
+      const dy = y - lastY;
+      lastY = y;
       if (ctx.gestureAxis === 'h') suppressTap = true;     // ушли в свайп комнат
       if (ctx.gestureAxis !== 'v') return;                 // не решено или горизонталь — не скроллим
       apply(store[key] + dy);
-      if (Math.abs(e.global.y - startY) > 6) suppressTap = true; // двинули — это скролл, не тап
+      if (Math.abs(y - startY) > 6) suppressTap = true;    // двинули — это скролл, не тап
     });
     const stop = (): void => { dragging = false; };
     viewport.on('pointerup', stop);
@@ -418,6 +431,6 @@ export function createGenolab(ctx: UiContext): Room {
 
   return {
     id: 'genolab', title: '🔬 Генолаб', container: shell.container, refresh,
-    setSection: (id: string) => { section = id as Section; refresh(); },
+    setSection: (id: string) => { section = id as Section; remembered.section = section; refresh(); },
   };
 }
