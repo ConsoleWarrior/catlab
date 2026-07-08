@@ -3,7 +3,8 @@
 export * from './types.js';
 export {
   SAVE_VERSION, TIER_VALUE, UPGRADES, GENES, BASE_GENES, levelForReputation,
-  ANALYZE_DNA_COST, BOOSTS, RESEARCH, MAX_BREEDS, PEDIGREE_TIER_BONUS, PEDIGREE_GEN_FALLOFF, PEDIGREE_DEPTH,
+  ANALYZE_DNA_COST, BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
+  HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH,
   NURSERY_CAP_STEP, SHELTER_CAP_STEP,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchEffectKind } from './config.js';
@@ -12,10 +13,14 @@ export {
   incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot,
   passiveRatePerMin, adoptReward, upgradeCost, upgradeMaxed, makeCatInstance,
   buyCatCost, growthScale, growthProgress, growthRemainingMs, isAdult, boostCharges,
-  activeBoosts, consumeBoosts, researchBonus, isOld, breedsLeft, pedigreeBonus,
+  activeBoosts, consumeBoosts, researchBonus, isOld, breedsLeft, heartsOf, isSterile,
 } from './economy.js';
 export { createInitialState, serialize, deserialize } from './state.js';
-export { buildPedigree, catAncestors, pedigreeDepth } from './pedigree.js';
+export { buildPedigree, catAncestors, pedigreeDepth, attachHiddenPedigree } from './pedigree.js';
+export {
+  relatedness, kinshipLevel, rollKittenHearts, buildBreedingContext,
+  ancestorGens, ancestorBreedList, isPureLine, KINSHIP_RU,
+} from './kinship.js';
 export { matchesOrder, generateOrder, refillOrders } from './orders.js';
 export {
   collectIncome, startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,

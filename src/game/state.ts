@@ -5,8 +5,9 @@
 import { randomCat } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { GameState } from './types.js';
-import { BASE_GENES, SAVE_VERSION } from './config.js';
+import { BASE_GENES, MAX_HEARTS, SAVE_VERSION } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
+import { attachHiddenPedigree } from './pedigree.js';
 import { refillOrders } from './orders.js';
 
 /** Новое состояние новой игры: стартовая пара котов, 1 слот, базовые гены, заказы. */
@@ -30,9 +31,12 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastSeenAt: now,
     nextId: 1,
   };
-  // стартовая пара для первой вязки
-  state.cats.push(makeCatInstance(state, randomCat(rng, 'female'), now, 'nursery'));
-  state.cats.push(makeCatInstance(state, randomCat(rng, 'male'), now, 'nursery'));
+  // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
+  for (const sex of ['female', 'male'] as const) {
+    const cat = makeCatInstance(state, randomCat(rng, sex), now, 'nursery');
+    attachHiddenPedigree(state, cat, rng);
+    state.cats.push(cat);
+  }
   refillOrders(state, rng, now, 3);
   return state;
 }
@@ -41,16 +45,20 @@ export function serialize(state: GameState): string {
   return JSON.stringify(state);
 }
 
-/** Восстанавливает состояние из сейва (заглушка миграций по version). */
+/**
+ * Восстанавливает состояние из сейва. Сейвы прежних версий сбрасываются на
+ * стороне загрузчика (game.ts сверяет version с SAVE_VERSION) — v5 сломал
+ * совместимость: id в родословных, maxHearts, рецепты пород.
+ */
 export function deserialize(json: string): GameState {
   const data = JSON.parse(json) as GameState;
   // мягкие дефолты для полей, добавленных в новых версиях
   if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
   if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
   if (!Array.isArray(data.research)) data.research = [];
-  // v4: счётчик вязок — у старых котов считаем «молодыми» (0)
   for (const cat of data.cats) {
     if (typeof cat.breedCount !== 'number') cat.breedCount = 0;
+    if (typeof cat.maxHearts !== 'number') cat.maxHearts = MAX_HEARTS;
   }
   // «оставленный с роднёй» малыш в слоте — поле добавлено позже, у старых сейвов его нет
   for (const slot of data.slots) {

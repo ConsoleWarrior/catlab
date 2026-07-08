@@ -3,7 +3,7 @@ import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, nurseryCapacity, shelterCapacity, incubationDuration,
   mutationRate, offlineCapMin, upgradeCost, upgradeMaxed, passiveRatePerMin,
-  adoptReward, pedigreeBonus, isOld, breedsLeft,
+  adoptReward, isOld, breedsLeft, isSterile, heartsOf,
 } from './index.js';
 import * as C from './config.js';
 
@@ -110,42 +110,32 @@ describe('доход и пристройство', () => {
   });
 });
 
-describe('родословная и возраст', () => {
-  it('бонус родословной = сумма по тиру (цвету) родителей кота', () => {
-    const s = createInitialState(makeRng(40), 0);
-    const cat = s.cats[0]!;
-    expect(pedigreeBonus(cat)).toBe(0); // купленный/стартовый — без родословной
-    cat.motherBreed = 'abyssinian'; // rare (синий)
-    cat.fatherBreed = 'sphynx';     // epic (фиолетовый)
-    expect(pedigreeBonus(cat)).toBeCloseTo(C.PEDIGREE_TIER_BONUS.rare + C.PEDIGREE_TIER_BONUS.epic);
-  });
-
-  it('каждое поколение вглубь вдвое слабее (родители ×1, деды ×0.5, прадеды ×0.25)', () => {
-    const s = createInitialState(makeRng(41), 0);
-    const cat = s.cats[0]!;
-    cat.pedigree = {
-      mother: { breed: 'persian' },              // uncommon 0.01, gen1 → 0.01
-      father: {
-        breed: 'abyssinian',                     // rare 0.02, gen1 → 0.02
-        mother: { breed: 'sphynx' },             // epic 0.03, gen2 → 0.015
-        father: {
-          breed: 'bengal',                       // legendary 0.04, gen2 → 0.02
-          mother: { breed: 'bengal' },           // legendary 0.04, gen3 → 0.01
-        },
-      },
-    };
-    // 0.01 + 0.02 + 0.015 + 0.02 + 0.01 = 0.075
-    expect(pedigreeBonus(cat)).toBeCloseTo(0.075);
-  });
-
-  it('isOld / breedsLeft по лимиту вязок', () => {
+describe('здоровье (сердца) и возраст', () => {
+  it('isOld / breedsLeft по запасу сердец', () => {
     const s = createInitialState(makeRng(42), 0);
     const cat = s.cats[0]!;
-    expect(breedsLeft(cat)).toBe(C.MAX_BREEDS);
+    expect(heartsOf(cat)).toBe(C.MAX_HEARTS);
+    expect(breedsLeft(cat)).toBe(C.MAX_HEARTS);
     expect(isOld(cat)).toBe(false);
-    cat.breedCount = C.MAX_BREEDS;
+    cat.breedCount = C.MAX_HEARTS;
     expect(breedsLeft(cat)).toBe(0);
     expect(isOld(cat)).toBe(true);
+  });
+
+  it('инбридинговый котёнок с урезанными сердцами стареет раньше; 0 — «Бесплодный»', () => {
+    const s = createInitialState(makeRng(43), 0);
+    const cat = s.cats[0]!;
+    cat.maxHearts = 1; // дефект: одно сердце со старта
+    expect(breedsLeft(cat)).toBe(1);
+    expect(isSterile(cat)).toBe(false);
+    cat.breedCount = 1;
+    expect(isOld(cat)).toBe(true);
+
+    const dud = s.cats[1]!;
+    dud.maxHearts = 0; // родословный тупик
+    expect(isSterile(dud)).toBe(true);
+    expect(isOld(dud)).toBe(true);
+    expect(breedsLeft(dud)).toBe(0);
   });
 });
 

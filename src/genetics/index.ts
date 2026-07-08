@@ -13,6 +13,11 @@ export {
 } from './factory.js';
 export {
   BREEDS, PEDIGREE_BREEDS, BREED_BY_KEY, BREEDS_BY_TIER, TIER_LEVEL, LEVEL_TIER,
-  tierOfBreed, breedName, isBaseBreed, breedKitten,
+  tierOfBreed, breedName, isBaseBreed,
 } from './catalog.js';
 export type { BreedDef, BreedKind, BreedBoosts } from './catalog.js';
+export {
+  RECIPES, recipesFor, isPedigreeRecipe, pairMatches, recipeMatches, recipeChance,
+  resolveBreeding, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
+} from './recipes.js';
+export type { Recipe, SideSpec, BreedSide, BreedingContext, KinshipLevel } from './recipes.js';

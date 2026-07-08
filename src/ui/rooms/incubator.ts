@@ -17,6 +17,7 @@ import {
   startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, growthScale,
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
   buyUpgrade, upgradeCost, upgradeMaxed,
+  kinshipLevel, KINSHIP_RU,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
@@ -487,6 +488,15 @@ export function createIncubator(ctx: UiContext): Room {
       const father = dadCat;
       const ok = !!mother && !!father;
       if (ok) {
+        // предупреждение об инбридинге: пара — родственники (шанс редких
+        // родословных рецептов выше, но котёнок рискует здоровьем)
+        const kin = kinshipLevel(mother!, father!);
+        if (kin !== 'none') {
+          const warn = label(`⚠️ родство: ${KINSHIP_RU[kin]}`, 11.5,
+            kin === 'critical' ? COLORS.warn : COLORS.inkSoft, '800');
+          warn.position.set(w / 2, h - 50 + ctrlShift);
+          card.addChild(warn);
+        }
         const btn = new Button({
           text: 'Свести 🐾',
           w: Math.round((w - 24) * 0.85), h: 38, color: COLORS.primary,

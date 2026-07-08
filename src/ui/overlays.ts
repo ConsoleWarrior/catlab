@@ -8,7 +8,7 @@ import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
   isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
-  isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, MAX_BREEDS,
+  isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
   roomCount, nurseryCapacity, shelterCapacity,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
   adoptCat, adoptReward,
@@ -489,7 +489,7 @@ export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void)
   const root = new Container();
 
   const ped = catAncestors(cat);
-  const subject: Ancestor = { breed: cat.breed, mother: ped.mother, father: ped.father };
+  const subject: Ancestor = { id: cat.id, breed: cat.breed, mother: ped.mother, father: ped.father };
   const maxDepth = PEDIGREE_DEPTH; // 0=кот, 1=родители, 2=деды, 3=прадеды
 
   // геометрия ячеек/колонок
@@ -634,15 +634,18 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   root.addChild(st);
   y += 26;
 
-  // строка «Возраст»: 5 сердечек — потраченные вязки закрашены чёрным (🖤),
-  // оставшиеся красные (❤️). Исчерпал лимит → рядом статус «Старый».
+  // строка «Здоровье»: сердца = запас вязок кота (maxHearts, у инбридинговых
+  // котят урезан) — потраченные закрашены чёрным (🖤), оставшиеся красные (❤️).
+  // Исчерпал → статус «Старый»; родился без сердец → «Бесплодный».
+  const total = heartsOf(cat);
   const left = breedsLeft(cat);
-  const used = MAX_BREEDS - left;
-  const ageLabel = label('Возраст ' + '🖤'.repeat(used) + '❤️'.repeat(left), 14, COLORS.inkSoft, '700');
+  const used = Math.max(0, total - left);
+  const heartsStr = total > 0 ? '🖤'.repeat(used) + '❤️'.repeat(left) : '∅';
+  const ageLabel = label('Здоровье ' + heartsStr, 14, COLORS.inkSoft, '700');
   ageLabel.position.set(W / 2, y);
   root.addChild(ageLabel);
   if (isOld(cat)) {
-    const oldT = label('Старый', 12, COLORS.warn, '800');
+    const oldT = label(isSterile(cat) ? 'Бесплодный' : 'Старый', 12, COLORS.warn, '800');
     oldT.anchor.set(0, 0.5);
     oldT.position.set(W / 2 + ageLabel.width / 2 + 8, y);
     root.addChild(oldT);

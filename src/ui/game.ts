@@ -220,7 +220,9 @@ export class Game implements UiContext {
         pedigreeDemo: () => {
           const base = this.state.cats[0];
           if (!base) return;
-          const A = (breed: string, mother?: Ancestor, father?: Ancestor): Ancestor => ({ breed, mother, father });
+          let demoId = 0;
+          const A = (breed: string, mother?: Ancestor, father?: Ancestor): Ancestor =>
+            ({ id: 'demo' + demoId++, breed, mother, father });
           const demo: Cat = {
             ...base, name: undefined, breed: 'moggie', rarityTier: 'common',
             motherBreed: 'abyssinian', fatherBreed: 'manx',

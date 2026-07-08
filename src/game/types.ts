@@ -9,8 +9,14 @@ export type RoomId = 'incubator' | 'nursery' | 'shelter' | 'genolab';
 export type LiveRoom = 'nursery' | 'shelter';
 export type Currency = 'coins' | 'crystals' | 'dna';
 
-/** Узел родословной: порода предка и (опц.) его собственные родители — вглубь до прадедов. */
+/**
+ * Узел родословной: УНИКАЛЬНЫЙ id предка + его порода и (опц.) его собственные
+ * родители — вглубь до прадедов. По совпадению id в деревьях пары игра
+ * определяет родственников (инбридинг, см. kinship.ts). У сгенерированных
+ * «скрытых» предков стартовых котов id тоже уникальны — ложных совпадений нет.
+ */
 export interface Ancestor {
+  id: string;
   breed: string;
   mother?: Ancestor;
   father?: Ancestor;
@@ -27,7 +33,10 @@ export interface Cat {
   location: LiveRoom;        // в какой комнате живёт
   rarityTier: RarityTier;    // кэш: тир из каталога породы
   analyzed: boolean;         // раскрыто ли скрытое носительство (Генолаб)
-  breedCount: number;        // сколько раз участвовал в вязке (≥ MAX_BREEDS → «Старый»)
+  breedCount: number;        // сколько раз участвовал в вязке (≥ maxHearts → «Старый»)
+  // Запас здоровья (сердца) = лимит вязок. По умолчанию MAX_HEARTS (5); котёнок
+  // от инбридинга может родиться с 3/1 сердцами или 0 (сразу «Бесплодный»).
+  maxHearts: number;
   motherBreed?: string;      // родословная: порода матери (если рождён в инкубаторе)
   fatherBreed?: string;      // родословная: порода отца
   pedigree?: { mother?: Ancestor; father?: Ancestor }; // дерево предков до прадедов (для родословной)

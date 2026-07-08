@@ -7,7 +7,7 @@ import {
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
 } from './index.js';
-import { STARTER_CAT_COST, MAX_BREEDS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
+import { STARTER_CAT_COST, MAX_HEARTS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
 import type { GameState } from './index.js';
 
 function pair(s: GameState) {
@@ -124,19 +124,19 @@ describe('лимит вязок (статус «Старый»)', () => {
     expect(male.breedCount).toBe(1);
   });
 
-  it('после MAX_BREEDS вязок кот становится «Старым» и не идёт в вязку', () => {
+  it('после MAX_HEARTS вязок кот становится «Старым» и не идёт в вязку', () => {
     const rng = makeRng(71);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
     const dur = incubationDuration(s);
     let now = 0;
-    for (let k = 0; k < MAX_BREEDS; k++) {
+    for (let k = 0; k < MAX_HEARTS; k++) {
       expect(startBreeding(s, 0, female.id, male.id, now).ok).toBe(true);
       collectReady(s, now + dur, rng);
       s.slots[0]!.kittenId = null; // «пристроили» малыша → слот снова свободен под вязку
       now += dur;
     }
-    expect(female.breedCount).toBe(MAX_BREEDS);
+    expect(female.breedCount).toBe(MAX_HEARTS);
     expect(breedsLeft(female)).toBe(0);
     expect(isOld(female)).toBe(true);
     // «Старого» нельзя ни свести, ни поставить в слот
@@ -147,7 +147,7 @@ describe('лимит вязок (статус «Старый»)', () => {
   it('«Старого» кота блокируют startBreeding и assignBreeder', () => {
     const s = createInitialState(makeRng(72), 0);
     const { female, male } = pair(s);
-    female.breedCount = MAX_BREEDS; // искусственно состарили
+    female.breedCount = MAX_HEARTS; // искусственно состарили
     expect(isOld(female)).toBe(true);
     expect(assignBreeder(s, 0, female.id, 0).ok).toBe(false);
     expect(startBreeding(s, 0, female.id, male.id, 0).ok).toBe(false);

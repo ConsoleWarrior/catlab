@@ -5,7 +5,6 @@
 
 import { breedName } from '../genetics/index.js';
 import type { Cat, OrderReq } from '../game/index.js';
-import { pedigreeBonus } from '../game/index.js';
 import { TIER_RU } from './theme.js';
 
 const PATTERN_RU: Record<string, string> = {
@@ -32,10 +31,6 @@ export function catTraits(cat: Cat): string[] {
   const lines = [sex, `порода: ${breedName(cat.breed)}`];
   if (cat.motherBreed && cat.fatherBreed) {
     lines.push(`родители: ${breedName(cat.motherBreed)} ♀ × ${breedName(cat.fatherBreed)} ♂`);
-    const bonus = pedigreeBonus(cat);
-    if (bonus > 0) {
-      lines.push(`родословная: +${Math.round(bonus * 100)}% к шансу редкого потомства`);
-    }
   }
   return lines;
 }

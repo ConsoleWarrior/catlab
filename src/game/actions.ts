@@ -3,13 +3,14 @@
  * Время передаётся параметром `now` (тестируемо), RNG — параметром. См. GAME.md §10.
  */
 
-import { breed, isLethal, simpleCat, breedKitten } from '../genetics/index.js';
-import type { Rng, BreedBoosts } from '../genetics/index.js';
+import { breed, isLethal, simpleCat, resolveBreeding } from '../genetics/index.js';
+import type { Rng, BreedBoosts, KinshipLevel } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
 import { matchesOrder } from './orders.js';
-import { buildPedigree } from './pedigree.js';
+import { attachHiddenPedigree, buildPedigree } from './pedigree.js';
+import { buildBreedingContext, rollKittenHearts } from './kinship.js';
 
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; reason: string };
 
@@ -131,6 +132,7 @@ export interface BirthEvent {
   stillborn: boolean;
   motherBreed?: string;       // родословная (для карточки рождения)
   fatherBreed?: string;
+  kinship?: KinshipLevel;     // родство пары (инбридинг) — для пометки в карточке
 }
 
 /** Забирает всех готовых котят из инкубатора. Обрабатывает летальные комбо. */
@@ -160,18 +162,21 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
       events.push({ slotIndex: i, stillborn: true }); // мертворождение — родители остаются, малыша нет
       continue;
     }
-    // Порода котёнка — по лестнице редкости от пород родителей (прогрессия коллекции).
-    // Усилители «Генной инженерии» влияют на исход; списываем только сработавшие.
+    // Порода котёнка — по РЕЦЕПТАМ (прямые/сцепленные с полом/родословные) с учётом
+    // родства пары (инбридинг множит шанс родословных рецептов). Усилители «Генной
+    // инженерии» влияют на исход; списываем только сработавшие.
     const used: BreedBoosts = {};
-    // бонус родословной: цвет родителей мамы и папы повышает шанс редкого котёнка
-    const extraUp = E.pedigreeBonus(mother) + E.pedigreeBonus(father);
-    const childBreed = breedKitten(mother.breed, father.breed, rng, E.activeBoosts(state), used, extraUp);
+    const ctx = buildBreedingContext(mother, father);
+    const childBreed = resolveBreeding(ctx, rng, E.activeBoosts(state), used);
     E.consumeBoosts(state, used);
     const kitten = E.makeCatInstance(state, child, now, 'nursery', childBreed);
     kitten.bornAt = now; // настоящий новорождённый — появляется маленьким и растёт
     kitten.motherBreed = mother.breed; // родословная — покажем в карточке кота
     kitten.fatherBreed = father.breed;
     kitten.pedigree = buildPedigree(mother, father, C.PEDIGREE_DEPTH); // дерево до прадедов
+    // Цена инбридинга: котёнок может родиться с урезанным запасом сердец
+    // (0 — «Бесплодный», родословный тупик).
+    kitten.maxHearts = rollKittenHearts(ctx.kinship, rng);
     state.cats.push(kitten);
     // Малыш «на руках» в центре слота: родители рядом, перегородка поднята.
     // Игрок решит в карточке рождения — в питомник, в приют или оставить с роднёй.
@@ -179,6 +184,7 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     events.push({
       slotIndex: i, kitten, stillborn: false,
       motherBreed: mother.breed, fatherBreed: father.breed,
+      kinship: ctx.kinship,
     });
   }
   return events;
@@ -192,6 +198,7 @@ export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: C
   const cost = E.buyCatCost(state);
   if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
   const cat = E.makeCatInstance(state, simpleCat(rng), now, 'nursery');
+  attachHiddenPedigree(state, cat, rng); // лотерея скрытых генов у купленного дворового
   state.cats.push(cat);
   return { ok: true, cat };
 }
