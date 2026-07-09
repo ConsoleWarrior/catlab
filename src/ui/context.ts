@@ -73,8 +73,18 @@ export interface UiContext {
    */
   readonly gestureAxis: 'none' | 'h' | 'v';
   openCatMenu(cat: Cat): void;
+  /**
+   * Кот, чьё инфо-меню сейчас открыто (или недавно закрылось). Пока `frozen` —
+   * «живой пол» держит кота на месте; иконка ℹ️ над именем видна, пока
+   * `Date.now() < iconUntil` — так кота не теряют в толпе после закрытия меню.
+   */
+  infoFocus(): { id: string; frozen: boolean; iconUntil: number } | null;
   /** Подтверждение пристройства кота («в добрые руки»): открывается из зоны переноски. */
   openAdoptConfirm(cat: Cat): void;
+  /** Подтверждение сдачи кота в лабораторию (за 🧬): открывается из лабораторного слота. */
+  openLabConfirm(cat: Cat): void;
+  /** Диалог лечения в клинике (💉): станция-шприц в Питомнике или меню кота. */
+  openHealConfirm(cat: Cat): void;
   /** Дерево родословной кота (до прадедов). */
   openPedigree(cat: Cat): void;
   /** Карточка(и) новорождённых после «Забрать» в инкубаторе. */
@@ -82,7 +92,6 @@ export interface UiContext {
   /** Всплывающее меню усилителя вязки (Генная инженерия у названия Инкубатора). */
   openBoostMenu(boostId: string): void;
   openOrders(): void;
-  openUpgrades(title: string, ids: string[]): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;
 }

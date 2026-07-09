@@ -304,11 +304,15 @@ export function recipeMatches(r: Recipe, ctx: BreedingContext): boolean {
   return true;
 }
 
-/** Итоговый шанс рецепта с учётом инбридинга и Катализатора. */
-export function recipeChance(r: Recipe, kinship: KinshipLevel, luckyUp = false): number {
+/**
+ * Итоговый шанс рецепта: базовый × инбридинг × Катализатор (luckyUp ×2) ×
+ * `chanceMult` (глобальный множитель от исследований «Селекции»). Кап CHANCE_CAP.
+ */
+export function recipeChance(r: Recipe, kinship: KinshipLevel, luckyUp = false, chanceMult = 1): number {
   let p = r.chance;
   if (isPedigreeRecipe(r) || r.kinshipBoost || r.minKinship) p *= KINSHIP_RECIPE_MULT[kinship];
   if (luckyUp) p *= 2;
+  p *= chanceMult;
   return Math.min(CHANCE_CAP, p);
 }
 
@@ -336,6 +340,7 @@ export function resolveBreeding(
   rng: Rng,
   boosts: BreedBoosts = {},
   used?: BreedBoosts,
+  chanceMult = 1,
 ): string {
   const matched = RECIPES.filter((r) => recipeMatches(r, ctx))
     // редкие результаты пробуем первыми; при равном тире — сначала маловероятные
@@ -357,7 +362,7 @@ export function resolveBreeding(
   }
 
   for (const r of matched) {
-    if (rng() < recipeChance(r, ctx.kinship, boosts.luckyUp)) {
+    if (rng() < recipeChance(r, ctx.kinship, boosts.luckyUp, chanceMult)) {
       if (boosts.luckyUp && used) used.luckyUp = true; // 🍀 сработал усиленный бросок
       return r.result;
     }

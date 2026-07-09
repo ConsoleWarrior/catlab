@@ -15,8 +15,10 @@ import type { Sex } from '../genetics/index.js';
 import { buildCat } from '../render/catSprite.js';
 import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
-  passiveRatePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
+  netIncomePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
   moveCat, clearBreederSlot, keepKittenWithParents,
+  nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
+  foodRatePerMin, isStarving, autoFeedEnabled, buyFood,
 } from '../game/index.js';
 import { isBusy, isInSlot } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -30,8 +32,8 @@ import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
 import {
-  buildCatMenu, buildOrdersPanel, buildHelpPanel, buildUpgradesPanel, buildBirthCard, buildPedigreePanel,
-  buildBoostMenu, buildAdoptConfirm,
+  buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
+  buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildHealConfirm,
 } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
@@ -95,6 +97,9 @@ export class Game implements UiContext {
   // прокрутка контента не срабатывали одновременно (см. UiContext.gestureAxis).
   private axisLock: 'none' | 'h' | 'v' = 'none';
 
+  // фокус на коте, чьё инфо-меню открыто (см. infoFocus в UiContext)
+  private catInfoFocus: { id: string; frozen: boolean; iconUntil: number } | null = null;
+
   // взятие котика за шкирку
   private pendingGrab: { opts: GrabOpts; sx: number; sy: number } | null = null;
   private grab: {
@@ -109,6 +114,8 @@ export class Game implements UiContext {
   private crystalsT!: Text;
   private dnaT!: Text;
   private levelT!: Text;
+  private levelBar!: Graphics;   // прогресс опыта до следующего уровня (под ⭐ Ур.)
+  private shownLevel = 1;        // последний показанный уровень (для баннера повышения)
   private ordersBtn!: Button;
   private dots: Graphics[] = [];
   private hudPad = 0;            // левый отступ ряда ресурсов
@@ -123,6 +130,7 @@ export class Game implements UiContext {
   // прочее
   private incomeAcc = 0;
   private saveTimer = 0;
+  private wasStarving = false;   // для тоста «корм закончился» ровно при переходе к голоду
   private toastT: Text | null = null;
   private toastUntil = 0;
 
@@ -141,6 +149,8 @@ export class Game implements UiContext {
     document.getElementById('app')!.appendChild(this.app.canvas);
 
     this.loadState(reset);
+    this.shownLevel = this.state.level; // база для баннера повышения уровня
+    this.wasStarving = isStarving(this.state); // не спамить тостом «корм закончился» на первом кадре
 
     // Готовый арт коллекции: породы `<breed>__<sex>.png` и базовые `<sex>__N.png`.
     // Грузим до сборки комнат; вис делаем из той же текстуры. Если ассет не
@@ -248,6 +258,10 @@ export class Game implements UiContext {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openCatMenu(c);
         },
+        openHeal: (id?: string) => { // диалог клиники (проверка UI лечения)
+          const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
+          if (c) this.openHealConfirm(c);
+        },
         pedigreeDemo: () => {
           const base = this.state.cats[0];
           if (!base) return;
@@ -270,6 +284,8 @@ export class Game implements UiContext {
         },
         closeOverlay: () => this.closeOverlay(),
         give: (c = 5000, x = 50, d = 500) => { this.state.coins += c; this.state.crystals += x; this.state.dna += d; this.commit(); },
+        xp: (n = 200) => { addReputation(this.state, n); this.commit(); }, // +опыт → проверка уровней/HUD/замков
+
         demo: () => this.demo(),
         demoGrab: () => this.demoGrab(),
         collection: () => this.collection(),
@@ -397,9 +413,11 @@ export class Game implements UiContext {
       }
     }
     const born = events.filter((e) => e.kitten).length;
+    const rep = events.reduce((sum, e) => sum + (e.rep ?? 0), 0);
     const inc = collectIncome(this.state, now);
     const parts: string[] = [];
     if (born) parts.push(`родилось котят: ${born} 🐱`);
+    if (rep) parts.push(`+${rep} ⭐`);
     if (inc.coins) parts.push(`доход: +💰${inc.coins}`);
     if (parts.length) setTimeout(() => this.toast('С возвращением! ' + parts.join(', ')), 600);
   }
@@ -413,6 +431,7 @@ export class Game implements UiContext {
   commit(): void {
     for (const r of this.rooms) r.refresh();
     this.updateHud();
+    this.checkLevelUp(); // повышение уровня от любого действия → баннер со списком открытий
     this.saveTimer = 0; // отложенный сейв в update()
   }
 
@@ -445,11 +464,27 @@ export class Game implements UiContext {
   openCatMenu(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildCatMenu(this, cat, close));
+    // «замораживаем» кота в комнате, пока меню открыто; значок ℹ️ появляется
+    // сразу и держится 3 сек ПОСЛЕ закрытия меню (см. closeOverlay) — чтобы
+    // не потерять кота среди других, когда снова видна комната
+    this.catInfoFocus = { id: cat.id, frozen: true, iconUntil: Infinity };
   }
+
+  infoFocus(): { id: string; frozen: boolean; iconUntil: number } | null { return this.catInfoFocus; }
 
   openAdoptConfirm(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildAdoptConfirm(this, cat, close));
+  }
+
+  openLabConfirm(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildLabConfirm(this, cat, close));
+  }
+
+  openHealConfirm(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildHealConfirm(this, cat, close));
   }
 
   openPedigree(cat: Cat): void {
@@ -476,11 +511,6 @@ export class Game implements UiContext {
   openHelp(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildHelpPanel(this, close));
-  }
-
-  openUpgrades(title: string, ids: string[]): void {
-    const close = (): void => this.closeOverlay();
-    this.showOverlay(buildUpgradesPanel(this, title, ids, close));
   }
 
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void {
@@ -744,6 +774,8 @@ export class Game implements UiContext {
     this.crystalsT = mk(0x3a93c9);
     this.dnaT = mk(0x7a4fd0);
     this.levelT = mk(COLORS.ink, fs);
+    this.levelBar = new Graphics(); // тонкая полоска прогресса опыта под ⭐ Ур.
+    this.hud.addChild(this.levelBar);
 
     const bh = Math.round(ti * 0.72);
     const helpW = Math.round(ti * 0.92);
@@ -760,9 +792,10 @@ export class Game implements UiContext {
 
   private updateHud(): void {
     if (!this.coinsT) return;
-    const rate = passiveRatePerMin(this.state);
+    const rate = netIncomePerMin(this.state);
     this.coinsT.text = `💰 ${fmt(this.state.coins)}`;
-    this.rateT.text = rate > 0 ? `+${rate.toFixed(rate < 10 ? 1 : 0)}/мин` : '';
+    // при голоде доход стоит — показываем это прямо в шапке вместо ставки
+    this.rateT.text = isStarving(this.state) ? '🍽 голод' : rate > 0 ? `+${rate.toFixed(rate < 10 ? 1 : 0)}/мин` : '';
     this.crystalsT.text = `💎 ${fmt(this.state.crystals)}`;
     this.dnaT.text = `🧬 ${fmt(this.state.dna)}`;
     this.levelT.text = `⭐ Ур. ${this.state.level}`;
@@ -780,6 +813,46 @@ export class Game implements UiContext {
     this.crystalsT.position.x = x; x += this.crystalsT.width + this.hudGap;
     this.dnaT.position.x = x; x += this.dnaT.width + this.hudGap;
     this.levelT.position.x = x;
+    this.drawLevelBar();
+  }
+
+  /** Тонкая полоска прогресса опыта до следующего уровня, под текстом «⭐ Ур. N». */
+  private drawLevelBar(): void {
+    if (!this.levelBar) return;
+    const bar = this.levelBar;
+    bar.clear();
+    const level = this.state.level;
+    const x = this.levelT.position.x;
+    const w = Math.max(40, this.levelT.width);
+    const y = this.levelT.position.y + this.levelT.height / 2 + 2;
+    const h = 4;
+    // фон дорожки
+    bar.roundRect(x, y, w, h, 2).fill({ color: 0x000000, alpha: 0.18 });
+    const nextRep = nextLevelRep(level);
+    let frac = 1;
+    if (nextRep !== null) {
+      const base = LEVEL_REP_THRESHOLDS[level - 1] ?? 0; // порог текущего уровня
+      frac = Math.max(0, Math.min(1, (this.state.reputation - base) / Math.max(1, nextRep - base)));
+    }
+    const col = level >= MAX_LEVEL ? 0xe7b24c : 0x6cc07a;
+    bar.roundRect(x, y, Math.max(3, w * frac), h, 2).fill({ color: col });
+  }
+
+  /**
+   * Баннер повышения уровня. Сверяет текущий уровень с последним показанным; при
+   * росте — тост со списком того, что открылось (агрегирует все пройденные уровни,
+   * если прыгнули через несколько сразу). Вызывается из commit() — ловит все
+   * источники опыта (рождение/пристройство/лаборатория/заказ) единообразно.
+   */
+  private checkLevelUp(): void {
+    if (this.state.level <= this.shownLevel) { this.shownLevel = this.state.level; return; }
+    const from = this.shownLevel;
+    this.shownLevel = this.state.level;
+    const items: string[] = [];
+    for (let lv = from + 1; lv <= this.state.level; lv++) items.push(...unlocksAtLevel(lv));
+    this.toast(items.length
+      ? `🎉 Уровень ${this.state.level}! Открыто: ${items.join(', ')}`
+      : `🎉 Уровень ${this.state.level}!`);
   }
 
   private buildNav(): void {
@@ -895,6 +968,12 @@ export class Game implements UiContext {
     this.overlayLayer.removeChildren();
     this.overlayDim = null;
     this.overlayContent = null;
+    // меню закрыто — кот больше не «заморожен»; отсюда отсчитываем 3 сек до
+    // исчезновения значка ℹ️ (пока меню было открыто, iconUntil = Infinity)
+    if (this.catInfoFocus) {
+      this.catInfoFocus.frozen = false;
+      this.catInfoFocus.iconUntil = this.now() + 3000;
+    }
   }
 
   private get overlayOpen(): boolean { return this.overlayLayer.children.length > 0; }
@@ -1003,8 +1082,23 @@ export class Game implements UiContext {
     // таймеры/анимация текущей комнаты
     this.rooms[this.currentRoom]?.tick?.(dt);
 
-    // пассивный доход (живое накопление)
-    const rate = passiveRatePerMin(this.state);
+    // расход корма в реальном времени (dt — секунды; ставка — в минуту)
+    const foodRate = foodRatePerMin(this.state);
+    if (foodRate > 0 && this.state.food > 0) {
+      this.state.food = Math.max(0, this.state.food - (foodRate / 60) * dt);
+    }
+    // «Автокормушка» (исследование): опустела — сама докупает корм за 💰, пока есть монеты
+    if (foodRate > 0 && this.state.food <= 0 && autoFeedEnabled(this.state)) {
+      const r = buyFood(this.state, 'full');
+      if (r.ok) this.commit();
+    }
+    // тост ровно в момент опустошения кормушки (не спамим каждый кадр)
+    const starving = isStarving(this.state);
+    if (starving && !this.wasStarving) this.toast('Корм закончился! 🍽 Покорми котов в Питомнике');
+    this.wasStarving = starving;
+
+    // пассивный доход (живое накопление; при голоде netIncomePerMin = 0)
+    const rate = netIncomePerMin(this.state);
     if (rate > 0) {
       this.incomeAcc += (rate / 60) * dt;
       const whole = Math.floor(this.incomeAcc);
@@ -1020,8 +1114,11 @@ export class Game implements UiContext {
       this.commit();
       const born = events.filter((e) => e.kitten).length;
       const dead = events.filter((e) => e.stillborn).length;
-      if (born) this.toast(born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾');
-      else if (dead) this.toast('Котёнок не выжил 😿');
+      const rep = events.reduce((sum, e) => sum + (e.rep ?? 0), 0);
+      if (born) {
+        const base = born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾';
+        this.toast(rep ? `${base} +${rep} ⭐` : base);
+      } else if (dead) this.toast('Котёнок не выжил 😿');
     }
 
     this.updateHud();

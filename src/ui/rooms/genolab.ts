@@ -1,8 +1,8 @@
 /**
  * Комната «Генолаб» — хаб для 🧬 ДНК. Разбита на под-секции (табы):
  *   📖 Котодекс    — альбом всех пород по тирам (силуэт, пока не выведена);
- *   🔬 Исследования — многоуровневые апгрейды за 💰 (вместимость питомника/приюта,
- *                     слоты инкубатора); бонусные ветки за 🧬 — в планах;
+ *   🔬 Исследования — дерево постоянных бонусов за 🧬 (4 ветки: Селекция, Обучение,
+ *                     Пристройство, Хозяйство); открывается уровнем лаборатории;
  *   🧫 Клон-банк    — клонирование пристроенных котов (скоро).
  *
  * Работают Котодекс и Исследования; Клон-банк — заглушка «скоро».
@@ -13,12 +13,14 @@ import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { FederatedWheelEvent } from 'pixi.js';
 import { BREEDS, BREEDS_BY_TIER, breedName } from '../../genetics/index.js';
 import type { RarityTier } from '../../genetics/index.js';
-import { UPGRADES, buyUpgrade, upgradeCost, upgradeMaxed, NURSERY_CAP_STEP, SHELTER_CAP_STEP } from '../../game/index.js';
+import {
+  RESEARCH, unlockResearch, isUnlocked, unlockLevelOf,
+} from '../../game/index.js';
+import type { ResearchDef } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel, TIER_RU, TIER_COLOR, TIERS } from '../theme.js';
 import { breedThumbTexture } from '../catTextures.js';
-import { CUR_GLYPH } from '../upgradeButton.js';
 
 type Section = 'codex' | 'research' | 'clone';
 
@@ -30,16 +32,13 @@ const remembered = {
   scroll: { codex: 0, research: 0 } as Record<'codex' | 'research', number>,
 };
 
-/**
- * Многоуровневые апгрейды вкладки «Исследования»: иконка, отображаемое имя и
- * прибавка за уровень (для подписи в карточке). Имена здесь — локальные, чтобы не
- * трогать `label` в config.ts (его же показывает Инкубатор и кнопки апгрейдов).
- */
-const UPGRADE_INFO: Record<string, { glyph: string; name: string; perLevel: string }> = {
-  nurseryCap: { glyph: '🏠', name: 'Вместимость питомника', perLevel: `+${NURSERY_CAP_STEP} места за уровень` },
-  shelterCap: { glyph: '🏚️', name: 'Вместимость приюта', perLevel: `+${SHELTER_CAP_STEP} места за уровень` },
-  slots: { glyph: '💞', name: 'Слоты инкубатора', perLevel: '+1 слот за уровень' },
-};
+/** Метаданные веток дерева исследований (ряд → заголовок). */
+const BRANCHES: { row: number; label: string }[] = [
+  { row: 0, label: '🧪 Селекция' },
+  { row: 1, label: '🎓 Обучение' },
+  { row: 2, label: '🤝 Пристройство' },
+  { row: 3, label: '🏠 Хозяйство' },
+];
 
 /** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
 function shade(color: number, f: number): number {
@@ -231,63 +230,64 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /**
-   * Карточка многоуровневого апгрейда (за 💰): вместимость питомника/приюта и слоты
-   * инкубатора. Показывает имя, прибавку за уровень, текущий уровень/макс и цену
-   * следующего; по тапу покупает следующий уровень. Фон непрозрачный (под ним —
-   * ИИ-арт комнаты): доступное — светлая карточка, максимум — мягко-зелёная,
-   * «не по карману» — приглушённая (затемнение вместо прозрачности).
+   * Карточка узла дерева исследований (за 🧬). Состояния: изучено (зелёная),
+   * доступно к покупке (подсвечена, рамка ДНК), заперто предыдущим узлом или уровнем
+   * лаборатории (приглушённая, замок). Фон непрозрачный — под ним ИИ-арт комнаты.
    */
-  function upgradeNode(id: string, nw: number, nh: number): Container {
-    const def = UPGRADES[id]!;
-    const info = UPGRADE_INFO[id];
-    const maxLvl = id === 'slots' ? UPGRADES.slots!.max : def.max;
-    const curLvl = id === 'slots' ? ctx.state.slots.length - 1 : (ctx.state.upgrades[id] ?? 0);
-    const maxed = upgradeMaxed(ctx.state, id);
-    const cost = upgradeCost(ctx.state, id);
-    const affordable = !!cost && ctx.state[cost.currency] >= cost.amount;
-    const highlight = !maxed && affordable;
+  function researchNode(def: ResearchDef, nw: number, nh: number): Container {
+    const owned = ctx.state.research.includes(def.id);
+    const reqMet = def.requires.every((r) => ctx.state.research.includes(r));
+    // верхние узлы веток (col ≥ 2) открываются позже — с уровня researchAdvanced
+    const advLocked = def.col >= 2 && !isUnlocked(ctx.state, 'researchAdvanced');
+    const affordable = ctx.state.dna >= def.dna;
+    const buyable = !owned && reqMet && !advLocked && affordable;
+    const hardLocked = !owned && (!reqMet || advLocked);
 
     const c = new Container();
-    const fill = maxed ? lighten(COLORS.good, 0.5)
-      : affordable ? COLORS.card
-        : shade(COLORS.card, 0.9);
+    const fill = owned ? lighten(COLORS.good, 0.5)
+      : buyable ? COLORS.card
+        : shade(COLORS.card, hardLocked ? 0.72 : 0.9);
     const bg = new Graphics();
     bg.roundRect(-nw / 2, -nh / 2, nw, nh, 12)
       .fill({ color: fill, alpha: 1 })
       .stroke({
-        width: highlight ? 3 : 2,
-        color: maxed ? COLORS.good : affordable ? COLORS.coins : COLORS.cardEdge,
+        width: buyable ? 3 : 2,
+        color: owned ? COLORS.good : buyable ? COLORS.dna : COLORS.cardEdge,
         alpha: 0.95,
       });
     c.addChild(bg);
 
-    const title = wrapped(`${info?.glyph ?? '⚙️'} ${info?.name ?? def.label}`, Math.min(15, nh * 0.16), COLORS.ink, '800', nw - 14);
-    title.position.set(0, -nh / 2 + nh * 0.2);
+    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(13, nh * 0.15), COLORS.ink, '800', nw - 12);
+    title.position.set(0, -nh / 2 + nh * 0.22);
     c.addChild(title);
 
-    const per = wrapped(info?.perLevel ?? '', Math.min(12, nh * 0.12), COLORS.inkSoft, '700', nw - 12);
-    per.position.set(0, -nh / 2 + nh * 0.45);
-    c.addChild(per);
+    const desc = wrapped(def.desc, Math.min(10.5, nh * 0.115), COLORS.inkSoft, '600', nw - 12);
+    desc.position.set(0, -nh / 2 + nh * 0.55);
+    c.addChild(desc);
 
-    const lvlT = wrapped(`уровень ${curLvl} / ${maxLvl}`, Math.min(11, nh * 0.11), COLORS.inkSoft, '600', nw - 12);
-    lvlT.position.set(0, -nh / 2 + nh * 0.64);
-    c.addChild(lvlT);
-
-    const status = maxed
-      ? label('✓ максимум', Math.min(12, nh * 0.12), COLORS.good, '800')
-      : label(`${cost!.amount} ${CUR_GLYPH[cost!.currency]}`, Math.min(14, nh * 0.14), affordable ? COLORS.coins : COLORS.inkSoft, '800');
-    status.position.set(0, -nh / 2 + nh * 0.85);
+    const status = owned
+      ? label('✓ изучено', Math.min(12, nh * 0.13), COLORS.good, '800')
+      : advLocked
+        ? label(`🔒 ур. ${unlockLevelOf('researchAdvanced')}`, Math.min(12, nh * 0.13), COLORS.inkSoft, '800')
+        : !reqMet
+          ? label('🔒', Math.min(14, nh * 0.15), COLORS.inkSoft, '800')
+          : label(`🧬 ${def.dna}`, Math.min(13, nh * 0.14), affordable ? COLORS.dna : COLORS.inkSoft, '800');
+    status.position.set(0, nh / 2 - nh * 0.14);
     c.addChild(status);
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
     c.on('pointertap', () => {
       if (suppressTap) return;          // это был скролл, а не тап
-      const name = info?.name ?? def.label;
-      if (maxed) { ctx.toast(`${name}: максимум`); return; }
-      const r = buyUpgrade(ctx.state, id);
-      if (r.ok) { ctx.commit(); ctx.toast(`${name} улучшено ✅`); }
-      else ctx.toast(r.reason);
+      if (owned) { ctx.toast(`${def.title}: уже изучено ✅`); return; }
+      if (advLocked) { ctx.toast(`Откроется на ур. ${unlockLevelOf('researchAdvanced')} 🔒`); return; }
+      if (!reqMet) { ctx.toast('Сначала изучи предыдущий узел 🔒'); return; }
+      const r = unlockResearch(ctx.state, def.id);
+      if (r.ok) { ctx.commit(); ctx.toast(`${def.glyph} ${def.title} изучено ✅`); }
+      else ctx.toast(
+        r.reason === 'locked' ? 'Исследования ещё заперты 🔒'
+          : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК' : r.reason,
+      );
     });
     return c;
   }
@@ -353,17 +353,34 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /**
-   * 🔬 Исследования: многоуровневые апгрейды за 💰 — вместимость питомника, приюта
-   * и слоты инкубатора (по одной карточке в ряд). Бонусные ветки за 🧬 убраны —
-   * вернутся, когда появятся настоящие апгрейды. Содержимое прокручивается, если
-   * карточки не влезают по высоте.
+   * 🔬 Исследования: дерево постоянных бонусов за 🧬 — 4 ветки (Селекция, Обучение,
+   * Пристройство, Хозяйство), в каждой цепочка узлов слева направо. Всё дерево
+   * открывается уровнем лаборатории (research), верхние узлы (col ≥ 2) — позже
+   * (researchAdvanced). Содержимое прокручивается по вертикали.
    */
   function renderResearch(): void {
-    // окно прокрутки (маска) + прокручиваемое содержимое — сразу под табами
-    // (🧬 ДНК и 💰 деньги уже показаны в верхней строке состояния)
     const viewTop = 46;
     const viewW = shell.contentW;
     const viewH = shell.contentH - viewTop;
+
+    // Гейт: пока уровень лаборатории не открыл исследования — вместо дерева замок.
+    if (!isUnlocked(ctx.state, 'research')) {
+      const need = unlockLevelOf('research');
+      const p = panel(viewW, Math.max(120, viewH), COLORS.card, 16);
+      p.position.set(0, viewTop);
+      shell.body.addChild(p);
+      const cy = viewTop + viewH / 2;
+      const t = label('🔬 Исследования', 18, COLORS.ink, '800');
+      t.position.set(viewW / 2, cy - 28);
+      const lock = label(`Откроются на уровне ${need} 🔒`, 15, COLORS.warn, '800');
+      lock.position.set(viewW / 2, cy + 2);
+      const hint = label('Копи опыт ⭐ за рождения, заказы и пристройство', 12, COLORS.inkSoft, '600');
+      hint.position.set(viewW / 2, cy + 28);
+      shell.body.addChild(t, lock, hint);
+      return;
+    }
+
+    // окно прокрутки (маска) + прокручиваемое содержимое — сразу под табами
     const viewport = new Container();
     viewport.position.set(0, viewTop);
     const maskG = new Graphics();
@@ -373,22 +390,43 @@ export function createGenolab(ctx: UiContext): Room {
     content.mask = maskG;
     shell.body.addChild(viewport);
 
-    const ids = ['nurseryCap', 'shelterCap', 'slots'];
-    const cols = ids.length;
-    const colGap = 12;
-    const nw = (viewW - colGap * (cols - 1)) / cols;
-    // высота карточки: вмещает 4 строки (имя, прибавка, уровень, цена), но не выше
-    // разумного — иначе на десктопе карточки растягиваются на весь экран.
-    const nh = Math.max(150, Math.min(200, viewH * 0.62));
-    const cx = (col: number): number => col * (nw + colGap) + nw / 2;
+    const maxCols = 5;
+    const colGap = 8;
+    const rowGap = 16;
+    const labelH = 22;
+    const nodeW = (viewW - colGap * (maxCols - 1)) / maxCols;
+    const nodeH = Math.max(94, Math.min(120, viewH * 0.24));
+    const cxOf = (col: number): number => col * (nodeW + colGap) + nodeW / 2;
 
-    ids.forEach((id, i) => {
-      const node = upgradeNode(id, nw, nh);
-      node.position.set(cx(i), nh / 2);
-      content.addChild(node);
-    });
+    let y = 4;
+    for (const br of BRANCHES) {
+      const nodes = RESEARCH.filter((r) => r.row === br.row).sort((a, b) => a.col - b.col);
+      const head = pillRow([{ text: br.label, size: 13, color: COLORS.ink, weight: '800' }]);
+      head.position.set(2, y + labelH / 2);
+      content.addChild(head);
+      const nodeCy = y + labelH + nodeH / 2;
 
-    setupScroll(scroll, 'research', viewport, content, viewW, viewH, nh);
+      // линии связей между соседними колонками (позади карточек)
+      const lines = new Graphics();
+      for (let i = 1; i < nodes.length; i++) {
+        const a = nodes[i - 1]!, b = nodes[i]!;
+        const x1 = cxOf(a.col) + nodeW / 2;
+        const x2 = cxOf(b.col) - nodeW / 2;
+        const owned = ctx.state.research.includes(b.id);
+        lines.moveTo(x1, nodeCy).lineTo(x2, nodeCy)
+          .stroke({ width: 3, color: owned ? COLORS.good : COLORS.cardEdge, alpha: 0.8 });
+      }
+      content.addChild(lines);
+
+      for (const def of nodes) {
+        const node = researchNode(def, nodeW, nodeH);
+        node.position.set(cxOf(def.col), nodeCy);
+        content.addChild(node);
+      }
+      y = y + labelH + nodeH + rowGap;
+    }
+
+    setupScroll(scroll, 'research', viewport, content, viewW, viewH, y);
   }
 
   function renderStub(title: string, desc: string[]): void {

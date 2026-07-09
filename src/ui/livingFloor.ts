@@ -35,6 +35,7 @@ interface Actor {
   phase: number;
   nextWander: number;
   walking: boolean;
+  infoIcon: Text | null; // значок ℹ️ над именем, пока изучаем инфо этого кота
 }
 
 interface GrowFx { view: Container; sparks: Text[]; ring: Graphics; life: number; ttl: number; }
@@ -145,7 +146,7 @@ export function createLivingFloor(
       cat, view, sprite, glow, baseScale, busy, adult,
       ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? mem?.facing ?? 1,
       phase: savedPhase ?? mem?.phase ?? Math.random() * 6,
-      nextWander: 0.5 + Math.random() * 2.5, walking: false,
+      nextWander: 0.5 + Math.random() * 2.5, walking: false, infoIcon: null,
     };
 
     if (busy) {
@@ -226,7 +227,23 @@ export function createLivingFloor(
         spawnGrowFx(centerX + a.ox, yAt(a.z) - catH * 0.55 * ds);
         matured.push(a);
       }
-      if (a.busy || !a.view.visible) continue;
+
+      // значок ℹ️ над именем: изучаем инфо этого кота — держим значок, пока
+      // меню открыто, и ещё 3 сек после закрытия, чтобы не потерять его в толпе
+      const focus = ctx.infoFocus();
+      const focused = focus?.id === a.cat.id;
+      const showIcon = focused && Date.now() < focus!.iconUntil;
+      if (showIcon && !a.infoIcon) {
+        const icon = label('ℹ️', 22, COLORS.ink, '800');
+        icon.position.set(0, -(catH + 40));
+        a.view.addChild(icon);
+        a.infoIcon = icon;
+      } else if (!showIcon && a.infoIcon) {
+        a.infoIcon.destroy();
+        a.infoIcon = null;
+      }
+
+      if (a.busy || !a.view.visible || (focused && focus!.frozen)) continue;
       a.nextWander -= dt;
       if (a.nextWander <= 0) {
         a.targetZ = Math.random();

@@ -50,6 +50,7 @@ describe('generateOrder', () => {
 
   it('в пул попадают и конкретные породы, и тиры редкости', () => {
     const s = createInitialState(makeRng(4), 0);
+    s.discoveredBreeds.push('persian', 'bengal'); // открыли пару пород в Котодексе
     const rng = makeRng(7);
     let sawBreed = false;
     let sawTier = false;
@@ -60,6 +61,16 @@ describe('generateOrder', () => {
     }
     expect(sawBreed).toBe(true);
     expect(sawTier).toBe(true);
+  });
+
+  it('конкретные породы в заказах — только открытые в Котодексе', () => {
+    const s = createInitialState(makeRng(8), 0);
+    s.discoveredBreeds = ['persian']; // открыт только перс (moggie базовый — не в счёт)
+    const rng = makeRng(9);
+    for (let i = 0; i < 300; i++) {
+      const req = generateOrder(s, rng, 0).req;
+      if (req.breed) expect(req.breed).toBe('persian');
+    }
   });
 });
 

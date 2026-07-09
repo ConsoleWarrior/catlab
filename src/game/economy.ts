@@ -3,9 +3,10 @@
  * ставки дохода, стоимость апгрейдов. Чистые функции над GameState. См. GAME.md.
  */
 
-import { tierOfBreed } from '../genetics/index.js';
+import { tierOfBreed, TIER_LEVEL, breedValueMult } from '../genetics/index.js';
 import type { Genotype, BreedBoosts } from '../genetics/index.js';
-import type { BreedingSlot, Cat, Currency, GameState, LiveRoom } from './types.js';
+import type { Ancestor, BreedingSlot, Cat, Currency, GameState, LiveRoom } from './types.js';
+import { catAncestors } from './pedigree.js';
 import * as C from './config.js';
 
 /** Уровень апгрейда (0, если не куплен). */
@@ -21,6 +22,44 @@ export function slotCount(state: GameState): number {
   return state.slots.length;
 }
 
+// --- Уровень лаборатории: гейты прогрессии ---
+
+/** Открыта ли фича на текущем уровне лаборатории (labStation/research/engineering/...). */
+export function isUnlocked(state: GameState, feature: C.LabFeature): boolean {
+  return state.level >= C.LAB_UNLOCKS[feature];
+}
+
+/** На каком уровне открывается фича (для подписи замка «Откроется на ур. N»). */
+export function unlockLevelOf(feature: C.LabFeature): number {
+  return C.LAB_UNLOCKS[feature];
+}
+
+/** Сколько слотов вязки разрешает текущий уровень (базовый 1 + открытые порогами). */
+export function maxSlotsForLevel(state: GameState): number {
+  let n = 1;
+  for (const lv of C.SLOT_UNLOCK_LEVELS) if (state.level >= lv) n++;
+  return n;
+}
+
+/** Сколько пьедесталов разрешает текущий уровень (базовый 1 + открытые порогами). */
+export function maxChampionsForLevel(state: GameState): number {
+  let n = 1;
+  for (const lv of C.PEDESTAL_UNLOCK_LEVELS) if (state.level >= lv) n++;
+  return n;
+}
+
+/** Уровень, на котором откроется покупка следующего слота вязки (null — уже все доступны). */
+export function nextSlotUnlockLevel(state: GameState): number | null {
+  const opened = maxSlotsForLevel(state) - 1; // сколько порогов уже пройдено
+  return C.SLOT_UNLOCK_LEVELS[opened] ?? null;
+}
+
+/** Уровень, на котором откроется покупка следующего пьедестала (null — уже все доступны). */
+export function nextPedestalUnlockLevel(state: GameState): number | null {
+  const opened = maxChampionsForLevel(state) - 1;
+  return C.PEDESTAL_UNLOCK_LEVELS[opened] ?? null;
+}
+
 /** Суммарный бонус изученных исследований данного типа эффекта. */
 export function researchBonus(state: GameState, kind: C.ResearchEffectKind): number {
   let sum = 0;
@@ -28,6 +67,31 @@ export function researchBonus(state: GameState, kind: C.ResearchEffectKind): num
     if (r.effect.kind === kind && state.research.includes(r.id)) sum += r.effect.value;
   }
   return sum;
+}
+
+// --- Селекция (эффекты ветки «Селекция» на размножение) ---
+
+/** Множитель шанса ВСЕХ рецептов от исследований «Селекции» (1 + сумма recipeChance). */
+export function breedChanceMult(state: GameState): number {
+  return 1 + researchBonus(state, 'recipeChance');
+}
+
+/** Снижение риска инбридинга для котёнка (доля, потолок 0.5 — полностью не убрать). */
+export function kinshipSafety(state: GameState): number {
+  return Math.min(0.5, researchBonus(state, 'kinshipSafety'));
+}
+
+/** Бонус сердец новорождённым от «Витаминов роста» (обычно 0 или 1). */
+export function extraHearts(state: GameState): number {
+  return researchBonus(state, 'extraHeart');
+}
+
+/**
+ * Итоговый запас сердец новорождённого: базовый бросок + «Витамины роста». Бесплодного
+ * (0 ❤ — родословный тупик от тяжёлого инбридинга) витамины НЕ спасают (решение §8.3).
+ */
+export function applyExtraHearts(baseHearts: number, extra: number): number {
+  return baseHearts > 0 ? baseHearts + extra : 0;
 }
 
 export function nurseryCapacity(state: GameState): number {
@@ -44,17 +108,16 @@ export function capacityOf(state: GameState, room: LiveRoom): number {
   return room === 'nursery' ? nurseryCapacity(state) : shelterCapacity(state);
 }
 
-export function incubationDuration(state: GameState): number {
-  return Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS - C.SPEED_STEP_MS * lvl(state, 'speed'));
+export function incubationDuration(_state: GameState): number {
+  return Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS);
 }
 
-export function mutationRate(state: GameState): number {
-  return Math.min(C.MUTATION_MAX, C.MUTATION_BASE + C.MUTATION_STEP * lvl(state, 'mutation'));
+export function mutationRate(_state: GameState): number {
+  return C.MUTATION_BASE;
 }
 
 export function offlineCapMin(state: GameState): number {
-  return C.OFFLINE_CAP_BASE_MIN + C.OFFLINE_CAP_STEP_MIN * lvl(state, 'offline')
-    + researchBonus(state, 'offline');
+  return C.OFFLINE_CAP_BASE_MIN + researchBonus(state, 'offline');
 }
 
 export function catsIn(state: GameState, room: LiveRoom): Cat[] {
@@ -63,11 +126,12 @@ export function catsIn(state: GameState, room: LiveRoom): Cat[] {
 
 /**
  * Сколько котов реально живёт в комнате (на полу) — без тех, кто физически в слоте
- * инкубатора (родители вязки и «оставленный с роднёй» малыш). Это число и есть
+ * инкубатора (родители вязки и «оставленный с роднёй» малыш) и без чемпионов на
+ * пьедесталах выставки (они «в отъезде» на подиуме, а не в комнате). Это число и есть
  * заполненность комнаты для проверки вместимости и подписей «N/cap».
  */
 export function roomCount(state: GameState, room: LiveRoom): number {
-  return state.cats.filter((c) => c.location === room && !isInSlot(state, c.id)).length;
+  return state.cats.filter((c) => c.location === room && !isInSlot(state, c.id) && !isChampion(state, c.id)).length;
 }
 
 /** Кот занят, если участвует в активной вязке. */
@@ -84,16 +148,119 @@ export function isInSlot(state: GameState, catId: string): boolean {
   return state.slots.some((s) => s.motherId === catId || s.fatherId === catId || s.kittenId === catId);
 }
 
-/** Суммарный пассивный доход питомника (💰/мин) с учётом «Выставки» и исследований. */
+/** Общий множитель дохода пьедесталов: исследования ветки «Обучение» (income). */
+function showMult(state: GameState): number {
+  return 1 + researchBonus(state, 'income');
+}
+
+/**
+ * Пассивный доход выставки (💰/мин, ДО вычета корма). Приносят ТОЛЬКО коты-чемпионы
+ * (выставленные на пьедесталы), доход каждого ∝ его рыночной ценности; сумма
+ * умножается на «Выставку» и исследования дохода. Нет чемпионов → дохода нет
+ * (кроме бонуса «Коллекционер» за открытые породы).
+ */
 export function passiveRatePerMin(state: GameState): number {
-  const mult = (1 + C.SHOW_BONUS_STEP * lvl(state, 'show')) * (1 + researchBonus(state, 'income'));
   let rate = 0;
-  for (const c of state.cats) {
-    if (c.location === 'nursery') rate += C.TIER_VALUE[c.rarityTier].incomePerMin;
-  }
+  for (const c of championCats(state)) rate += catMarketValue(c) * C.CHAMPION_INCOME_RATE;
   // «Коллекционер»: +доход за каждую открытую породу
   rate += state.discoveredBreeds.length * researchBonus(state, 'collectionIncome');
-  return rate * mult;
+  return rate * showMult(state);
+}
+
+/** Доход одного кота-чемпиона (💰/мин) — для подписи над пьедесталом. */
+export function championIncomePerMin(state: GameState, cat: Cat): number {
+  return catMarketValue(cat) * C.CHAMPION_INCOME_RATE * showMult(state);
+}
+
+// --- Корм (контейнер + мягкий голод) ---
+
+/** Открыта ли механика корма (уровнем лаборатории). До ур.3 корм не расходуется. */
+export function foodEnabled(state: GameState): boolean {
+  return isUnlocked(state, 'food');
+}
+
+/** Ёмкость кормушки (ед.). Запас растягивает узел «Экономный рацион» (feedEff — коты
+ *  едят меньше), автопополнение — «Автокормушка» (autoFeed); сама ёмкость константна. */
+export function foodCap(_state: GameState): number {
+  return C.FOOD_CAP_BASE;
+}
+
+/** Текущий запас корма (безопасно к старым сейвам без поля). */
+export function foodLevel(state: GameState): number {
+  return Math.max(0, state.food ?? C.FOOD_CAP_BASE);
+}
+
+/** Снижение расхода корма от исследования «Экономный рацион» (доля, потолок 0.9). */
+export function feedEfficiency(state: GameState): number {
+  return Math.min(0.9, researchBonus(state, 'feedEff'));
+}
+
+/**
+ * Расход корма (ед./мин): коты сверх бесплатного лимита, со скидкой «Экономного
+ * рациона». 0, пока механика не открыта уровнем лаборатории (тогда голода нет и
+ * доход считается по-старому — только пассив).
+ */
+export function foodRatePerMin(state: GameState): number {
+  if (!foodEnabled(state)) return 0;
+  const billable = Math.max(0, state.cats.length - C.FEED_FREE_CATS);
+  return billable * C.FOOD_PER_CAT_PER_MIN * (1 - feedEfficiency(state));
+}
+
+/** Голодают ли коты: корм открыт, есть расход и запас на нуле. */
+export function isStarving(state: GameState): boolean {
+  return foodRatePerMin(state) > 0 && foodLevel(state) <= 0;
+}
+
+/** На сколько минут хватит корма при текущем расходе (Infinity — расхода нет). */
+export function foodMinutesLeft(state: GameState): number {
+  const rate = foodRatePerMin(state);
+  if (rate <= 0) return Infinity;
+  return foodLevel(state) / rate;
+}
+
+/**
+ * Списывает корм за `elapsedMin` прошедших минут (мутирует state.food) и возвращает,
+ * сколько из них коты были СЫТЫ — за столько и начисляется доход. Если корм не
+ * расходуется (механика закрыта или котов мало) — сытыми считаются все минуты.
+ * Используется и онлайн (по кадрам), и офлайн (при возврате в игру).
+ */
+export function consumeFood(state: GameState, elapsedMin: number): number {
+  const rate = foodRatePerMin(state);
+  if (rate <= 0 || elapsedMin <= 0) return Math.max(0, elapsedMin);
+  const have = foodLevel(state);
+  const consumed = Math.min(have, rate * elapsedMin);
+  state.food = have - consumed;
+  return consumed / rate; // сытые минуты (≤ elapsedMin)
+}
+
+/** Чистый доход в минуту: пассив выставки; при голоде — 0 (коты не работают). */
+export function netIncomePerMin(state: GameState): number {
+  return isStarving(state) ? 0 : passiveRatePerMin(state);
+}
+
+/** Включена ли «Автокормушка» (исследование r_infra5 + механика корма открыта). */
+export function autoFeedEnabled(state: GameState): boolean {
+  return foodEnabled(state) && researchBonus(state, 'autoFeed') > 0;
+}
+
+/**
+ * «Автокормушка»: докупает корм за 💰, чтобы покрыть предстоящий расход за `elapsedMin`,
+ * пока хватает монет и есть место в кормушке. Мутирует state.food/coins. Казну в минус
+ * не уводит. Вызывается перед consumeFood (онлайн и офлайн — единая математика).
+ */
+export function autoFeed(state: GameState, elapsedMin: number): void {
+  const rate = foodRatePerMin(state);
+  if (rate <= 0 || elapsedMin <= 0) return;
+  const need = rate * elapsedMin - foodLevel(state); // сколько не хватит на весь период
+  if (need <= 0) return;
+  const perUnit = C.FOOD_PACK_COST / C.FOOD_PACK_UNITS;
+  const room = foodCap(state) - foodLevel(state);
+  const affordable = Math.floor(state.coins / perUnit);
+  const units = Math.max(0, Math.min(Math.ceil(need), room, affordable));
+  if (units <= 0) return;
+  const cost = Math.min(state.coins, Math.round(units * perUnit));
+  state.coins -= cost;
+  state.food = foodLevel(state) + units;
 }
 
 /**
@@ -162,17 +329,118 @@ export function buyCatCost(state: GameState): number {
   return state.cats.length === 0 ? 0 : C.STARTER_CAT_COST;
 }
 
-/** Награда за пристройство кота: 💰 (с учётом «Связей») + 🧬 (с учётом «Биобанка») + исследований. */
-export function adoptReward(state: GameState, cat: Cat): { coins: number; dna: number } {
-  const v = C.TIER_VALUE[cat.rarityTier];
-  return {
-    coins: Math.round(v.adopt
-      * (1 + C.CONNECTIONS_STEP * lvl(state, 'connections'))
-      * (1 + researchBonus(state, 'adoptCoins'))),
-    dna: Math.round(v.dna
-      * (1 + C.BIOBANK_STEP * lvl(state, 'biobank'))
-      * (1 + researchBonus(state, 'adoptDna'))),
+// --- Рыночная ценность кота (единая шкала для продажи/выставки/лаборатории) ---
+
+/**
+ * Множитель ценности за родословную: глубина известного древа + «породистость»
+ * предков (средний тир) + премия за чистую линию. Ограничен PEDIGREE_VALUE_MAX.
+ */
+export function pedigreeValueMult(cat: Cat): number {
+  const ped = catAncestors(cat);
+  const roots = [ped.mother, ped.father].filter(Boolean) as Ancestor[];
+  if (roots.length === 0) return 1;
+  const depthOf = (a?: Ancestor): number => (a ? 1 + Math.max(depthOf(a.mother), depthOf(a.father)) : 0);
+  const depth = Math.max(...roots.map((r) => depthOf(r)));
+  let tierSum = 0;
+  let count = 0;
+  let hasBase = false;
+  const walk = (a?: Ancestor): void => {
+    if (!a) return;
+    count++;
+    const t = TIER_LEVEL[tierOfBreed(a.breed)];
+    if (t === 0) hasBase = true; // дворовый/домашний предок — линия не «чистая»
+    tierSum += t;
+    walk(a.mother);
+    walk(a.father);
   };
+  for (const r of roots) walk(r);
+  const avgTier = count > 0 ? tierSum / count : 0;
+  let mult = 1
+    + C.PEDIGREE_VALUE_PER_GEN * Math.max(0, depth - 1)
+    + C.PEDIGREE_VALUE_PER_TIER * avgTier;
+  if (!hasBase) mult += C.PEDIGREE_VALUE_PURE;
+  return Math.min(C.PEDIGREE_VALUE_MAX, mult);
+}
+
+/** Множитель ценности за здоровье (запас сердец): 5/5 → 1.0, 0 → HEALTH_VALUE_FLOOR. */
+export function healthValueMult(cat: Cat): number {
+  const h = Math.max(0, Math.min(1, heartsOf(cat) / C.MAX_HEARTS));
+  return C.HEALTH_VALUE_FLOOR + (1 - C.HEALTH_VALUE_FLOOR) * h;
+}
+
+/**
+ * Рыночная ценность кота (💰) — сколько он «стоит»: тир (главный фактор) × порода
+ * внутри тира × родословная × здоровье. Единая база для заказов, пристройства,
+ * лаборатории и дохода выставки.
+ */
+export function catMarketValue(cat: Cat): number {
+  return Math.round(
+    C.TIER_MARKET_VALUE[cat.rarityTier]
+    * breedValueMult(cat.breed)
+    * pedigreeValueMult(cat)
+    * healthValueMult(cat),
+  );
+}
+
+/**
+ * Награда за пристройство «в добрые руки»: доля рыночной цены (в разы меньше
+ * продажи по заказу) + немного 🧬. Учитывает «Связи», «Биобанк» и исследования.
+ */
+export function adoptReward(state: GameState, cat: Cat): { coins: number; dna: number } {
+  const market = catMarketValue(cat);
+  return {
+    coins: Math.round(market * C.ADOPT_COIN_FRACTION
+      * (1 + researchBonus(state, 'adoptCoins'))),
+    dna: Math.max(1, Math.round(C.TIER_VALUE[cat.rarityTier].dna * C.ADOPT_DNA_FRACTION
+      * (1 + researchBonus(state, 'adoptDna')))),
+  };
+}
+
+/** Награда за сдачу кота в лабораторию: главным образом 🧬 гены + немного 💰. */
+export function labReward(state: GameState, cat: Cat): { dna: number; coins: number } {
+  const market = catMarketValue(cat);
+  return {
+    dna: Math.max(1, Math.round(market * C.LAB_DNA_RATE
+      * (1 + researchBonus(state, 'adoptDna')))),
+    coins: Math.round(market * C.LAB_COIN_RATE),
+  };
+}
+
+// --- Выставка / чемпионы ---
+
+/** Сколько котов можно выставить чемпионами (прокачивается championSlots). */
+export function championSlots(state: GameState): number {
+  return C.CHAMPION_SLOTS_BASE + lvl(state, 'championSlots');
+}
+
+/** Валидные id чемпионов (без пустых слотов и ссылок на уже проданных/уехавших котов). */
+export function championIds(state: GameState): string[] {
+  return (state.champions ?? []).filter((id): id is string => !!id && state.cats.some((c) => c.id === id));
+}
+
+/** Коты-чемпионы (объекты, без привязки к конкретному пьедесталу). */
+export function championCats(state: GameState): Cat[] {
+  const ids = new Set(championIds(state));
+  return state.cats.filter((c) => ids.has(c.id));
+}
+
+/** Кот на конкретном пьедестале (или null — слот пуст/ссылка протухла). */
+export function championAt(state: GameState, slotIndex: number): Cat | null {
+  const id = (state.champions ?? [])[slotIndex];
+  if (!id) return null;
+  return state.cats.find((c) => c.id === id) ?? null;
+}
+
+/** Выставлен ли кот чемпионом (на любом пьедестале). */
+export function isChampion(state: GameState, catId: string): boolean {
+  return (state.champions ?? []).includes(catId);
+}
+
+/** Стоимость мгновенного завершения таймера (💎) по остатку времени. */
+export function speedUpCost(remainingMs: number): number {
+  if (remainingMs <= 0) return 0;
+  const mins = Math.ceil(remainingMs / 60_000);
+  return Math.max(C.SPEEDUP_CRYSTAL_MIN, mins * C.SPEEDUP_CRYSTAL_PER_MIN);
 }
 
 /** Стоимость следующего уровня апгрейда (или null, если апгрейда нет). */

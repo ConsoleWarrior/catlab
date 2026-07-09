@@ -95,6 +95,9 @@ export interface GameState {
   research: string[];               // изученные узлы дерева исследований (постоянные бонусы)
   unlockedRooms: RoomId[];
   orders: Order[];
+  champions: (string | null)[];     // id кота-чемпиона по индексу пьедестала (null — слот пуст)
+  food: number;                     // запас корма в кормушке (ед.); мягкий голод при 0
   lastSeenAt: number;               // для офлайн/пассивного дохода
+  lastHealAdAt: number;             // глобальный кулдаун 📺-лечения в клинике (этап D)
   nextId: number;                   // счётчик уникальных id
 }

@@ -68,14 +68,18 @@ export function kinshipLevel(mother: Cat, father: Cat): KinshipLevel {
 /**
  * Бросок здоровья новорождённого по уровню родства родителей: интервалы одного
  * броска из C.KINSHIP_HEALTH, иначе полный запас MAX_HEARTS. 0 — «Бесплодный».
+ * `safety` (0..0.5, исследование «Генетические маркеры») пропорционально уменьшает
+ * вероятность каждого негативного исхода — риск сжимается к MAX_HEARTS.
  */
-export function rollKittenHearts(kinship: KinshipLevel, rng: () => number): number {
+export function rollKittenHearts(kinship: KinshipLevel, rng: () => number, safety = 0): number {
   const risks = C.KINSHIP_HEALTH[kinship];
   if (risks.length === 0) return C.MAX_HEARTS;
+  const factor = Math.max(0, 1 - safety);
   let r = rng();
   for (const { p, hearts } of risks) {
-    if (r < p) return hearts;
-    r -= p;
+    const pp = p * factor;
+    if (r < pp) return hearts;
+    r -= pp;
   }
   return C.MAX_HEARTS;
 }

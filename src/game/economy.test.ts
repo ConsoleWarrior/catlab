@@ -3,7 +3,7 @@ import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, nurseryCapacity, shelterCapacity, incubationDuration,
   mutationRate, offlineCapMin, upgradeCost, upgradeMaxed, passiveRatePerMin,
-  adoptReward, isOld, breedsLeft, isSterile, heartsOf,
+  adoptReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue,
 } from './index.js';
 import * as C from './config.js';
 
@@ -33,31 +33,25 @@ describe('геттеры прокачки', () => {
     expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + C.SHELTER_CAP_STEP);
   });
 
-  it('скорость инкубации уменьшается и упирается в минимум', () => {
+  it('длительность инкубации постоянна (апгрейд скорости удалён на C0)', () => {
     const s = createInitialState(makeRng(3), 0);
-    expect(incubationDuration(s)).toBe(C.INCUBATION_BASE_MS);
-    s.upgrades.speed = 2;
-    expect(incubationDuration(s)).toBe(
-      Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS - 2 * C.SPEED_STEP_MS),
-    );
-    s.upgrades.speed = 999;
-    expect(incubationDuration(s)).toBe(C.INCUBATION_MIN_MS);
+    expect(incubationDuration(s)).toBe(Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS));
+    s.upgrades.speed = 2; // легаси-ключ больше ни на что не влияет
+    expect(incubationDuration(s)).toBe(Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS));
   });
 
-  it('мутация растёт и упирается в потолок', () => {
+  it('шанс мутации постоянный (базовый; апгрейд мутагена удалён)', () => {
     const s = createInitialState(makeRng(4), 0);
     expect(mutationRate(s)).toBeCloseTo(C.MUTATION_BASE);
-    s.upgrades.mutation = 3;
-    expect(mutationRate(s)).toBeCloseTo(C.MUTATION_BASE + 3 * C.MUTATION_STEP);
-    s.upgrades.mutation = 999;
-    expect(mutationRate(s)).toBeCloseTo(C.MUTATION_MAX);
+    s.upgrades.mutation = 3; // легаси-ключ больше ни на что не влияет
+    expect(mutationRate(s)).toBeCloseTo(C.MUTATION_BASE);
   });
 
-  it('потолок офлайн-дохода растёт', () => {
+  it('потолок офлайн-дохода растёт узлом «Ночной смотритель»', () => {
     const s = createInitialState(makeRng(5), 0);
     expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN);
-    s.upgrades.offline = 1;
-    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + C.OFFLINE_CAP_STEP_MIN);
+    s.research = ['r_infra1', 'r_infra2', 'r_infra3'];
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 180);
   });
 });
 
@@ -71,9 +65,9 @@ describe('стоимость апгрейдов', () => {
 
   it('обычный апгрейд дорожает по mult', () => {
     const s = createInitialState(makeRng(7), 0);
-    expect(upgradeCost(s, 'speed')).toEqual({ currency: 'coins', amount: 150 });
-    s.upgrades.speed = 1;
-    expect(upgradeCost(s, 'speed')).toEqual({ currency: 'coins', amount: Math.round(150 * 1.8) });
+    expect(upgradeCost(s, 'nurseryCap')).toEqual({ currency: 'coins', amount: 200 });
+    s.upgrades.nurseryCap = 1;
+    expect(upgradeCost(s, 'nurseryCap')).toEqual({ currency: 'coins', amount: Math.round(200 * 1.6) });
   });
 
   it('upgradeMaxed по достижении максимума', () => {
@@ -88,24 +82,29 @@ describe('стоимость апгрейдов', () => {
 });
 
 describe('доход и пристройство', () => {
-  it('пассивный доход = сумма по тирам питомника', () => {
+  it('пассивный доход считается по чемпионам (без них — ноль)', () => {
     const s = createInitialState(makeRng(9), 0);
-    const expected = s.cats
-      .filter((c) => c.location === 'nursery')
-      .reduce((a, c) => a + C.TIER_VALUE[c.rarityTier].incomePerMin, 0);
-    expect(passiveRatePerMin(s)).toBe(expected);
+    expect(passiveRatePerMin(s)).toBe(0); // чемпионов нет — дохода нет
+    const champ = s.cats[0]!;
+    s.champions = [champ.id];
+    expect(passiveRatePerMin(s)).toBeCloseTo(catMarketValue(champ) * C.CHAMPION_INCOME_RATE);
   });
 
-  it('награда за пристройство учитывает связи и биобанк', () => {
+  it('награда за пристройство = доля рыночной цены (легаси-множители удалены)', () => {
     const s = createInitialState(makeRng(10), 0);
     const cat = s.cats[0]!;
-    const v = C.TIER_VALUE[cat.rarityTier];
-    expect(adoptReward(s, cat)).toEqual({ coins: v.adopt, dna: v.dna });
+    const market = catMarketValue(cat);
+    const dnaBase = C.TIER_VALUE[cat.rarityTier].dna;
+    expect(adoptReward(s, cat)).toEqual({
+      coins: Math.round(market * C.ADOPT_COIN_FRACTION),
+      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION)),
+    });
+    // легаси-ключи connections/biobank больше не влияют на награду
     s.upgrades.connections = 1;
     s.upgrades.biobank = 1;
     expect(adoptReward(s, cat)).toEqual({
-      coins: Math.round(v.adopt * (1 + C.CONNECTIONS_STEP)),
-      dna: Math.round(v.dna * (1 + C.BIOBANK_STEP)),
+      coins: Math.round(market * C.ADOPT_COIN_FRACTION),
+      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION)),
     });
   });
 });
@@ -150,6 +149,7 @@ describe('дерево исследований (эффекты)', () => {
 
   it('доходные узлы дают множитель и бонус за коллекцию', () => {
     const s = createInitialState(makeRng(31), 0);
+    s.champions = [s.cats[0]!.id]; // доход идёт от чемпиона
     const base = passiveRatePerMin(s);
     s.research = ['r_income1']; // +25% пассива
     expect(passiveRatePerMin(s)).toBeCloseTo(base * 1.25);
@@ -161,11 +161,12 @@ describe('дерево исследований (эффекты)', () => {
   it('узлы пристройства увеличивают 💰 и 🧬', () => {
     const s = createInitialState(makeRng(32), 0);
     const cat = s.cats[0]!;
-    const v = C.TIER_VALUE[cat.rarityTier];
+    const market = catMarketValue(cat);
+    const dnaBase = C.TIER_VALUE[cat.rarityTier].dna;
     s.research = ['r_adopt1', 'r_adopt2', 'r_adopt3']; // +0.30 и +0.50 к 💰, +0.40 к 🧬
     expect(adoptReward(s, cat)).toEqual({
-      coins: Math.round(v.adopt * (1 + 0.30 + 0.50)),
-      dna: Math.round(v.dna * (1 + 0.40)),
+      coins: Math.round(market * C.ADOPT_COIN_FRACTION * (1 + 0.30 + 0.50)),
+      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION * (1 + 0.40))),
     });
   });
 });

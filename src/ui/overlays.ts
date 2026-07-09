@@ -11,14 +11,15 @@ import {
   isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
   roomCount, nurseryCapacity, shelterCapacity,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
-  adoptCat, adoptReward,
+  adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
+  sendToLab, labReward,
+  healCat, isUnlocked, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
 } from '../game/index.js';
 import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { Button, COLORS, FONT, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
 import { describeCat, catTraits, describeReq } from './describe.js';
 import { catSprite } from './catTextures.js';
-import { upgradeButton } from './upgradeButton.js';
 
 /**
  * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
@@ -78,40 +79,6 @@ function rewardText(r: { coins: number; crystals: number; dna: number; reputatio
   return p.join('  ');
 }
 
-/** Оверлей улучшений комнаты (список апгрейдов). Перерисовывается после покупки. */
-export function buildUpgradesPanel(
-  ctx: UiContext, title: string, ids: string[], close: () => void,
-): Container {
-  const W = Math.min(ctx.roomW - 40, 460);
-  const root = new Container();
-
-  const render = (): void => {
-    root.removeChildren();
-    const titleT = label(title, 20, COLORS.ink, '800');
-    titleT.position.set(W / 2, 30);
-    let y = 60;
-    const items: Container[] = [titleT];
-    for (const id of ids) {
-      const b = upgradeButton(ctx, id, W - 48);
-      const orig = b.onTap;
-      b.onTap = () => { orig?.(); render(); }; // обновить стоимости после покупки
-      b.position.set(W / 2, y + 26);
-      items.push(b);
-      y += 60;
-    }
-    const closeBtn = new Button({ text: 'Закрыть', w: 180, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
-    closeBtn.position.set(W / 2, y + 24);
-    closeBtn.onTap = close;
-    items.push(closeBtn);
-
-    const H = y + 56;
-    root.addChild(panel(W, H, COLORS.hud, 18), ...items);
-  };
-
-  render();
-  return root;
-}
-
 /** Оверлей-инструкция «Как играть». */
 export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
   const W = Math.min(ctx.roomW - 40, 640);
@@ -124,7 +91,8 @@ export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
     '🏆 Питомник. Ценные коты приносят пассивный доход 💰/мин. Тап по коту открывает меню действий.',
     '🏠 Приют. Обычных котиков пристраивай «в добрые руки» — получишь 💰 и 🧬 ДНК.',
     '🔬 Генолаб. Котодекс — альбом всех пород: собирай редких в коллекцию. Дальше — улучшения за 🧬 ДНК.',
-    '📋 Заказы. Приведи кота нужной породы или редкости → 💰, 💎 и репутация. Репутация повышает уровень лаборатории.',
+    '📋 Заказы. Приведи кота нужной породы или редкости → 💰, 💎 и опыт ⭐.',
+    '⭐ Опыт и уровень. Опыт дают рождения, продажи по заказам, пристройство и лаборатория. Новый уровень лаборатории открывает слоты вязки, пьедесталы, станции и исследования.',
     '🛒 Нет котиков? В Питомнике купи простого. Если котов нет совсем — первый бесплатно.',
     '👆 Листай комнаты свайпом ← → или стрелками по бокам.',
   ];
@@ -448,6 +416,21 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   if (cat.motherBreed || cat.fatherBreed) {
     addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
+
+  // Ускорение роста: реклама (−N мин, бесплатно) и кристаллы (вырастить мгновенно).
+  const gcost = speedUpCost(growthRemainingMs(cat, ctx.now()));
+  const skipMin = Math.round(AD_SKIP_MS / 60_000);
+  addBtn(`📺 Ускорить рост (−${skipMin} мин)`, COLORS.secondary, true, () => {
+    const r = adSkipGrowth(ctx.state, cat.id, ctx.now());
+    if (!r.ok) { ctx.toast(r.reason); return; }
+    ctx.commit(); close(); ctx.openCatMenu(cat);
+  });
+  addBtn(`💎 Вырастить сразу (${gcost})`, COLORS.primary, true, () => {
+    const r = speedUpGrowth(ctx.state, cat.id, ctx.now());
+    if (!r.ok) { ctx.toast(r.reason); return; }
+    ctx.commit(); close(); ctx.openCatMenu(cat);
+  });
+
   addMoveButtons(ctx, cat, close, addBtn);
 
   const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
@@ -703,6 +686,13 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
+  // Клиника: альтернатива перетаскиванию на станцию-шприц (есть что лечить,
+  // не бесплодный, клиника открыта уровнем). Кота в слоте вязки не лечим.
+  if (isUnlocked(ctx.state, 'clinic') && !isSterile(cat) && breedsLeft(cat) < heartsOf(cat)
+      && !isInSlot(ctx.state, cat.id)) {
+    addBtn('💉 Полечить', COLORS.good, true, () => ctx.openHealConfirm(cat));
+  }
+
   // Переезд между комнатами: в слоте вязки — обе кнопки, иначе одна (в комнату,
   // где кота нет). Занятого активной вязкой кота не двигаем — он breeding'ится.
   if (!busy) addMoveButtons(ctx, cat, close, addBtn);
@@ -753,12 +743,151 @@ export function buildAdoptConfirm(ctx: UiContext, cat: Cat, close: () => void): 
     const r = adoptCat(ctx.state, cat.id);
     if (!r.ok) { ctx.toast(r.reason); close(); return; }
     ctx.commit();
-    ctx.toast(`Котика пристроили 🏠  +💰${r.coins}  +🧬${r.dna}`);
+    ctx.toast(`Котика пристроили 🏠  +💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`);
     close();
   };
   y += 56;
 
   root.addChild(panel(W, y, COLORS.hud, 18), title, sp, who, reward, noBtn, yesBtn);
+  return root;
+}
+
+/**
+ * Подтверждение сдачи кота в лабораторию «на эксперименты»: награда (🧬 + немного 💰)
+ * и кнопки Да/Нет. Открывается, когда кота перетащили на лабораторный слот в Приюте.
+ * Кот уезжает — это основной способ добывать гены из лишних котов (sendToLab).
+ */
+export function buildLabConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const { dna, coins } = labReward(ctx.state, cat);
+
+  const title = label('Сдать котика в лабораторию?', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+  const sub = label('на эксперименты — взамен 🧬 гены', 12.5, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 50);
+
+  const sp = catSprite(ctx.app, cat, 84);
+  sp.position.set(W / 2, 158);
+  const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
+  who.position.set(W / 2, 180);
+
+  const reward = label(`Вы получите:   🧬 ${dna}${coins > 0 ? `     💰 ${coins}` : ''}`, 16, COLORS.ink, '800');
+  reward.position.set(W / 2, 212);
+
+  const pad = 24, gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  let y = 242;
+  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  noBtn.position.set(pad + bw / 2, y + 24);
+  noBtn.onTap = close;
+  const yesBtn = new Button({ text: 'Да 🧪', w: bw, h: 48, color: COLORS.dna, fontSize: 16 });
+  yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
+  yesBtn.onTap = () => {
+    const r = sendToLab(ctx.state, cat.id);
+    if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Лаборатория ещё заперта 🔒' : r.reason); close(); return; }
+    ctx.commit();
+    ctx.toast(`Кот в лаборатории 🧪  +🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    close();
+  };
+  y += 56;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), title, sub, sp, who, reward, noBtn, yesBtn);
+  return root;
+}
+
+/**
+ * Клиника: диалог лечения кота (💉). Показывает сердца (потраченные 🖤 / оставшиеся ❤️)
+ * и два способа восстановить вязки: 📺 реклама (+1 ❤, глобальный кулдаун) или
+ * 💎 полное лечение (цена ∝ потраченным сердцам). maxHearts НЕ меняется — потолок
+ * от инбридинга неизлечим; «Бесплодных» (0 ❤) клиника не берёт (healCat откажет).
+ */
+export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+
+  const title = label('💉 Клиника', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+  const sub = label('восстанавливает потраченные вязки', 12.5, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 50);
+
+  const sp = catSprite(ctx.app, cat, 84);
+  sp.position.set(W / 2, 158);
+  const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
+  who.position.set(W / 2, 180);
+
+  const total = heartsOf(cat);
+  const left = breedsLeft(cat);
+  const spent = Math.max(0, total - left);
+  const heartsStr = total > 0 ? '🖤'.repeat(spent) + '❤️'.repeat(left) : '∅';
+  const hearts = label('Здоровье ' + heartsStr, 15, COLORS.ink, '800');
+  hearts.position.set(W / 2, 210);
+
+  let y = 236;
+  root.addChild(title, sub, sp, who, hearts);
+
+  const btnW = W - 48;
+  if (isSterile(cat)) {
+    // родился без сердец — генетический тупик, лечению не подлежит (решение §6)
+    const note = label('Бесплодный — лечению не подлежит 🚫', 13, COLORS.warn, '800');
+    note.position.set(W / 2, y);
+    root.addChild(note);
+    y += 28;
+  } else if (spent <= 0) {
+    const note = label('Кот полностью здоров ✨', 13, COLORS.good, '800');
+    note.position.set(W / 2, y);
+    root.addChild(note);
+    y += 28;
+  } else {
+    // 📺 реклама: +1 ❤ бесплатно, но с глобальным кулдауном (0 = ещё не смотрели)
+    const cdLeft = ctx.state.lastHealAdAt > 0
+      ? HEAL_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastHealAdAt) : 0;
+    const adReady = cdLeft <= 0;
+    const adBtn = new Button({
+      text: adReady ? `📺 +${HEAL_AD_HEARTS} ❤ бесплатно` : `📺 через ${Math.ceil(cdLeft / 60_000)} мин`,
+      w: btnW, h: 44, color: adReady ? COLORS.good : COLORS.cardEdge,
+      textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+    });
+    adBtn.enabled = adReady;
+    adBtn.position.set(W / 2, y + 22);
+    adBtn.onTap = () => {
+      const r = healCat(ctx.state, cat.id, 'ad', ctx.now());
+      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Клиника ещё заперта 🔒' : r.reason); close(); return; }
+      ctx.commit();
+      ctx.toast(`Кот подлечен 💉 +${r.healed} ❤`);
+      close();
+    };
+    root.addChild(adBtn);
+    y += 52;
+
+    // 💎 полное лечение: цена пропорциональна потраченным сердцам
+    const cost = HEAL_CRYSTAL_PER_HEART * spent;
+    const afford = ctx.state.crystals >= cost;
+    const fullBtn = new Button({
+      text: `💎 Вылечить всё · ${cost}`,
+      w: btnW, h: 44, color: afford ? COLORS.secondary : COLORS.cardEdge,
+      textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+    });
+    fullBtn.enabled = afford;
+    fullBtn.position.set(W / 2, y + 22);
+    fullBtn.onTap = () => {
+      const r = healCat(ctx.state, cat.id, 'crystals', ctx.now());
+      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Клиника ещё заперта 🔒' : r.reason); close(); return; }
+      ctx.commit();
+      ctx.toast(`Кот полностью здоров 💉 +${r.healed} ❤  −${r.crystals} 💎`);
+      close();
+    };
+    root.addChild(fullBtn);
+    y += 52;
+  }
+
+  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 20);
+  closeBtn.onTap = close;
+  root.addChild(closeBtn);
+  y += 50;
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
   return root;
 }
 

@@ -44,6 +44,7 @@ describe('инкубатор', () => {
 
   it('занятый кот не идёт во вторую вязку', () => {
     const s = createInitialState(makeRng(7), 0);
+    s.level = 10; // снимаем гейты уровня (2-й слот вязки открыт)
     s.coins = 1000;
     expect(buyUpgrade(s, 'slots').ok).toBe(true);
     const { female, male } = pair(s);
@@ -65,6 +66,7 @@ describe('инкубатор', () => {
 
   it('assignBreeder: ставит по полу, меняет местами, не трогает активный слот', () => {
     const s = createInitialState(makeRng(15), 0);
+    s.level = 10; // снимаем гейты уровня
     s.coins = 1000;
     buyUpgrade(s, 'slots'); // нужен второй слот
     const { female, male } = pair(s);
@@ -183,6 +185,20 @@ describe('комнаты', () => {
     expect(moveCat(s, cat.id, 'shelter').ok).toBe(true);
     expect(cat.location).toBe('shelter');
   });
+
+  it('нет места → moveCat не выпускает родителя вязки из слота, даже если location уже совпадает', () => {
+    const s = createInitialState(makeRng(13), 0);
+    const { female, male } = pair(s);
+    // родитель вязки: location у него уже 'nursery' (никогда не менялся), но физически
+    // он в слоте — это раньше ложно срабатывало как «уже дома», минуя проверку места
+    startBreeding(s, 0, female.id, male.id, 0);
+    while (roomCount(s, 'nursery') < nurseryCapacity(s)) {
+      s.cats.push({ ...female, id: 'x' + s.nextId++, location: 'nursery' });
+    }
+    const r = moveCat(s, female.id, 'nursery');
+    expect(r.ok).toBe(false);
+    expect(isInSlot(s, female.id)).toBe(true); // осталась в слоте, не «просочилась» 11-й
+  });
 });
 
 describe('покупка кота (анти-софт-лок)', () => {
@@ -223,6 +239,7 @@ describe('покупка кота (анти-софт-лок)', () => {
 describe('прокачка и генолаб', () => {
   it('апгрейд слотов: списывает монеты и добавляет слот', () => {
     const s = createInitialState(makeRng(13), 0);
+    s.level = 10; // 2-й слот вязки уже разрешён уровнем — проверяем именно оплату
     expect(buyUpgrade(s, 'slots').ok).toBe(false); // 100 < 500
     s.coins = 500;
     expect(buyUpgrade(s, 'slots').ok).toBe(true);
@@ -244,6 +261,7 @@ describe('прокачка и генолаб', () => {
 describe('генная инженерия', () => {
   it('buyBoost заряжает усилитель за ДНК', () => {
     const s = createInitialState(makeRng(40), 0);
+    s.level = 10; // Генная инженерия открыта уровнем
     expect(buyBoost(s, 'tierUp').ok).toBe(false); // 0 ДНК
     expect(buyBoost(s, 'bogus').ok).toBe(false);  // нет такого усилителя
     s.dna = 100;
@@ -254,6 +272,7 @@ describe('генная инженерия', () => {
 
   it('buyBoost заряжает усилитель за кристаллы (премиум-альтернатива)', () => {
     const s = createInitialState(makeRng(40), 0);
+    s.level = 10; // Генная инженерия открыта уровнем
     s.crystals = 4; s.dna = 0;
     expect(buyBoost(s, 'tierUp', 'crystals').ok).toBe(false); // нужно 5 💎
     expect(buyBoost(s, 'luckyUp', 'crystals').ok).toBe(true); // 3 💎
@@ -265,6 +284,7 @@ describe('генная инженерия', () => {
   it('🔼 Форсаж в инкубаторе поднимает тир котёнка и тратит заряд', () => {
     const rng = makeRng(41);
     const s = createInitialState(rng, 0);
+    s.level = 10; // Генная инженерия открыта уровнем
     const { female, male } = pair(s); // дворовые (common)
     s.dna = 100;
     buyBoost(s, 'tierUp');
@@ -277,6 +297,7 @@ describe('генная инженерия', () => {
   it('заряд Форсажа не тратится впустую на легендарной паре', () => {
     const rng = makeRng(42);
     const s = createInitialState(rng, 0);
+    s.level = 10; // Генная инженерия открыта уровнем
     const { female, male } = pair(s);
     female.breed = 'bengal'; female.rarityTier = 'legendary';
     male.breed = 'bengal'; male.rarityTier = 'legendary';
@@ -292,6 +313,7 @@ describe('генная инженерия', () => {
 describe('дерево исследований', () => {
   it('unlockResearch: пререквизиты, стоимость, повтор и неизвестный узел', () => {
     const s = createInitialState(makeRng(50), 0);
+    s.level = 10; // дерево исследований открыто уровнем (проверяем логику узлов, не гейт)
     expect(unlockResearch(s, 'r_income2').ok).toBe(false); // нужен r_income1
     expect(unlockResearch(s, 'r_income1').ok).toBe(false); // 0 ДНК
     s.dna = 1000;
@@ -365,6 +387,7 @@ describe('малыш с родителями (рождение)', () => {
   it('подросший малыш уходит родителем в соседний слот и не остаётся в родном (без раздвоения)', () => {
     const rng = makeRng(105);
     const s = createInitialState(rng, 0);
+    s.level = 10; // снимаем гейты уровня (2-й слот вязки открыт)
     s.coins = 1000;
     buyUpgrade(s, 'slots'); // нужен 2-й слот вязки
     const { female, male } = pair(s);
@@ -391,6 +414,7 @@ describe('малыш с родителями (рождение)', () => {
 describe('пассивный доход', () => {
   it('начисляется со временем и упирается в потолок офлайна', () => {
     const s = createInitialState(makeRng(9), 0);
+    s.champions = [s.cats[0]!.id]; // доход приносит кот-чемпион
     const rate = passiveRatePerMin(s);
     s.lastSeenAt = 0;
     const r1 = collectIncome(s, 60_000); // 1 минута

@@ -5,7 +5,7 @@
 import { randomCat } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { GameState } from './types.js';
-import { BASE_GENES, MAX_HEARTS, SAVE_VERSION } from './config.js';
+import { BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, levelForReputation } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
 import { attachHiddenPedigree } from './pedigree.js';
 import { refillOrders } from './orders.js';
@@ -28,7 +28,10 @@ export function createInitialState(rng: Rng, now: number): GameState {
     research: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
+    champions: [],
+    food: FOOD_CAP_BASE, // кормушка стартует полной
     lastSeenAt: now,
+    lastHealAdAt: 0,     // 📺-лечение в клинике сразу доступно (без стартового кулдауна)
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -56,6 +59,7 @@ export function deserialize(json: string): GameState {
   if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
   if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
   if (!Array.isArray(data.research)) data.research = [];
+  if (!Array.isArray(data.champions)) data.champions = [];
   for (const cat of data.cats) {
     if (typeof cat.breedCount !== 'number') cat.breedCount = 0;
     if (typeof cat.maxHearts !== 'number') cat.maxHearts = MAX_HEARTS;
@@ -64,5 +68,13 @@ export function deserialize(json: string): GameState {
   for (const slot of data.slots) {
     if (slot.kittenId === undefined) slot.kittenId = null;
   }
+  // Уровень лаборатории пересчитываем из накопленного опыта по актуальной таблице
+  // порогов: сейвы, сделанные при старой линейной формуле, приводятся в согласованность
+  // (новых полей нет — бамп SAVE_VERSION не нужен).
+  data.level = levelForReputation(data.reputation ?? 0);
+  // Кормушка — поле добавлено в этапе B; у старых сейвов его нет → стартуем полными.
+  if (typeof data.food !== 'number') data.food = FOOD_CAP_BASE;
+  // Кулдаун 📺-лечения клиники — поле этапа D; 0 = реклама сразу доступна.
+  if (typeof data.lastHealAdAt !== 'number') data.lastHealAdAt = 0;
   return data;
 }

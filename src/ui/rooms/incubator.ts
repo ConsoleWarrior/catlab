@@ -17,7 +17,9 @@ import {
   startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, growthScale,
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
   buyUpgrade, upgradeCost, upgradeMaxed,
+  maxSlotsForLevel, nextSlotUnlockLevel, isUnlocked, unlockLevelOf,
   kinshipLevel, KINSHIP_RU,
+  speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS,
 } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
@@ -168,6 +170,14 @@ export function createIncubator(ctx: UiContext): Room {
     // чипы стоят справа от плашки названия, вплотную (boostBar — в локальных
     // координатах titleBar; plateW — ширина плашки со счётчиком слотов).
     const firstCx = plateW + 12 + CHIP_W / 2;
+    // Генная инженерия открывается уровнем лаборатории — до этого вместо чипов замок.
+    if (!isUnlocked(ctx.state, 'engineering')) {
+      const hint = label(`🧪 Усилители — с ур. ${unlockLevelOf('engineering')} 🔒`, 13, COLORS.inkSoft, '700');
+      hint.anchor.set(0, 0.5);
+      hint.position.set(firstCx - CHIP_W / 2, shell.titleH / 2);
+      boostBar.addChild(hint);
+      return;
+    }
     BOOSTS.forEach((def, i) => {
       const chip = boostChip(def);
       chip.position.set(firstCx + i * (CHIP_W + gap), shell.titleH / 2);
@@ -454,10 +464,29 @@ export function createIncubator(ctx: UiContext): Room {
       bar = new Graphics();
       card.addChild(bar);
       time = label('', 13, COLORS.ink, '700');
-      time.position.set(w / 2, barY + 24);
+      time.position.set(w / 2, barY + 22);
       card.addChild(time);
       // Кнопки «Забрать» нет: по окончании таймера малыш сам появится в центре слота
-      // (см. game.update → collectReady) с эффектом-салютом.
+      // (см. game.update → collectReady) с эффектом-салютом. Зато есть ускорение:
+      // реклама (−N мин, бесплатно, повторяемо) и кристаллы (мгновенно, цена ∝ остатку).
+      const remain0 = Math.max(0, slot.readyAt - now);
+      const cost = speedUpCost(remain0);
+      const skipMin = Math.round(AD_SKIP_MS / 60_000);
+      const bw2 = Math.round((rw - 8) * 0.42);
+      const yy = barY + 50;
+      const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw2, h: 30, color: COLORS.secondary, fontSize: 12 });
+      adBtn.position.set(w / 2 - bw2 / 2 - 4, yy);
+      adBtn.onTap = () => {
+        const r = adSkipBreeding(ctx.state, i, ctx.now());
+        if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+      };
+      const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
+      crBtn.position.set(w / 2 + bw2 / 2 + 4, yy);
+      crBtn.onTap = () => {
+        const r = speedUpBreeding(ctx.state, i, ctx.now());
+        if (r.ok) { ctx.commit(); ctx.toast('Готово! 🥚'); } else ctx.toast(r.reason);
+      };
+      card.addChild(adBtn, crBtn);
     } else if (hasKitten) {
       // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
       // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
@@ -557,21 +586,30 @@ export function createIncubator(ctx: UiContext): Room {
 
     const isNext = i === ctx.state.slots.length && !upgradeMaxed(ctx.state, 'slots');
     if (isNext) {
-      const cost = upgradeCost(ctx.state, 'slots');
-      const afford = !!cost && ctx.state.coins >= cost.amount;
-      const btn = new Button({
-        text: cost ? `Открыть · ${cost.amount} 💰` : 'Открыть слот',
-        w: w - 24, h: 38, color: afford ? COLORS.good : COLORS.cardEdge,
-        textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 14,
-      });
-      btn.enabled = afford;
-      btn.position.set(w / 2, h - 26);
-      btn.onTap = () => {
-        const r = buyUpgrade(ctx.state, 'slots');
-        if (r.ok) { ctx.commit(); ctx.toast('Новый слот вязки 💞'); }
-        else ctx.toast(r.reason);
-      };
-      card.addChild(btn);
+      const levelAllows = ctx.state.slots.length < maxSlotsForLevel(ctx.state);
+      if (!levelAllows) {
+        // слот заперт уровнем лаборатории — подсказка «Откроется на ур. N»
+        const need = nextSlotUnlockLevel(ctx.state);
+        const hint = label(need ? `Откроется на ур. ${need}` : 'Максимум слотов', 12, COLORS.inkSoft, '700');
+        hint.position.set(w / 2, h - 26);
+        card.addChild(hint);
+      } else {
+        const cost = upgradeCost(ctx.state, 'slots');
+        const afford = !!cost && ctx.state.coins >= cost.amount;
+        const btn = new Button({
+          text: cost ? `Открыть · ${cost.amount} 💰` : 'Открыть слот',
+          w: w - 24, h: 38, color: afford ? COLORS.good : COLORS.cardEdge,
+          textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 14,
+        });
+        btn.enabled = afford;
+        btn.position.set(w / 2, h - 26);
+        btn.onTap = () => {
+          const r = buyUpgrade(ctx.state, 'slots');
+          if (r.ok) { ctx.commit(); ctx.toast('Новый слот вязки 💞'); }
+          else ctx.toast(r.reason === 'locked' ? 'Слот ещё заперт 🔒' : r.reason);
+        };
+        card.addChild(btn);
+      }
     } else {
       const hint = label('откроется после предыдущего', 11.5, COLORS.inkSoft, '600');
       hint.position.set(w / 2, h - 26);

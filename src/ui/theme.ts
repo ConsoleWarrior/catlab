@@ -66,10 +66,14 @@ export function label(
   size = 16,
   color: number = COLORS.ink,
   weight: '400' | '600' | '700' | '800' = '600',
+  stroke?: { color: number; width: number },
 ): Text {
   const t = new Text({
     text,
-    style: { fontFamily: FONT, fontSize: size, fontWeight: weight, fill: color, align: 'center' },
+    style: {
+      fontFamily: FONT, fontSize: size, fontWeight: weight, fill: color, align: 'center',
+      ...(stroke ? { stroke: { color: stroke.color, width: stroke.width, join: 'round' as const } } : {}),
+    },
   });
   t.anchor.set(0.5);
   return t;
