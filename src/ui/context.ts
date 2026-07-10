@@ -85,6 +85,8 @@ export interface UiContext {
   openLabConfirm(cat: Cat): void;
   /** Диалог лечения в клинике (💉): станция-шприц в Питомнике или меню кота. */
   openHealConfirm(cat: Cat): void;
+  /** Меню криокапсулы (Крио-банк): клонировать за 🧬 / утилизировать / инфо. */
+  openCryoMenu(cat: Cat): void;
   /** Дерево родословной кота (до прадедов). */
   openPedigree(cat: Cat): void;
   /** Карточка(и) новорождённых после «Забрать» в инкубаторе. */

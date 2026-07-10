@@ -1,0 +1,210 @@
+import { describe, it, expect } from 'vitest';
+import { makeRng, makeCat } from '../genetics/index.js';
+import {
+  createInitialState, serialize, deserialize, makeCatInstance,
+  freezeCat, cloneCat, disposeCryo,
+  cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
+  catMarketValue, kinshipLevel, heartsOf, isAdult,
+  setChampion, assignBreeder,
+} from './index.js';
+import * as C from './config.js';
+import type { Cat, GameState } from './index.js';
+
+/** Состояние с открытым крио-банком (ранг узла `rank`) + один взрослый кот в питомнике. */
+function setup(seed = 1, rank = 4): { s: GameState; cat: Cat } {
+  const s = createInitialState(makeRng(seed), 0);
+  s.level = 10;
+  s.dna = 100_000;
+  s.research.r_sel_cryo = rank; // 1-й ранг открывает крио-банк + капсулы
+  const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
+  s.cats.push(cat);
+  return { s, cat };
+}
+
+describe('крио-банк: заморозка', () => {
+  it('морозит взрослого: уходит из cats в cryo как есть', () => {
+    const { s, cat } = setup(1);
+    const before = s.cats.length;
+    const r = freezeCat(s, cat.id, 0);
+    expect(r.ok).toBe(true);
+    expect(s.cats.some((c) => c.id === cat.id)).toBe(false);
+    expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
+    expect(s.cats.length).toBe(before - 1);
+    expect(cryoCount(s)).toBe(1);
+  });
+
+  it('без узла Криогенетики — locked (крио-банк закрыт)', () => {
+    const { s, cat } = setup(2, 0); // rank 0 → узел не куплен
+    expect(cryoUnlocked(s)).toBe(false);
+    expect(cryoCapacity(s)).toBe(0);
+    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'locked' });
+  });
+
+  it('котёнка (не взрослого) не морозит', () => {
+    const { s, cat } = setup(3);
+    cat.bornAt = 0;
+    cat.growthMs = C.KITTEN_GROWTH_MS;
+    expect(isAdult(cat, 1000)).toBe(false);
+    expect(freezeCat(s, cat.id, 1000)).toMatchObject({ ok: false, reason: 'котёнок ещё не вырос' });
+  });
+
+  it('кота в слоте вязки не морозит', () => {
+    const { s, cat } = setup(4);
+    expect(assignBreeder(s, 0, cat.id, 0).ok).toBe(true);
+    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'кот в слоте вязки' });
+  });
+
+  it('чемпиона не морозит (сначала снять с пьедестала)', () => {
+    const { s, cat } = setup(5);
+    expect(setChampion(s, cat.id, 0, 0).ok).toBe(true);
+    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'сначала снять с пьедестала' });
+  });
+
+  it('нет свободной капсулы — отказ', () => {
+    const { s, cat } = setup(6, 1); // ранг 1 → небольшая ёмкость
+    const cap = cryoCapacity(s);
+    for (let i = 0; i < cap; i++) s.cryo.push(makeCatInstance(s, makeCat('male'), 0, 'nursery', 'siamese'));
+    expect(cryoCount(s)).toBe(cap);
+    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'нет свободной капсулы' });
+  });
+});
+
+describe('крио-банк: клонирование', () => {
+  it('клон = новорождённый в питомнике, копия породы/пола, breedCount 0, наследует maxHearts', () => {
+    const { s, cat } = setup(7);
+    cat.maxHearts = 4; // урезанный потолок
+    freezeCat(s, cat.id, 0);
+    const r = cloneCat(s, cat.id, 1000);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.clone.breed).toBe('persian');
+    expect(r.clone.genotype.sex).toBe(cat.genotype.sex);
+    expect(r.clone.location).toBe('nursery');
+    expect(r.clone.maxHearts).toBe(4);   // потолок наследуется
+    expect(r.clone.breedCount).toBe(0);  // свежие сердца
+    expect(r.clone.bornAt).toBe(1000);   // растёт как настоящий новорождённый
+    expect(isAdult(r.clone, 1000)).toBe(false);
+    expect(s.cats.some((c) => c.id === r.clone.id)).toBe(true);
+    // оригинал остаётся в капсуле
+    expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
+  });
+
+  it('цена = CLONE_LAB_MULT × выход лаборатории того же кота; списывает ДНК', () => {
+    const { s, cat } = setup(8);
+    freezeCat(s, cat.id, 0);
+    const orig = s.cryo.find((c) => c.id === cat.id)!;
+    const expected = C.CLONE_LAB_MULT * Math.max(1, Math.round(catMarketValue(orig) * C.LAB_DNA_RATE));
+    expect(cloneCost(orig)).toBe(expected);
+    const dnaBefore = s.dna;
+    const r = cloneCat(s, cat.id, 0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.dna).toBe(expected);
+    expect(s.dna).toBe(dnaBefore - expected);
+  });
+
+  it('клон × оригинал = критическое родство (готовый kinship, не собрать «чистую пару»)', () => {
+    const { s, cat } = setup(9);
+    freezeCat(s, cat.id, 0);
+    const orig = s.cryo.find((c) => c.id === cat.id)!;
+    const r = cloneCat(s, cat.id, 0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(kinshipLevel(r.clone, orig)).toBe('critical');
+    expect(kinshipLevel(orig, r.clone)).toBe('critical');
+  });
+
+  it('бесплодный (0 ❤) клонируется бесплодным', () => {
+    const { s, cat } = setup(10);
+    cat.maxHearts = 0;
+    freezeCat(s, cat.id, 0);
+    const r = cloneCat(s, cat.id, 0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(heartsOf(r.clone)).toBe(0);
+  });
+
+  it('за клон опыта ⭐ не начисляется (это не рождение)', () => {
+    const { s, cat } = setup(11);
+    freezeCat(s, cat.id, 0);
+    const repBefore = s.reputation;
+    cloneCat(s, cat.id, 0);
+    expect(s.reputation).toBe(repBefore);
+  });
+
+  it('нет места в питомнике — отказ, ДНК не списана', () => {
+    const { s } = setup(12, 1);
+    // забиваем питомник под завязку, кладём отдельного кота в капсулу
+    s.cats = [];
+    const cap = C.NURSERY_BASE_CAP;
+    for (let i = 0; i < cap; i++) s.cats.push(makeCatInstance(s, makeCat('female'), 0, 'nursery', 'moggie'));
+    const frozen = makeCatInstance(s, makeCat('male'), 0, 'nursery', 'persian');
+    s.cryo.push(frozen);
+    const dnaBefore = s.dna;
+    expect(cloneCat(s, frozen.id, 0)).toMatchObject({ ok: false, reason: 'нет места в питомнике' });
+    expect(s.dna).toBe(dnaBefore);
+  });
+
+  it('не хватает ДНК — отказ, капсула цела', () => {
+    const { s, cat } = setup(13);
+    freezeCat(s, cat.id, 0);
+    s.dna = 0;
+    expect(cloneCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'не хватает ДНК' });
+    expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
+  });
+
+  it('несуществующая капсула — отказ', () => {
+    const { s } = setup(14);
+    expect(cloneCat(s, 'nope', 0)).toMatchObject({ ok: false, reason: 'капсула не найдена' });
+  });
+});
+
+describe('крио-банк: утилизация', () => {
+  it('освобождает капсулу навсегда, наград нет', () => {
+    const { s, cat } = setup(15);
+    freezeCat(s, cat.id, 0);
+    const snap = { coins: s.coins, dna: s.dna, crystals: s.crystals };
+    const r = disposeCryo(s, cat.id);
+    expect(r.ok).toBe(true);
+    expect(s.cryo.some((c) => c.id === cat.id)).toBe(false);
+    expect(s.cats.some((c) => c.id === cat.id)).toBe(false); // не возвращается в питомник
+    expect({ coins: s.coins, dna: s.dna, crystals: s.crystals }).toEqual(snap);
+  });
+
+  it('несуществующая капсула — отказ', () => {
+    const { s } = setup(16);
+    expect(disposeCryo(s, 'nope')).toMatchObject({ ok: false, reason: 'капсула не найдена' });
+  });
+});
+
+describe('крио-банк: вместимость от рангов Криогенетики', () => {
+  it('0 без узла, растёт с каждым рангом (база + Σvalue), к макс. рангу ~30', () => {
+    const s = createInitialState(makeRng(17), 0);
+    expect(cryoCapacity(s)).toBe(0);
+    s.research.r_sel_cryo = 1;
+    expect(cryoCapacity(s)).toBe(C.CRYO_BASE_CAP + 6);
+    const def = C.RESEARCH.find((r) => r.id === 'r_sel_cryo')!;
+    s.research.r_sel_cryo = def.levels.length;
+    const maxCap = C.CRYO_BASE_CAP + def.levels.reduce((sum, l) => sum + l.value, 0);
+    expect(cryoCapacity(s)).toBe(maxCap);
+    expect(maxCap).toBeGreaterThanOrEqual(24);
+  });
+});
+
+describe('крио-банк: миграция сейва', () => {
+  it('старый сейв без cryo → пустой массив', () => {
+    const s = createInitialState(makeRng(18), 0);
+    const raw = JSON.parse(serialize(s)) as Record<string, unknown>;
+    delete raw.cryo;
+    const restored: GameState = deserialize(JSON.stringify(raw));
+    expect(Array.isArray(restored.cryo)).toBe(true);
+    expect(restored.cryo.length).toBe(0);
+  });
+
+  it('сериализация сохраняет замороженных котов', () => {
+    const { s, cat } = setup(19);
+    freezeCat(s, cat.id, 0);
+    const restored = deserialize(serialize(s));
+    expect(restored.cryo.some((c) => c.id === cat.id)).toBe(true);
+  });
+});

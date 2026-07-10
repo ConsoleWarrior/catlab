@@ -32,6 +32,7 @@ export const ROOM_ACCENT: Record<string, number> = {
   nursery: 0xfff1d6,
   shelter: 0xe2f3e8,
   genolab: 0xe7e1fb,
+  cryobank: 0xdff0f7, // морозный голубой лёд
 };
 
 export const TIERS: readonly RarityTier[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];

@@ -466,6 +466,73 @@ export function renameCat(state: GameState, catId: string, name: string): Result
   return { ok: true };
 }
 
+// --- Крио-банк (криохранилище коллекции) ---
+
+/**
+ * Заморозить кота в криокапсулу: он уходит из `state.cats` в `state.cryo` как есть
+ * (сердца/вязки/родословная сохраняются). В капсуле не ест, не приносит доход и
+ * недоступен для вязки — витрина коллекции без живого кота на сцене. Бесплатно.
+ * Ограничения: крио-банк открыт (узел «Криогенетика»), кот взрослый, не в слоте
+ * вязки, не чемпион (сначала снять с пьедестала), есть свободная капсула.
+ * РАЗМОРОЗКИ НЕТ (решение дизайна) — освободить капсулу можно только утилизацией.
+ */
+export function freezeCat(state: GameState, catId: string, now: number): Result {
+  const cat = findCat(state, catId);
+  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!E.cryoUnlocked(state)) return { ok: false, reason: 'locked' };
+  if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
+  if (E.isInSlot(state, catId)) return { ok: false, reason: 'кот в слоте вязки' };
+  if (E.isChampion(state, catId)) return { ok: false, reason: 'сначала снять с пьедестала' };
+  if (E.cryoCount(state) >= E.cryoCapacity(state)) return { ok: false, reason: 'нет свободной капсулы' };
+  removeCat(state, catId);   // убрать из cats (с выставки уже сняли бы — чемпиону отказали)
+  if (!state.cryo) state.cryo = [];
+  state.cryo.push(cat);
+  return { ok: true };
+}
+
+/**
+ * Клонировать замороженного кота за 🧬 (цена = ×CLONE_LAB_MULT от выхода лаборатории
+ * этого экземпляра). Клон = новорождённый котёнок в питомнике: генотип/порода/пол —
+ * копия, `maxHearts` наследуется (бесплодный клонируется бесплодным), `breedCount = 0`.
+ * Оригинал остаётся в капсуле. Анти-эксплойты: родословная клона = сам оригинал как
+ * мать И отец → клон×оригинал даёт критическое родство (готовый kinship), «фабрику
+ * чистых пар» не собрать; опыта ⭐ за клона нет (не рождение), порода не переоткрывается.
+ */
+export function cloneCat(
+  state: GameState, cryoId: string, now: number,
+): Result<{ clone: Cat; dna: number }> {
+  const original = (state.cryo ?? []).find((c) => c.id === cryoId);
+  if (!original) return { ok: false, reason: 'капсула не найдена' };
+  if (!E.cryoUnlocked(state)) return { ok: false, reason: 'locked' };
+  if (E.roomCount(state, 'nursery') >= E.nurseryCapacity(state)) {
+    return { ok: false, reason: 'нет места в питомнике' };
+  }
+  const cost = E.cloneCost(original);
+  if (!spend(state, 'dna', cost)) return { ok: false, reason: 'не хватает ДНК' };
+  // genotype — глубокая копия (клон не должен делить ссылку с оригиналом в капсуле)
+  const genotype = structuredClone(original.genotype);
+  const clone = E.makeCatInstance(state, genotype, now, 'nursery', original.breed);
+  clone.bornAt = now;                    // клон появляется маленьким и растёт (как настоящий)
+  clone.maxHearts = original.maxHearts;  // потолок сердец наследуется от оригинала
+  clone.pedigree = buildPedigree(original, original, C.PEDIGREE_DEPTH); // оригинал как оба родителя
+  clone.motherBreed = original.breed;
+  clone.fatherBreed = original.breed;
+  state.cats.push(clone);
+  return { ok: true, clone, dna: cost };
+}
+
+/**
+ * Утилизировать капсулу: замороженный кот пропадает навсегда, капсула освобождается.
+ * Награды нет (заморозка бесплатна → freeze↔утилизация нейтральна) — это чистка
+ * витрины, а не экономика. Необратимо (подтверждение — на стороне UI).
+ */
+export function disposeCryo(state: GameState, cryoId: string): Result {
+  const before = (state.cryo ?? []).length;
+  state.cryo = (state.cryo ?? []).filter((c) => c.id !== cryoId);
+  if (state.cryo.length === before) return { ok: false, reason: 'капсула не найдена' };
+  return { ok: true };
+}
+
 // --- Прокачка ---
 
 export function buyUpgrade(state: GameState, id: string): Result {

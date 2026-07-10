@@ -110,8 +110,10 @@ export type LabFeature =
   | 'food'              // кормушка и голод (этап B)
   | 'research'          // дерево исследований (Генолаб)
   | 'engineering'       // усилители вязки (Генная инженерия)
-  | 'clinic'            // клиника-шприц лечения (этап D)
-  | 'cloneBank';        // Клон-банк (бэклог)
+  | 'clinic';           // клиника-шприц лечения (этап D)
+// Крио-банк НЕ гейтится уровнем: комната открывается покупкой узла Селекции
+// «❄️ Криогенетика» (см. RESEARCH r_sel_cryo / economy.cryoUnlocked), а его поздние
+// minLevel и так держат механику в эндгейме.
 // Дерево исследований открывается целиком на LAB_UNLOCKS.research; дальнейший гейт —
 // на уровне ОТДЕЛЬНЫХ уровней узлов (ResearchLevel.minLevel), а не блоком колонок.
 export const LAB_UNLOCKS: Record<LabFeature, number> = {
@@ -120,7 +122,6 @@ export const LAB_UNLOCKS: Record<LabFeature, number> = {
   research: 2,          // дерево открывается рано, чтобы игрок его сразу видел
   engineering: 5,
   clinic: 5,
-  cloneBank: 8,
 };
 export const ORDER_DEMAND_SPREAD = 0.5;       // случайный спрос ×(1.0 .. 1.5)
 export const ORDER_CRYSTAL_MIN_VALUE = 1500;  // от какой ценности заказ даёт 💎
@@ -181,6 +182,15 @@ export const MUTATION_BASE = 0.01;         // базовый шанс мутац
 export const NURSERY_BASE_CAP = 6;
 export const SHELTER_BASE_CAP = 8;
 
+// --- Крио-банк (криохранилище коллекции) ---
+// Заморозка кота убирает его из state.cats в state.cryo (не ест/не доход/не вязка) —
+// витрина коллекции без 70 живых котов. Разморозки НЕТ (только клон или утилизация).
+// Ёмкость капсул = CRYO_BASE_CAP + узел «❄️ Криогенетика» (cryoCap); к макс. рангу ~30.
+export const CRYO_BASE_CAP = 6;               // стартовые капсулы (даёт 1-й ранг Криогенетики)
+// Клонирование стоит ×5 от выхода лаборатории того же кота (5 × round(market × LAB_DNA_RATE)):
+// привязка к ценности особи + анти-луп (клон впятеро дороже сдачи того же кота на опыты).
+export const CLONE_LAB_MULT = 5;
+
 // --- Доход ---
 // Потолок офлайн-накопления: база + узел исследований «Ночной смотритель» (offline).
 export const OFFLINE_CAP_BASE_MIN = 120;   // потолок накопления, мин
@@ -240,7 +250,8 @@ export type ResearchEffectKind =
   | 'orderDna'         // +доля к 🧬 с выполненных заказов
   | 'feedEff'          // коты едят меньше корма (доля снижения расхода)
   | 'foodCap'          // +ёмкость кормушки (ед.)
-  | 'autoFeed';        // автопокупка корма за 💰 при опустошении (флаг: value ≥ 1)
+  | 'autoFeed'         // автопокупка корма за 💰 при опустошении (флаг: value ≥ 1)
+  | 'cryoCap';         // +капсулы крио-банка (1-й ранг ОТКРЫВАЕТ крио-банк как комнату)
 
 /** Один уровень узла: цена (в валюте узла), прибавка эффекта, гейт по уровню лаборатории. */
 export interface ResearchLevel {
@@ -278,6 +289,16 @@ export const RESEARCH: readonly ResearchDef[] = [
   { id: 'r_sel_vitamins', glyph: '💊', title: 'Витамины роста', desc: 'Новорождённые котята +1 ❤',
     currency: 'dna', effectKind: 'extraHeart', requires: ['r_sel_markers'], col: 2, row: 0, levels: [
       { cost: 260, value: 1, minLevel: 6 },
+    ] },
+  // Поздний сток 🧬: 1-й ранг ОТКРЫВАЕТ крио-банк (комнату) + стартовые капсулы,
+  // следующие ранги наращивают вместимость до ~30 (CRYO_BASE_CAP + Σvalue). minLevel
+  // поздние (8→10), чтобы механика оставалась эндгеймом. Валюта — 🧬 (ветка Селекции).
+  { id: 'r_sel_cryo', glyph: '❄️', title: 'Криогенетика', desc: 'Открывает крио-банк, +6 капсул за уровень',
+    currency: 'dna', effectKind: 'cryoCap', requires: ['r_sel_vitamins'], col: 3, row: 0, levels: [
+      { cost: 400, value: 6, minLevel: 8 },
+      { cost: 650, value: 6, minLevel: 8 },
+      { cost: 1000, value: 6, minLevel: 9 },
+      { cost: 1500, value: 6, minLevel: 10 },
     ] },
 
   // ветка 1 — 🎓 Обучение (за 💰: доход пьедесталов, коллекция, офлайн)

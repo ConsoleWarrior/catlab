@@ -26,6 +26,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     discoveredBreeds: [],
     boosts: {},
     research: {},
+    cryo: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
     champions: [],
@@ -63,6 +64,9 @@ export function deserialize(json: string): GameState {
   if (!data.research || typeof data.research !== 'object' || Array.isArray(data.research)) {
     data.research = {};
   }
+  // Крио-банк — поле добавлено позже; у старых сейвов его нет → пустое хранилище
+  // (без бампа SAVE_VERSION — новых обязательных полей у котов не появилось).
+  if (!Array.isArray(data.cryo)) data.cryo = [];
   if (!Array.isArray(data.champions)) data.champions = [];
   for (const cat of data.cats) {
     if (typeof cat.breedCount !== 'number') cat.breedCount = 0;

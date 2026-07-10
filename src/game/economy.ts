@@ -429,6 +429,33 @@ export function labReward(state: GameState, cat: Cat): { dna: number; coins: num
   };
 }
 
+// --- Крио-банк (криохранилище коллекции) ---
+
+/** Открыт ли крио-банк: куплен ли хотя бы 1-й ранг узла «❄️ Криогенетика». */
+export function cryoUnlocked(state: GameState): boolean {
+  return researchOwned(state, 'r_sel_cryo');
+}
+
+/** Ёмкость криокапсул: база + ранги «Криогенетики» (cryoCap). До разблокировки — 0. */
+export function cryoCapacity(state: GameState): number {
+  return cryoUnlocked(state) ? C.CRYO_BASE_CAP + researchBonus(state, 'cryoCap') : 0;
+}
+
+/** Сколько капсул сейчас занято (безопасно к старым сейвам без поля). */
+export function cryoCount(state: GameState): number {
+  return (state.cryo ?? []).length;
+}
+
+/**
+ * Цена клонирования кота (🧬) = ×CLONE_LAB_MULT от «выхода лаборатории» того же кота
+ * (round(catMarketValue × LAB_DNA_RATE), без бонусов). Привязка к ценности особи +
+ * анти-луп: клон стоит впятеро дороже сдачи того же кота на опыты, ДНК не наштампуешь.
+ */
+export function cloneCost(cat: Cat): number {
+  const labYield = Math.max(1, Math.round(catMarketValue(cat) * C.LAB_DNA_RATE));
+  return C.CLONE_LAB_MULT * labYield;
+}
+
 // --- Выставка / чемпионы ---
 
 /** Сколько котов можно выставить чемпионами (прокачивается championSlots). */

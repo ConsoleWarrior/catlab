@@ -18,9 +18,9 @@ import {
   netIncomePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
   moveCat, clearBreederSlot, keepKittenWithParents,
   nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
-  foodRatePerMin, isStarving, autoFeedEnabled, buyFood,
+  foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
 } from '../game/index.js';
-import { isBusy, isInSlot } from '../game/index.js';
+import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
@@ -31,9 +31,11 @@ import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
+import { createCryobank } from './rooms/cryobank.js';
 import {
   buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
-  buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildHealConfirm,
+  buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildHealConfirm, buildCryoMenu,
+  buildDevMenu,
 } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
@@ -84,6 +86,8 @@ export class Game implements UiContext {
   private overlayContent: Container | null = null;
   private readonly toastBox = new Container();
   private rooms: Room[] = [];
+  private hasCryoRoom = false;   // включена ли 5-я комната Крио-банк (по cryoUnlocked)
+  private cryoRebuildPending = false; // отложенная пересборка ряда при открытии крио-банка
   private currentRoom = 0;
   private targetX = 0;
 
@@ -253,6 +257,7 @@ export class Game implements UiContext {
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
         openHelp: () => this.openHelp(),
+        openDev: () => this.openDevMenu(),
         openBoostMenu: (id = 'tierUp') => this.openBoostMenu(id),
         openCatMenu: (id?: string) => {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
@@ -294,6 +299,18 @@ export class Game implements UiContext {
           this.rooms.find((r) => r.id === 'genolab')?.setSection?.(s);
           this.goRoom(3);
         },
+        cryo: () => { // открыть крио-банк, заморозить котов, перейти в комнату
+          this.state.research.r_sel_cryo = 2; // 1-й ранг открывает + капсулы
+          this.state.dna += 3000;
+          const now = this.now();
+          const pool = this.state.cats
+            .filter((c) => isAdult(c, now) && !isInSlot(this.state, c.id))
+            .slice(0, 8);
+          for (const c of pool) freezeCat(this.state, c.id, now);
+          this.commit(); // пересборка ряда комнат отложена на тик — переходим после неё
+          setTimeout(() => this.goRoom(this.rooms.length - 1), 30);
+        },
+        openCryoMenu: (i = 0) => { const c = this.state.cryo[i]; if (c) this.openCryoMenu(c); },
         save: () => this.save(),
       };
     }
@@ -433,6 +450,18 @@ export class Game implements UiContext {
 
   commit(): void {
     for (const r of this.rooms) r.refresh();
+    // Крио-банк открылся/исчез (покупка узла «Криогенетика») — состав комнат
+    // изменился: пересобираем ряд целиком. Откладываем на следующий тик, т.к. commit
+    // мог прийти из обработчика тапа по узлу Генолаба, а layout() уничтожает его
+    // контейнер (нельзя убивать активную цель события прямо в обработчике).
+    if (cryoUnlocked(this.state) !== this.hasCryoRoom && !this.cryoRebuildPending) {
+      this.cryoRebuildPending = true;
+      setTimeout(() => {
+        this.cryoRebuildPending = false;
+        this.layout();
+        this.fitRoot();
+      }, 0);
+    }
     this.updateHud();
     this.checkLevelUp(); // повышение уровня от любого действия → баннер со списком открытий
     this.saveTimer = 0; // отложенный сейв в update()
@@ -490,6 +519,11 @@ export class Game implements UiContext {
     this.showOverlay(buildHealConfirm(this, cat, close));
   }
 
+  openCryoMenu(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildCryoMenu(this, cat, close));
+  }
+
   openPedigree(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildPedigreePanel(this, cat, close));
@@ -514,6 +548,12 @@ export class Game implements UiContext {
   openHelp(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildHelpPanel(this, close));
+  }
+
+  /** ⚠️ ВРЕМЕННОЕ DEV-меню (кнопка 🛠, только import.meta.env.DEV) — убрать перед релизом. */
+  openDevMenu(): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildDevMenu(this, close));
   }
 
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void {
@@ -710,11 +750,15 @@ export class Game implements UiContext {
     this.adoptGlow.removeFromParent();
     for (const r of this.rooms) r.container.destroy({ children: true });
     this.world.removeChildren();
+    // Крио-банк появляется 5-й в ряду только после покупки узла «❄️ Криогенетика».
+    // Состав комнат пересобирается в commit(), когда cryoUnlocked меняется (см. commit).
+    this.hasCryoRoom = cryoUnlocked(this.state);
     this.rooms = [
       createIncubator(this),
       createNursery(this),
       createShelter(this),
       createGenolab(this),
+      ...(this.hasCryoRoom ? [createCryobank(this)] : []),
     ];
     this.rooms.forEach((r, i) => {
       r.container.position.set(i * this.roomW, 0);
@@ -791,6 +835,16 @@ export class Game implements UiContext {
     this.ordersBtn.position.set(w - pad - helpW - 8 - ordW / 2, ti / 2);
     this.ordersBtn.onTap = () => this.openOrders();
     this.hud.addChild(help, this.ordersBtn);
+
+    // ⚠️ ВРЕМЕННОЕ: кнопка режима разработчика (валюты/уровень). Только в dev-сборке
+    // (в проде для Яндекса не появляется). Удалить вместе с buildDevMenu перед релизом.
+    if (import.meta.env.DEV) {
+      const devW = Math.round(ti * 0.92);
+      const dev = new Button({ text: '🛠', w: devW, h: bh, color: COLORS.warn, textColor: COLORS.ink, fontSize: fs + 2 });
+      dev.position.set(w - pad - helpW - 8 - ordW - 8 - devW / 2, ti / 2);
+      dev.onTap = () => this.openDevMenu();
+      this.hud.addChild(dev);
+    }
   }
 
   private updateHud(): void {

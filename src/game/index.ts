@@ -11,6 +11,7 @@ export {
   FOOD_CAP_BASE, FOOD_PER_CAT_PER_MIN, FOOD_PACK_UNITS, FOOD_PACK_COST, FEED_FREE_CATS,
   CHAMPION_SLOTS_BASE,
   HEAL_AD_HEARTS, HEAL_AD_COOLDOWN_MS, HEAL_CRYSTAL_PER_HEART,
+  CRYO_BASE_CAP, CLONE_LAB_MULT,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature } from './config.js';
 export {
@@ -23,6 +24,7 @@ export {
   boostCharges, activeBoosts, consumeBoosts, researchBonus,
   researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
   catMarketValue, pedigreeValueMult, healthValueMult, labReward,
+  cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
   championSlots, championIds, championCats, championAt, isChampion, championIncomePerMin,
   speedUpCost, effGrowthMs,
   isUnlocked, unlockLevelOf, maxSlotsForLevel, maxChampionsForLevel,
@@ -40,6 +42,6 @@ export {
   keepKittenWithParents, renameCat, sendToLab, setChampion, unsetChampion,
   speedUpBreeding, adSkipBreeding, speedUpGrowth, adSkipGrowth,
   buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, unlockResearch,
-  addReputation, buyFood, healCat,
+  addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
 } from './actions.js';
 export type { Result, BirthEvent } from './actions.js';

@@ -14,10 +14,12 @@ import {
   adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
   sendToLab, labReward,
   healCat, isUnlocked, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
+  isChampion, cryoUnlocked, freezeCat, cloneCat, disposeCryo, cloneCost,
+  LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
 import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, COLORS, FONT, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
+import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
 import { describeCat, catTraits, describeReq } from './describe.js';
 import { catSprite } from './catTextures.js';
 
@@ -693,6 +695,22 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     addBtn('💉 Полечить', COLORS.good, true, () => ctx.openHealConfirm(cat));
   }
 
+  // Крио-банк: заморозить кота в капсулу (открыт узлом «Криогенетика», кот не занят,
+  // не в слоте вязки и не чемпион — чемпиона сначала снимают с пьедестала).
+  if (cryoUnlocked(ctx.state) && !busy && !isInSlot(ctx.state, cat.id) && !isChampion(ctx.state, cat.id)) {
+    addBtn('🧊 Заморозить', COLORS.secondary, true, () => {
+      const r = freezeCat(ctx.state, cat.id, ctx.now());
+      if (!r.ok) {
+        ctx.toast(r.reason === 'locked' ? 'Крио-банк ещё закрыт 🔒'
+          : r.reason === 'нет свободной капсулы' ? 'Нет свободной капсулы ❄️ (открой ещё в Криогенетике)'
+            : r.reason);
+        return;
+      }
+      close(); ctx.commit();
+      ctx.toast('Кот в криокапсуле ❄️');
+    });
+  }
+
   // Переезд между комнатами: в слоте вязки — обе кнопки, иначе одна (в комнату,
   // где кота нет). Занятого активной вязкой кота не двигаем — он breeding'ится.
   if (!busy) addMoveButtons(ctx, cat, close, addBtn);
@@ -891,6 +909,113 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   return root;
 }
 
+/**
+ * Меню криокапсулы (Крио-банк): портрет замороженного кота + здоровье/родословная и
+ * два действия — 🧬 клонировать (за ДНК, цена ∝ ценности особи; клон появляется в
+ * питомнике) или ♻️ утилизировать (необратимо, с подтверждением). Разморозки НЕТ.
+ */
+export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 360;
+  const root = new Container();
+  let confirmDispose = false;
+
+  const render = (): void => {
+    root.removeChildren();
+    const tierCol = TIER_COLOR[cat.rarityTier];
+
+    const title = label('❄️ Криокапсула', 18, COLORS.ink, '800');
+    title.position.set(W / 2, 26);
+
+    const sp = catSprite(ctx.app, cat, 92);
+    sp.tint = 0xcfeaf6; // морозный тон замороженного кота
+    sp.position.set(W / 2, 150);
+    const who = label(cat.name?.trim() || describeCat(cat), 14, tierCol, '800');
+    who.position.set(W / 2, 170);
+    const st = stars(cat.rarityTier, 14);
+    st.position.set(W / 2, 192);
+
+    // здоровье (сердца) — как в меню кота: потраченные 🖤 / оставшиеся ❤️
+    const total = heartsOf(cat);
+    const left = breedsLeft(cat);
+    const spent = Math.max(0, total - left);
+    const heartsStr = total > 0 ? '🖤'.repeat(spent) + '❤️'.repeat(left) : '∅';
+    const hearts = label('Здоровье ' + heartsStr, 13, COLORS.inkSoft, '700');
+    hearts.position.set(W / 2, 214);
+
+    let y = 234;
+    root.addChild(title, sp, who, st, hearts);
+
+    const btnW = W - 48;
+    const addBtn = (text: string, color: number, enabled: boolean, onTap: () => void): void => {
+      const b = new Button({ text, w: btnW, h: 44, color, fontSize: 15 });
+      b.enabled = enabled;
+      b.onTap = onTap;
+      b.position.set(W / 2, y + 22);
+      root.addChild(b);
+      y += 52;
+    };
+
+    if (confirmDispose) {
+      const warnT = label('Утилизировать безвозвратно?', 15, COLORS.warn, '800');
+      warnT.position.set(W / 2, y + 4);
+      root.addChild(warnT);
+      y += 24;
+      const pad = 24, gap = 12;
+      const bw = (W - pad * 2 - gap) / 2;
+      const noBtn = new Button({ text: 'Нет', w: bw, h: 46, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+      noBtn.position.set(pad + bw / 2, y + 23);
+      noBtn.onTap = () => { confirmDispose = false; render(); };
+      const yesBtn = new Button({ text: '♻️ Да', w: bw, h: 46, color: COLORS.warn, textColor: COLORS.ink, fontSize: 16 });
+      yesBtn.position.set(pad + bw + gap + bw / 2, y + 23);
+      yesBtn.onTap = () => {
+        const r = disposeCryo(ctx.state, cat.id);
+        if (!r.ok) { ctx.toast(r.reason); close(); return; }
+        ctx.commit();
+        ctx.toast('Капсула освобождена ♻️');
+        close();
+      };
+      root.addChild(noBtn, yesBtn);
+      y += 54;
+    } else {
+      // клонирование: цена ∝ ценности особи; нужно место в питомнике
+      const cost = cloneCost(cat);
+      const noRoom = roomCount(ctx.state, 'nursery') >= nurseryCapacity(ctx.state);
+      const afford = ctx.state.dna >= cost;
+      addBtn(
+        noRoom ? '🧬 Клонировать · нет места' : `🧬 Клонировать · ${cost}`,
+        afford && !noRoom ? COLORS.dna : COLORS.cardEdge,
+        afford && !noRoom,
+        () => {
+          const r = cloneCat(ctx.state, cat.id, ctx.now());
+          if (!r.ok) {
+            ctx.toast(r.reason === 'нет места в питомнике' ? 'Нет места в питомнике 🚫'
+              : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК' : r.reason);
+            return;
+          }
+          ctx.commit();
+          ctx.toast(`Клон в питомнике 🐱  −🧬${r.dna}`);
+          close();
+        },
+      );
+      if (cat.motherBreed || cat.fatherBreed || cat.pedigree) {
+        addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+      }
+      addBtn('♻️ Утилизировать', COLORS.warn, true, () => { confirmDispose = true; render(); });
+    }
+
+    const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+    closeBtn.position.set(W / 2, y + 20);
+    closeBtn.onTap = close;
+    root.addChild(closeBtn);
+    y += 50;
+
+    root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  };
+
+  render();
+  return root;
+}
+
 /** Панель заказов: список с требованиями, наградой и кнопкой «Выполнить». */
 export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 560;
@@ -951,5 +1076,86 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const H = y + 56;
   root.addChild(panel(W, H, COLORS.hud, 18));
   root.addChild(title, rows, closeBtn);
+  return root;
+}
+
+/**
+ * ⚠️ ВРЕМЕННОЕ DEV-меню (удалить перед релизом; см. openDevMenu/кнопку 🛠 в HUD).
+ * Читерская панель для отладки: накидывает валюты и выставляет уровень лаборатории
+ * (через порог опыта LEVEL_REP_THRESHOLDS). Показывается только при import.meta.env.DEV.
+ */
+export function buildDevMenu(ctx: UiContext, close: () => void): Container {
+  const W = 360;
+  const root = new Container();
+
+  const render = (): void => {
+    root.removeChildren();
+    const s = ctx.state;
+    const items: Container[] = [];
+
+    const title = label('🛠 Режим разработчика', 19, COLORS.ink, '800');
+    title.position.set(W / 2, 26);
+    const sub = label('временное — убрать перед релизом', 12, COLORS.warn, '700');
+    sub.position.set(W / 2, 48);
+    items.push(title, sub);
+
+    let y = 72;
+
+    // строка ресурса: подпись «глиф имя: значение» + ряд кнопок «+N»
+    const resourceRow = (glyph: string, name: string, value: number, adds: number[], apply: (n: number) => void): void => {
+      const cap = label(`${glyph} ${name}: ${fmt(value)}`, 14, COLORS.ink, '800');
+      cap.anchor.set(0, 0.5);
+      cap.position.set(24, y);
+      items.push(cap);
+      y += 22;
+      const btns = adds.map((n) => {
+        const b = new Button({ text: `+${fmt(n)}`, w: 90, h: 38, color: COLORS.primary, fontSize: 14 });
+        b.onTap = () => { apply(n); ctx.commit(); render(); };
+        return b;
+      });
+      centerRow(btns, y + 19, W, 10);
+      items.push(...btns);
+      y += 48;
+    };
+
+    resourceRow('💰', 'Монеты', s.coins, [1000, 10000, 100000], (n) => { s.coins += n; });
+    resourceRow('💎', 'Кристаллы', s.crystals, [50, 500, 5000], (n) => { s.crystals += n; });
+    resourceRow('🧬', 'ДНК', s.dna, [1000, 10000, 100000], (n) => { s.dna += n; });
+
+    // уровень лаборатории: задаётся через порог накопленного опыта
+    const lvlCap = label(`⭐ Уровень: ${s.level} / ${MAX_LEVEL}`, 14, COLORS.ink, '800');
+    lvlCap.anchor.set(0, 0.5);
+    lvlCap.position.set(24, y);
+    items.push(lvlCap);
+    y += 22;
+    const setLevel = (target: number): void => {
+      const lv = Math.max(1, Math.min(MAX_LEVEL, target));
+      s.reputation = LEVEL_REP_THRESHOLDS[lv - 1] ?? 0;
+      s.level = levelForReputation(s.reputation);
+      ctx.commit();
+      render();
+    };
+    const lvlBtns = [
+      new Button({ text: '−1', w: 70, h: 38, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 }),
+      new Button({ text: '+1', w: 70, h: 38, color: COLORS.good, fontSize: 15 }),
+      new Button({ text: 'MAX', w: 90, h: 38, color: COLORS.secondary, fontSize: 14 }),
+    ];
+    lvlBtns[0]!.onTap = () => setLevel(s.level - 1);
+    lvlBtns[1]!.onTap = () => setLevel(s.level + 1);
+    lvlBtns[2]!.onTap = () => setLevel(MAX_LEVEL);
+    centerRow(lvlBtns, y + 19, W, 10);
+    items.push(...lvlBtns);
+    y += 48;
+
+    const closeBtn = new Button({ text: 'Закрыть', w: W - 48, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+    closeBtn.position.set(W / 2, y + 21);
+    closeBtn.onTap = close;
+    items.push(closeBtn);
+    y += 52;
+
+    root.addChild(panel(W, y, COLORS.hud, 18), ...items);
+  };
+
+  render();
   return root;
 }

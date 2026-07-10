@@ -2,10 +2,10 @@
  * Комната «Генолаб» — хаб для 🧬 ДНК. Разбита на под-секции (табы):
  *   📖 Котодекс    — альбом всех пород по тирам (силуэт, пока не выведена);
  *   🔬 Исследования — дерево постоянных бонусов за 🧬 (4 ветки: Селекция, Обучение,
- *                     Пристройство, Хозяйство); открывается уровнем лаборатории;
- *   🧫 Клон-банк    — клонирование пристроенных котов (скоро).
+ *                     Пристройство, Хозяйство); открывается уровнем лаборатории.
  *
- * Работают Котодекс и Исследования; Клон-банк — заглушка «скоро».
+ * Крио-банк вынесен в ОТДЕЛЬНУЮ комнату (5-я в разрезе, см. rooms/cryobank.ts) —
+ * появляется после покупки узла Селекции «❄️ Криогенетика».
  * Усилители вязки («Генная инженерия») переехали к названию Инкубатора.
  */
 
@@ -23,7 +23,7 @@ import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel, TIER_RU, TIER_COLOR, TIERS } from '../theme.js';
 import { breedThumbTexture } from '../catTextures.js';
 
-type Section = 'codex' | 'research' | 'clone';
+type Section = 'codex' | 'research';
 
 // Активная секция и позиции скролла переживают пересборку комнаты (ресайз окна
 // пересоздаёт Генолаб целиком): без этого открытые «Исследования» слетали бы
@@ -94,7 +94,6 @@ export function createGenolab(ctx: UiContext): Room {
     const defs: { id: Section; text: string }[] = [
       { id: 'codex', text: '📖 Котодекс' },
       { id: 'research', text: '🔬 Исследования' },
-      { id: 'clone', text: '🧫 Клон-банк' },
     ];
     const gap = 8;
     const bw = (shell.contentW - gap * (defs.length - 1)) / defs.length;
@@ -462,42 +461,11 @@ export function createGenolab(ctx: UiContext): Room {
     setupScroll(scroll, 'research', viewport, content, viewW, viewH, y);
   }
 
-  function renderStub(title: string, desc: string[]): void {
-    const top = 56;
-    const p = panel(shell.contentW, Math.max(120, shell.contentH - top - 4), COLORS.card, 16);
-    p.position.set(0, top);
-    shell.body.addChild(p);
-
-    const t = label(title, 18, COLORS.ink, '800');
-    t.position.set(shell.contentW / 2, top + 34);
-    shell.body.addChild(t);
-
-    let y = top + 72;
-    for (const line of desc) {
-      const l = label(line, 14, COLORS.inkSoft, '600');
-      l.position.set(shell.contentW / 2, y);
-      shell.body.addChild(l);
-      y += 24;
-    }
-    const soon = label('🔒 скоро', 16, COLORS.warn, '800');
-    soon.position.set(shell.contentW / 2, y + 12);
-    shell.body.addChild(soon);
-  }
-
   function refresh(): void {
     shell.body.removeChildren();
     shell.body.addChild(tabBar());
-    if (section === 'codex') {
-      renderCodex();
-    } else if (section === 'research') {
-      renderResearch();
-    } else {
-      renderStub('🧫 Клон-банк ДНК', [
-        'Образцы пристроенных и ушедших котов.',
-        'Клонируй породу+пол обратно за 🧬 —',
-        'страховка от потери редких.',
-      ]);
-    }
+    if (section === 'codex') renderCodex();
+    else renderResearch();
   }
 
   return {

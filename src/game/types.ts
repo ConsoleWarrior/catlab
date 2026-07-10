@@ -5,7 +5,7 @@
 
 import type { Genotype, RarityTier } from '../genetics/index.js';
 
-export type RoomId = 'incubator' | 'nursery' | 'shelter' | 'genolab';
+export type RoomId = 'incubator' | 'nursery' | 'shelter' | 'genolab' | 'cryobank';
 export type LiveRoom = 'nursery' | 'shelter';
 export type Currency = 'coins' | 'crystals' | 'dna';
 
@@ -93,6 +93,7 @@ export interface GameState {
   discoveredBreeds: string[];       // когда-либо полученные породы (Котодекс)
   boosts: Record<string, number>;   // заряды генной инженерии (применяются при рождении)
   research: Record<string, number>; // id узла дерева исследований → купленный уровень (0/нет — не начат)
+  cryo: Cat[];                      // замороженные коты в криокапсулах (крио-банк): не едят/не доход/не вязка
   unlockedRooms: RoomId[];
   orders: Order[];
   champions: (string | null)[];     // id кота-чемпиона по индексу пьедестала (null — слот пуст)
