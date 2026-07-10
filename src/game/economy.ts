@@ -60,11 +60,36 @@ export function nextPedestalUnlockLevel(state: GameState): number | null {
   return C.PEDESTAL_UNLOCK_LEVELS[opened] ?? null;
 }
 
-/** Суммарный бонус изученных исследований данного типа эффекта. */
+/** Купленный уровень узла исследований (0 — не начат). */
+export function researchLevel(state: GameState, id: string): number {
+  return state.research[id] ?? 0;
+}
+
+/** Изучен ли узел хотя бы на 1 уровень (для проверки `requires` и линий связи в UI). */
+export function researchOwned(state: GameState, id: string): boolean {
+  return researchLevel(state, id) > 0;
+}
+
+/** Полностью ли прокачан узел (все уровни куплены). */
+export function researchMaxed(state: GameState, def: C.ResearchDef): boolean {
+  return researchLevel(state, def.id) >= def.levels.length;
+}
+
+/** Следующий (ещё не купленный) уровень узла или null, если узел прокачан полностью. */
+export function researchNext(state: GameState, def: C.ResearchDef): C.ResearchLevel | null {
+  return def.levels[researchLevel(state, def.id)] ?? null;
+}
+
+/**
+ * Суммарный бонус исследований данного типа эффекта: складываем `value` всех
+ * КУПЛЕННЫХ уровней всех узлов с этим эффектом (многоуровневые узлы суммируются).
+ */
 export function researchBonus(state: GameState, kind: C.ResearchEffectKind): number {
   let sum = 0;
-  for (const r of C.RESEARCH) {
-    if (r.effect.kind === kind && state.research.includes(r.id)) sum += r.effect.value;
+  for (const def of C.RESEARCH) {
+    if (def.effectKind !== kind) continue;
+    const owned = researchLevel(state, def.id);
+    for (let i = 0; i < owned; i++) sum += def.levels[i]!.value;
   }
   return sum;
 }
@@ -95,13 +120,11 @@ export function applyExtraHearts(baseHearts: number, extra: number): number {
 }
 
 export function nurseryCapacity(state: GameState): number {
-  return C.NURSERY_BASE_CAP + C.NURSERY_CAP_STEP * lvl(state, 'nurseryCap')
-    + researchBonus(state, 'nurseryCap');
+  return C.NURSERY_BASE_CAP + researchBonus(state, 'nurseryCap');
 }
 
 export function shelterCapacity(state: GameState): number {
-  return C.SHELTER_BASE_CAP + C.SHELTER_CAP_STEP * lvl(state, 'shelterCap')
-    + researchBonus(state, 'shelterCap');
+  return C.SHELTER_BASE_CAP + researchBonus(state, 'shelterCap');
 }
 
 export function capacityOf(state: GameState, room: LiveRoom): number {
@@ -179,10 +202,10 @@ export function foodEnabled(state: GameState): boolean {
   return isUnlocked(state, 'food');
 }
 
-/** Ёмкость кормушки (ед.). Запас растягивает узел «Экономный рацион» (feedEff — коты
- *  едят меньше), автопополнение — «Автокормушка» (autoFeed); сама ёмкость константна. */
-export function foodCap(_state: GameState): number {
-  return C.FOOD_CAP_BASE;
+/** Ёмкость кормушки (ед.): база + узел «Большая кормушка» (foodCap). Расход при этом
+ *  снижает «Экономный рацион» (feedEff), автопополнение — «Автокормушка» (autoFeed). */
+export function foodCap(state: GameState): number {
+  return C.FOOD_CAP_BASE + researchBonus(state, 'foodCap');
 }
 
 /** Текущий запас корма (безопасно к старым сейвам без поля). */
@@ -238,7 +261,7 @@ export function netIncomePerMin(state: GameState): number {
   return isStarving(state) ? 0 : passiveRatePerMin(state);
 }
 
-/** Включена ли «Автокормушка» (исследование r_infra5 + механика корма открыта). */
+/** Включена ли «Автокормушка» (исследование r_autofeed + механика корма открыта). */
 export function autoFeedEnabled(state: GameState): boolean {
   return foodEnabled(state) && researchBonus(state, 'autoFeed') > 0;
 }

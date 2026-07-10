@@ -15,6 +15,7 @@ import { BREEDS, BREEDS_BY_TIER, breedName } from '../../genetics/index.js';
 import type { RarityTier } from '../../genetics/index.js';
 import {
   RESEARCH, unlockResearch, isUnlocked, unlockLevelOf,
+  researchLevel, researchOwned, researchMaxed, researchNext,
 } from '../../game/index.js';
 import type { ResearchDef } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
@@ -32,12 +33,12 @@ const remembered = {
   scroll: { codex: 0, research: 0 } as Record<'codex' | 'research', number>,
 };
 
-/** Метаданные веток дерева исследований (ряд → заголовок). */
+/** Метаданные веток дерева исследований (ряд → заголовок + валюта прокачки). */
 const BRANCHES: { row: number; label: string }[] = [
-  { row: 0, label: '🧪 Селекция' },
-  { row: 1, label: '🎓 Обучение' },
-  { row: 2, label: '🤝 Пристройство' },
-  { row: 3, label: '🏠 Хозяйство' },
+  { row: 0, label: '🧪 Селекция · 🧬' },
+  { row: 1, label: '🎓 Обучение · 💰' },
+  { row: 2, label: '🤝 Пристройство · 💰' },
+  { row: 3, label: '🏠 Хозяйство · 💰' },
 ];
 
 /** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
@@ -229,22 +230,42 @@ export function createGenolab(ctx: UiContext): Room {
     return t;
   }
 
+  /** Ряд пипсов уровня узла: ● куплено (цветом валюты) / ○ осталось. */
+  function levelPips(owned: number, total: number, curColor: number, dot: number): Container {
+    const c = new Container();
+    const gap = dot * 2.4;
+    const w = (total - 1) * gap;
+    for (let i = 0; i < total; i++) {
+      const g = new Graphics();
+      g.circle(i * gap - w / 2, 0, dot)
+        .fill({ color: i < owned ? curColor : COLORS.cardEdge, alpha: i < owned ? 1 : 0.7 });
+      c.addChild(g);
+    }
+    return c;
+  }
+
   /**
-   * Карточка узла дерева исследований (за 🧬). Состояния: изучено (зелёная),
-   * доступно к покупке (подсвечена, рамка ДНК), заперто предыдущим узлом или уровнем
-   * лаборатории (приглушённая, замок). Фон непрозрачный — под ним ИИ-арт комнаты.
+   * Карточка узла дерева исследований (многоуровневого). Валюта своя у ветки: 🧬 у
+   * Селекции, 💰 у остальных. Состояния: прокачан полностью (зелёная), доступен
+   * следующий уровень (подсвечена, рамка валюты), заперт предыдущим узлом или уровнем
+   * лаборатории этого уровня (приглушённая, замок). Пипсы показывают прогресс уровней.
    */
   function researchNode(def: ResearchDef, nw: number, nh: number): Container {
-    const owned = ctx.state.research.includes(def.id);
-    const reqMet = def.requires.every((r) => ctx.state.research.includes(r));
-    // верхние узлы веток (col ≥ 2) открываются позже — с уровня researchAdvanced
-    const advLocked = def.col >= 2 && !isUnlocked(ctx.state, 'researchAdvanced');
-    const affordable = ctx.state.dna >= def.dna;
-    const buyable = !owned && reqMet && !advLocked && affordable;
-    const hardLocked = !owned && (!reqMet || advLocked);
+    const owned = researchLevel(ctx.state, def.id);
+    const total = def.levels.length;
+    const maxed = researchMaxed(ctx.state, def);
+    const next = researchNext(ctx.state, def);
+    const reqMet = def.requires.every((r) => researchOwned(ctx.state, r));
+    const levelLocked = !!next && ctx.state.level < next.minLevel;   // этот уровень ещё заперт
+    const curColor = def.currency === 'dna' ? COLORS.dna : COLORS.coins;
+    const curGlyph = def.currency === 'dna' ? '🧬' : '💰';
+    const balance = def.currency === 'dna' ? ctx.state.dna : ctx.state.coins;
+    const affordable = !!next && balance >= next.cost;
+    const buyable = !maxed && reqMet && !levelLocked && affordable;
+    const hardLocked = !maxed && (!reqMet || levelLocked);
 
     const c = new Container();
-    const fill = owned ? lighten(COLORS.good, 0.5)
+    const fill = maxed ? lighten(COLORS.good, 0.5)
       : buyable ? COLORS.card
         : shade(COLORS.card, hardLocked ? 0.72 : 0.9);
     const bg = new Graphics();
@@ -252,41 +273,53 @@ export function createGenolab(ctx: UiContext): Room {
       .fill({ color: fill, alpha: 1 })
       .stroke({
         width: buyable ? 3 : 2,
-        color: owned ? COLORS.good : buyable ? COLORS.dna : COLORS.cardEdge,
+        color: maxed ? COLORS.good : buyable ? curColor : COLORS.cardEdge,
         alpha: 0.95,
       });
     c.addChild(bg);
 
-    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(13, nh * 0.15), COLORS.ink, '800', nw - 12);
-    title.position.set(0, -nh / 2 + nh * 0.22);
+    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(12.5, nh * 0.145), COLORS.ink, '800', nw - 12);
+    title.position.set(0, -nh / 2 + nh * 0.19);
     c.addChild(title);
 
-    const desc = wrapped(def.desc, Math.min(10.5, nh * 0.115), COLORS.inkSoft, '600', nw - 12);
-    desc.position.set(0, -nh / 2 + nh * 0.55);
+    const desc = wrapped(def.desc, Math.min(9.5, nh * 0.105), COLORS.inkSoft, '600', nw - 12);
+    desc.position.set(0, -nh / 2 + nh * 0.48);
     c.addChild(desc);
 
-    const status = owned
-      ? label('✓ изучено', Math.min(12, nh * 0.13), COLORS.good, '800')
-      : advLocked
-        ? label(`🔒 ур. ${unlockLevelOf('researchAdvanced')}`, Math.min(12, nh * 0.13), COLORS.inkSoft, '800')
-        : !reqMet
-          ? label('🔒', Math.min(14, nh * 0.15), COLORS.inkSoft, '800')
-          : label(`🧬 ${def.dna}`, Math.min(13, nh * 0.14), affordable ? COLORS.dna : COLORS.inkSoft, '800');
-    status.position.set(0, nh / 2 - nh * 0.14);
+    // пипсы уровней (только у многоуровневых узлов)
+    if (total > 1) {
+      const pips = levelPips(owned, total, curColor, Math.max(2.5, nh * 0.03));
+      pips.position.set(0, nh / 2 - nh * 0.32);
+      c.addChild(pips);
+    }
+
+    const status = maxed
+      ? label('✓ макс', Math.min(12, nh * 0.13), COLORS.good, '800')
+      : !reqMet
+        ? label('🔒', Math.min(14, nh * 0.15), COLORS.inkSoft, '800')
+        : levelLocked
+          ? label(`🔒 ур. ${next!.minLevel}`, Math.min(11.5, nh * 0.125), COLORS.inkSoft, '800')
+          : label(`${curGlyph} ${next!.cost}`, Math.min(13, nh * 0.14), affordable ? curColor : COLORS.inkSoft, '800');
+    status.position.set(0, nh / 2 - nh * 0.13);
     c.addChild(status);
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
     c.on('pointertap', () => {
       if (suppressTap) return;          // это был скролл, а не тап
-      if (owned) { ctx.toast(`${def.title}: уже изучено ✅`); return; }
-      if (advLocked) { ctx.toast(`Откроется на ур. ${unlockLevelOf('researchAdvanced')} 🔒`); return; }
+      if (maxed) { ctx.toast(`${def.title}: прокачано полностью ✅`); return; }
       if (!reqMet) { ctx.toast('Сначала изучи предыдущий узел 🔒'); return; }
+      if (levelLocked) { ctx.toast(`Уровень откроется на ур. ${next!.minLevel} 🔒`); return; }
       const r = unlockResearch(ctx.state, def.id);
-      if (r.ok) { ctx.commit(); ctx.toast(`${def.glyph} ${def.title} изучено ✅`); }
-      else ctx.toast(
+      if (r.ok) {
+        ctx.commit();
+        const lvlNow = researchLevel(ctx.state, def.id);
+        ctx.toast(total > 1 ? `${def.glyph} ${def.title} · ур. ${lvlNow}/${total} ✅`
+          : `${def.glyph} ${def.title} изучено ✅`);
+      } else ctx.toast(
         r.reason === 'locked' ? 'Исследования ещё заперты 🔒'
-          : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК' : r.reason,
+          : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
+            : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason,
       );
     });
     return c;
@@ -353,10 +386,10 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /**
-   * 🔬 Исследования: дерево постоянных бонусов за 🧬 — 4 ветки (Селекция, Обучение,
-   * Пристройство, Хозяйство), в каждой цепочка узлов слева направо. Всё дерево
-   * открывается уровнем лаборатории (research), верхние узлы (col ≥ 2) — позже
-   * (researchAdvanced). Содержимое прокручивается по вертикали.
+   * 🔬 Исследования: дерево постоянных бонусов — 4 ветки (Селекция за 🧬; Обучение,
+   * Пристройство, Хозяйство за 💰), в каждой цепочка многоуровневых узлов слева
+   * направо. Всё дерево открывается уровнем лаборатории (research), а отдельные
+   * УРОВНИ узлов гейтятся своим minLevel. Содержимое прокручивается по вертикали.
    */
   function renderResearch(): void {
     const viewTop = 46;
@@ -412,7 +445,7 @@ export function createGenolab(ctx: UiContext): Room {
         const a = nodes[i - 1]!, b = nodes[i]!;
         const x1 = cxOf(a.col) + nodeW / 2;
         const x2 = cxOf(b.col) - nodeW / 2;
-        const owned = ctx.state.research.includes(b.id);
+        const owned = researchOwned(ctx.state, b.id);
         lines.moveTo(x1, nodeCy).lineTo(x2, nodeCy)
           .stroke({ width: 3, color: owned ? COLORS.good : COLORS.cardEdge, alpha: 0.8 });
       }

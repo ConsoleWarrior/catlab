@@ -25,7 +25,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     unlockedGenes: [...BASE_GENES],
     discoveredBreeds: [],
     boosts: {},
-    research: [],
+    research: {},
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
     champions: [],
@@ -50,15 +50,19 @@ export function serialize(state: GameState): string {
 
 /**
  * Восстанавливает состояние из сейва. Сейвы прежних версий сбрасываются на
- * стороне загрузчика (game.ts сверяет version с SAVE_VERSION) — v5 сломал
- * совместимость: id в родословных, maxHearts, рецепты пород.
+ * стороне загрузчика (game.ts сверяет version с SAVE_VERSION) — v6 сломал
+ * совместимость: research стал картой id→уровень (было — массив id).
  */
 export function deserialize(json: string): GameState {
   const data = JSON.parse(json) as GameState;
   // мягкие дефолты для полей, добавленных в новых версиях
   if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
   if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
-  if (!Array.isArray(data.research)) data.research = [];
+  // research с v6 — карта id→уровень; старый формат (массив id) больше не совместим,
+  // но сейвы прежних версий и так сбрасываются загрузчиком по SAVE_VERSION.
+  if (!data.research || typeof data.research !== 'object' || Array.isArray(data.research)) {
+    data.research = {};
+  }
   if (!Array.isArray(data.champions)) data.champions = [];
   for (const cat of data.cats) {
     if (typeof cat.breedCount !== 'number') cat.breedCount = 0;

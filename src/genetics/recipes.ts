@@ -307,11 +307,18 @@ export function recipeMatches(r: Recipe, ctx: BreedingContext): boolean {
 /**
  * Итоговый шанс рецепта: базовый × инбридинг × Катализатор (luckyUp ×2) ×
  * `chanceMult` (глобальный множитель от исследований «Селекции»). Кап CHANCE_CAP.
+ *
+ * ВАЖНО: Катализатор НЕ стекается с активным инбридинг-бонусом. Если у рецепта уже
+ * работает множитель родства (kMult > 1) — удвоение от luckyUp не применяется: игрок
+ * выбирает ЛИБО риск-награду инбридинга, ЛИБО бустер, но не ×2 поверх ×2.5 (иначе
+ * почти все родословные рецепты упирались бы в кап и механика шанса обесценивалась).
  */
 export function recipeChance(r: Recipe, kinship: KinshipLevel, luckyUp = false, chanceMult = 1): number {
   let p = r.chance;
-  if (isPedigreeRecipe(r) || r.kinshipBoost || r.minKinship) p *= KINSHIP_RECIPE_MULT[kinship];
-  if (luckyUp) p *= 2;
+  const inbreedRecipe = isPedigreeRecipe(r) || !!r.kinshipBoost || !!r.minKinship;
+  const kMult = inbreedRecipe ? KINSHIP_RECIPE_MULT[kinship] : 1;
+  p *= kMult;
+  if (luckyUp && kMult <= 1) p *= 2; // ×2 только если инбридинг-бонус не активен
   p *= chanceMult;
   return Math.min(CHANCE_CAP, p);
 }

@@ -131,22 +131,22 @@ describe('гейты уровня блокируют действия', () => {
     s.cats.push(cat);
     expect(sendToLab(s, cat.id)).toMatchObject({ ok: false, reason: 'locked' }); // ур.1
     expect(buyBoost(s, 'tierUp')).toMatchObject({ ok: false, reason: 'locked' });
-    expect(unlockResearch(s, 'r_income1')).toMatchObject({ ok: false, reason: 'locked' });
+    expect(unlockResearch(s, 'r_sel_pairs')).toMatchObject({ ok: false, reason: 'locked' });
     s.level = 5; // labStation(2)+research(2)+engineering(5) открыты
     expect(buyBoost(s, 'tierUp').ok).toBe(true);
-    expect(unlockResearch(s, 'r_income1').ok).toBe(true);
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);
     expect(sendToLab(s, cat.id).ok).toBe(true);
   });
 
-  it('верхний узел ветки (col≥2) заперт до researchAdvanced (ур.7)', () => {
+  it('уровни узла гейтятся своим minLevel (прокачка растянута по уровням)', () => {
     const s = createInitialState(makeRng(8), 0);
     s.dna = 10_000;
-    s.level = 4; // research открыт, researchAdvanced (7) — нет
-    expect(unlockResearch(s, 'r_income1').ok).toBe(true);
-    expect(unlockResearch(s, 'r_income2').ok).toBe(true);
-    expect(unlockResearch(s, 'r_income3')).toMatchObject({ ok: false, reason: 'locked' });
-    s.level = 7;
-    expect(unlockResearch(s, 'r_income3').ok).toBe(true);
+    // research открыт с ур.2; у «Подбора пар» ур.1 — minLevel 2, ур.2 — minLevel 4.
+    s.level = 2;
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);            // ур.1 узла доступен
+    expect(unlockResearch(s, 'r_sel_pairs')).toMatchObject({ ok: false, reason: 'locked' }); // ур.2 заперт
+    s.level = 4;
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);            // ур.2 открылся
   });
 });
 

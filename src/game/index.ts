@@ -5,7 +5,6 @@ export {
   SAVE_VERSION, TIER_VALUE, TIER_MARKET_VALUE, UPGRADES, GENES, BASE_GENES, levelForReputation,
   ANALYZE_DNA_COST, BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
   HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, AD_SKIP_MS,
-  NURSERY_CAP_STEP, SHELTER_CAP_STEP,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, nextLevelRep, unlocksAtLevel, LAB_UNLOCKS,
   SLOT_UNLOCK_LEVELS, PEDESTAL_UNLOCK_LEVELS,
   REP_BIRTH_BY_TIER, REP_NEW_BREED_MULT, REP_ADOPT_MULT, REP_LAB_MULT,
@@ -13,7 +12,7 @@ export {
   CHAMPION_SLOTS_BASE,
   HEAL_AD_HEARTS, HEAL_AD_COOLDOWN_MS, HEAL_CRYSTAL_PER_HEART,
 } from './config.js';
-export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchEffectKind, LabFeature } from './config.js';
+export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature } from './config.js';
 export {
   lvl, emptySlot, slotCount, nurseryCapacity, shelterCapacity, capacityOf,
   incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot,
@@ -21,7 +20,8 @@ export {
   foodEnabled, foodCap, foodLevel, foodRatePerMin, isStarving, foodMinutesLeft, consumeFood,
   feedEfficiency, autoFeedEnabled, autoFeed, breedChanceMult, kinshipSafety, extraHearts, applyExtraHearts,
   makeCatInstance, buyCatCost, growthScale, growthProgress, growthRemainingMs, isAdult,
-  boostCharges, activeBoosts, consumeBoosts, researchBonus, isOld, breedsLeft, heartsOf, isSterile,
+  boostCharges, activeBoosts, consumeBoosts, researchBonus,
+  researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
   catMarketValue, pedigreeValueMult, healthValueMult, labReward,
   championSlots, championIds, championCats, championAt, isChampion, championIncomePerMin,
   speedUpCost, effGrowthMs,

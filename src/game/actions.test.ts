@@ -55,7 +55,7 @@ describe('инкубатор', () => {
   it('вязка не зависит от места в питомнике', () => {
     const s = createInitialState(makeRng(8), 0);
     const { female, male } = pair(s);
-    s.upgrades.nurseryCap = 0; // cap 6, добьём до предела фиктивными котами
+    // вместимость питомника — базовая (6, без узлов дерева); добьём до предела фиктивными котами
     while (s.cats.filter((c) => c.location === 'nursery').length < 6) {
       const clone = { ...female, id: 'x' + s.nextId++ };
       s.cats.push(clone);
@@ -311,18 +311,29 @@ describe('генная инженерия', () => {
 });
 
 describe('дерево исследований', () => {
-  it('unlockResearch: пререквизиты, стоимость, повтор и неизвестный узел', () => {
+  it('unlockResearch: пререквизиты, уровни, стоимость и неизвестный узел', () => {
     const s = createInitialState(makeRng(50), 0);
-    s.level = 10; // дерево исследований открыто уровнем (проверяем логику узлов, не гейт)
-    expect(unlockResearch(s, 'r_income2').ok).toBe(false); // нужен r_income1
-    expect(unlockResearch(s, 'r_income1').ok).toBe(false); // 0 ДНК
+    s.level = 10; // все уровни узлов открыты (проверяем логику узлов, не гейт по уровню)
+    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(false); // нужен r_sel_pairs
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(false);   // 0 ДНК
     s.dna = 1000;
-    expect(unlockResearch(s, 'r_income1').ok).toBe(true);
-    expect(s.research).toContain('r_income1');
-    expect(unlockResearch(s, 'r_income1').ok).toBe(false); // уже изучено
-    expect(unlockResearch(s, 'r_income2').ok).toBe(true);  // пререквизит теперь есть
-    expect(s.dna).toBe(1000 - 30 - 70);                    // списаны обе стоимости
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);    // ур.1
+    expect(s.research.r_sel_pairs).toBe(1);
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);    // ур.2 того же узла
+    expect(s.research.r_sel_pairs).toBe(2);
+    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);  // пререквизит есть (≥1 ур.)
+    expect(s.dna).toBe(1000 - 40 - 100 - 150);                 // ур1+ур2 «Подбора» + ур1 «Маркеров»
     expect(unlockResearch(s, 'bogus').ok).toBe(false);
+  });
+
+  it('unlockResearch: полностью прокачанный узел больше не покупается', () => {
+    const s = createInitialState(makeRng(51), 0);
+    s.level = 10; s.dna = 10_000;
+    // «Витамины роста» — одноуровневый узел; для него нужен пререквизит «Маркеры».
+    unlockResearch(s, 'r_sel_pairs');
+    unlockResearch(s, 'r_sel_markers');
+    expect(unlockResearch(s, 'r_sel_vitamins').ok).toBe(true);
+    expect(unlockResearch(s, 'r_sel_vitamins')).toMatchObject({ ok: false, reason: 'уже изучено' });
   });
 });
 

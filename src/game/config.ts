@@ -6,7 +6,7 @@
 import type { RarityTier, BreedBoosts, KinshipLevel } from '../genetics/index.js';
 import type { Currency } from './types.js';
 
-export const SAVE_VERSION = 5; // v5: рецепты пород + инбридинг (id предков, maxHearts) — старые сейвы сбрасываются
+export const SAVE_VERSION = 6; // v6: многоуровневое дерево исследований (state.research: id→уровень) — старые сейвы сбрасываются
 
 /** Ценность кота по тиру редкости: образец (🧬), пассив питомника (💰/мин, легаси). */
 export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; incomePerMin: number }> = {
@@ -111,15 +111,15 @@ export type LabFeature =
   | 'research'          // дерево исследований (Генолаб)
   | 'engineering'       // усилители вязки (Генная инженерия)
   | 'clinic'            // клиника-шприц лечения (этап D)
-  | 'researchAdvanced'  // верхние узлы веток исследований (col ≥ 2)
   | 'cloneBank';        // Клон-банк (бэклог)
+// Дерево исследований открывается целиком на LAB_UNLOCKS.research; дальнейший гейт —
+// на уровне ОТДЕЛЬНЫХ уровней узлов (ResearchLevel.minLevel), а не блоком колонок.
 export const LAB_UNLOCKS: Record<LabFeature, number> = {
   labStation: 2,
   food: 1,              // коты хотят есть сразу — кормушка/голод с 1-го уровня
   research: 2,          // дерево открывается рано, чтобы игрок его сразу видел
   engineering: 5,
   clinic: 5,
-  researchAdvanced: 7,
   cloneBank: 8,
 };
 export const ORDER_DEMAND_SPREAD = 0.5;       // случайный спрос ×(1.0 .. 1.5)
@@ -176,10 +176,10 @@ export const INCUBATION_MIN_MS = 10_000;
 export const MUTATION_BASE = 0.01;         // базовый шанс мутации окраса при рождении
 
 // --- Вместимости комнат ---
+// Базовые места; расширение — только деревом исследований (узлы r_nursery/r_shelter,
+// шаг задан в их levels[].value: питомник +2/ур, приют +3/ур).
 export const NURSERY_BASE_CAP = 6;
-export const NURSERY_CAP_STEP = 2;
 export const SHELTER_BASE_CAP = 8;
-export const SHELTER_CAP_STEP = 2;
 
 // --- Доход ---
 // Потолок офлайн-накопления: база + узел исследований «Ночной смотритель» (offline).
@@ -206,7 +206,7 @@ export interface BoostDef {
 /** Усилители следующей вязки. Заряд тратится при рождении из инкубатора. */
 export const BOOSTS: readonly BoostDef[] = [
   { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не ниже старшего родителя', dna: 15, crystals: 2 },
-  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Шансы всех рецептов ×2', dna: 30, crystals: 3 },
+  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Шансы всех рецептов ×2 (не суммируется с инбридингом)', dna: 30, crystals: 3 },
   { id: 'tierUp', glyph: '🔼', label: 'Активатор', desc: 'Гарантия рецепта тира выше (если условия выполнены)', dna: 60, crystals: 5 },
 ];
 
@@ -217,12 +217,15 @@ export const KITTEN_GROWTH_MS = 30_000;
 export const KITTEN_MIN_SCALE = 0.45;       // размер новорождённого относительно взрослого
 export const KITTEN_SLOW_FACTOR = 3;        // во сколько раз медленнее растёт котёнок, «оставленный с родителями»
 
-// --- Дерево исследований (постоянные бонусы за 🧬) ---
+// --- Дерево исследований (постоянные бонусы, многоуровневые узлы) ---
 // Эффекты применяются в чистых функциях economy.ts (и в actions/genetics для
-// селекции/корма). 4 ветки-ряда × до 5 колонок; узел открывается, если изучены все
-// `requires` и хватает 🧬. Гейт: всё дерево — с уровня LAB_UNLOCKS.research (ур. 2),
-// узлы col ≥ 2 — с LAB_UNLOCKS.researchAdvanced (ур. 7). См. actions.unlockResearch.
-// ВАЖНО: id узлов НЕ менять — по ним хранится прогресс в сейве (state.research).
+// селекции/корма). 4 ветки-ряда × цепочка узлов; узел прокачивается по уровням.
+// ВАЛЮТА (принцип): ветка 🧪 Селекция — за 🧬 гены (всё про генетику/размножение);
+// ветки 🎓 Обучение, 🤝 Пристройство, 🏠 Хозяйство (комнаты/доход/экономика) — за 💰.
+// ГЕЙТ ПО УРОВНЯМ: у КАЖДОГО уровня узла свой `minLevel` (мин. уровень лаборатории).
+// Расписание растянуто L2→L10: рано и часто открываются первые уровни, тяжёлые
+// финальные уровни докупаются к концу игры (см. actions.unlockResearch, gate-хелперы).
+// ВАЖНО: id узлов НЕ менять — по ним хранится прогресс в сейве (state.research: id→уровень).
 export type ResearchEffectKind =
   | 'income'           // +доля к пассивному доходу (множитель)
   | 'collectionIncome' // +плоский доход за каждую открытую породу
@@ -236,62 +239,119 @@ export type ResearchEffectKind =
   | 'extraHeart'       // +N ❤ новорождённым (бесплодных 0 ❤ не спасает)
   | 'orderDna'         // +доля к 🧬 с выполненных заказов
   | 'feedEff'          // коты едят меньше корма (доля снижения расхода)
+  | 'foodCap'          // +ёмкость кормушки (ед.)
   | 'autoFeed';        // автопокупка корма за 💰 при опустошении (флаг: value ≥ 1)
+
+/** Один уровень узла: цена (в валюте узла), прибавка эффекта, гейт по уровню лаборатории. */
+export interface ResearchLevel {
+  cost: number;      // цена ЭТОГО уровня (в валюте узла — dna/coins)
+  value: number;     // прибавка эффекта на этом уровне (суммируется по купленным уровням)
+  minLevel: number;  // мин. уровень лаборатории, чтобы купить именно этот уровень
+}
 
 export interface ResearchDef {
   id: string;
   glyph: string;
   title: string;
-  desc: string;
-  dna: number;
-  requires: readonly string[];
-  col: number; // колонка в ветке (0 — корень; col ≥ 2 — верхние узлы, гейт ур. 7)
-  row: number; // ветка: 0 — Селекция, 1 — Обучение, 2 — Пристройство, 3 — Хозяйство
-  effect: { kind: ResearchEffectKind; value: number };
+  desc: string;             // краткое описание эффекта «за уровень»
+  currency: Currency;       // 'dna' (Селекция) | 'coins' (остальные ветки)
+  effectKind: ResearchEffectKind;
+  requires: readonly string[]; // узлы-предпосылки (нужен ≥1 уровень каждого)
+  col: number;              // колонка в ветке (0 — корень цепочки)
+  row: number;              // ветка: 0 — Селекция, 1 — Обучение, 2 — Пристройство, 3 — Хозяйство
+  levels: readonly ResearchLevel[]; // уровни по возрастанию цены/гейта
 }
 
 export const RESEARCH: readonly ResearchDef[] = [
-  // ветка 0 — 🧪 Селекция (главная ветка игры: шансы рецептов, инбридинг, здоровье)
-  { id: 'r_sel1', glyph: '💞', title: 'Подбор пар', desc: 'Шансы всех рецептов +5%',
-    dna: 40, requires: [], col: 0, row: 0, effect: { kind: 'recipeChance', value: 0.05 } },
-  { id: 'r_sel2', glyph: '🗂', title: 'Картотека линий', desc: 'Шансы всех рецептов +10% (итого +15%)',
-    dna: 90, requires: ['r_sel1'], col: 1, row: 0, effect: { kind: 'recipeChance', value: 0.10 } },
-  { id: 'r_sel3', glyph: '🧬', title: 'Генетические маркеры', desc: 'Риск инбридинга у котёнка −30%',
-    dna: 160, requires: ['r_sel2'], col: 2, row: 0, effect: { kind: 'kinshipSafety', value: 0.30 } },
-  { id: 'r_sel4', glyph: '💊', title: 'Витамины роста', desc: 'Новорождённые котята +1 ❤',
-    dna: 260, requires: ['r_sel3'], col: 3, row: 0, effect: { kind: 'extraHeart', value: 1 } },
+  // ветка 0 — 🧪 Селекция (за 🧬: шансы рецептов, инбридинг, здоровье)
+  { id: 'r_sel_pairs', glyph: '💞', title: 'Подбор пар', desc: 'Шансы всех рецептов +5% за уровень',
+    currency: 'dna', effectKind: 'recipeChance', requires: [], col: 0, row: 0, levels: [
+      { cost: 40, value: 0.05, minLevel: 2 },
+      { cost: 100, value: 0.05, minLevel: 4 },
+      { cost: 220, value: 0.05, minLevel: 7 },
+    ] },
+  { id: 'r_sel_markers', glyph: '🧬', title: 'Генетические маркеры', desc: 'Риск инбридинга у котёнка ниже (потолок −50%)',
+    currency: 'dna', effectKind: 'kinshipSafety', requires: ['r_sel_pairs'], col: 1, row: 0, levels: [
+      { cost: 150, value: 0.20, minLevel: 5 },
+      { cost: 320, value: 0.15, minLevel: 8 },
+    ] },
+  { id: 'r_sel_vitamins', glyph: '💊', title: 'Витамины роста', desc: 'Новорождённые котята +1 ❤',
+    currency: 'dna', effectKind: 'extraHeart', requires: ['r_sel_markers'], col: 2, row: 0, levels: [
+      { cost: 260, value: 1, minLevel: 6 },
+    ] },
 
-  // ветка 1 — 🎓 Обучение (доход пьедесталов = выставка чемпионов)
-  { id: 'r_income1', glyph: '🧺', title: 'Лежанки', desc: '+25% дохода пьедесталов',
-    dna: 30, requires: [], col: 0, row: 1, effect: { kind: 'income', value: 0.25 } },
-  { id: 'r_income2', glyph: '🎓', title: 'Дрессировка', desc: '+35% дохода пьедесталов',
-    dna: 70, requires: ['r_income1'], col: 1, row: 1, effect: { kind: 'income', value: 0.35 } },
-  { id: 'r_income3', glyph: '📖', title: 'Коллекционер', desc: '+0.5 💰/мин за каждую открытую породу',
-    dna: 140, requires: ['r_income2'], col: 2, row: 1, effect: { kind: 'collectionIncome', value: 0.5 } },
-  { id: 'r_income4', glyph: '🏅', title: 'Гранд-чемпион', desc: '+50% дохода пьедесталов',
-    dna: 240, requires: ['r_income3'], col: 3, row: 1, effect: { kind: 'income', value: 0.50 } },
+  // ветка 1 — 🎓 Обучение (за 💰: доход пьедесталов, коллекция, офлайн)
+  { id: 'r_show', glyph: '🎓', title: 'Дрессировка', desc: '+доход пьедесталов за уровень',
+    currency: 'coins', effectKind: 'income', requires: [], col: 0, row: 1, levels: [
+      { cost: 250, value: 0.20, minLevel: 2 },
+      { cost: 700, value: 0.25, minLevel: 4 },
+      { cost: 1800, value: 0.30, minLevel: 6 },
+      { cost: 5000, value: 0.40, minLevel: 9 },
+    ] },
+  { id: 'r_collection', glyph: '📖', title: 'Коллекционер', desc: '+0.25 💰/мин за каждую открытую породу за уровень',
+    currency: 'coins', effectKind: 'collectionIncome', requires: ['r_show'], col: 1, row: 1, levels: [
+      { cost: 900, value: 0.25, minLevel: 5 },
+      { cost: 2600, value: 0.25, minLevel: 7 },
+      { cost: 7000, value: 0.25, minLevel: 10 },
+    ] },
+  { id: 'r_offline', glyph: '🌙', title: 'Ночной смотритель', desc: '+120 мин к потолку офлайна за уровень',
+    currency: 'coins', effectKind: 'offline', requires: ['r_collection'], col: 2, row: 1, levels: [
+      { cost: 500, value: 120, minLevel: 4 },
+      { cost: 1500, value: 120, minLevel: 6 },
+      { cost: 4500, value: 120, minLevel: 9 },
+    ] },
 
-  // ветка 2 — 🤝 Пристройство (💰/🧬 за отданных котов и заказы)
-  { id: 'r_adopt1', glyph: '🤝', title: 'Добрые руки', desc: '+30% 💰 за пристройство',
-    dna: 30, requires: [], col: 0, row: 2, effect: { kind: 'adoptCoins', value: 0.30 } },
-  { id: 'r_adopt2', glyph: '🧬', title: 'Биобанк+', desc: '+40% 🧬 за пристройство/лабораторию',
-    dna: 70, requires: ['r_adopt1'], col: 1, row: 2, effect: { kind: 'adoptDna', value: 0.40 } },
-  { id: 'r_adopt3', glyph: '💞', title: 'Меценаты', desc: '+50% 💰 за пристройство',
-    dna: 140, requires: ['r_adopt2'], col: 2, row: 2, effect: { kind: 'adoptCoins', value: 0.50 } },
-  { id: 'r_adopt4', glyph: '🧑‍🔬', title: 'Клиенты-заводчики', desc: '+50% 🧬 с выполненных заказов',
-    dna: 220, requires: ['r_adopt3'], col: 3, row: 2, effect: { kind: 'orderDna', value: 0.50 } },
+  // ветка 2 — 🤝 Пристройство (за 💰: 💰/🧬 за отданных котов и заказы)
+  { id: 'r_adopt_coins', glyph: '🤝', title: 'Добрые руки', desc: '+20% 💰 за пристройство за уровень',
+    currency: 'coins', effectKind: 'adoptCoins', requires: [], col: 0, row: 2, levels: [
+      { cost: 200, value: 0.20, minLevel: 2 },
+      { cost: 700, value: 0.20, minLevel: 5 },
+      { cost: 2400, value: 0.20, minLevel: 8 },
+    ] },
+  { id: 'r_adopt_dna', glyph: '🧫', title: 'Биобанк+', desc: '+15% 🧬 за пристройство/лабораторию за уровень',
+    currency: 'coins', effectKind: 'adoptDna', requires: ['r_adopt_coins'], col: 1, row: 2, levels: [
+      { cost: 350, value: 0.15, minLevel: 3 },
+      { cost: 1100, value: 0.15, minLevel: 6 },
+      { cost: 3600, value: 0.15, minLevel: 9 },
+    ] },
+  { id: 'r_order_dna', glyph: '🧑‍🔬', title: 'Клиенты-заводчики', desc: '+25% 🧬 с выполненных заказов за уровень',
+    currency: 'coins', effectKind: 'orderDna', requires: ['r_adopt_dna'], col: 2, row: 2, levels: [
+      { cost: 2000, value: 0.25, minLevel: 7 },
+      { cost: 6500, value: 0.25, minLevel: 10 },
+    ] },
 
-  // ветка 3 — 🏠 Хозяйство (вместимости, офлайн, корм)
-  { id: 'r_infra1', glyph: '🏠', title: 'Пристройка', desc: '+4 места в питомнике',
-    dna: 40, requires: [], col: 0, row: 3, effect: { kind: 'nurseryCap', value: 4 } },
-  { id: 'r_infra2', glyph: '🏡', title: 'Приют+', desc: '+6 мест в приюте',
-    dna: 60, requires: ['r_infra1'], col: 1, row: 3, effect: { kind: 'shelterCap', value: 6 } },
-  { id: 'r_infra3', glyph: '🌙', title: 'Ночной смотритель', desc: '+180 мин к потолку офлайна',
-    dna: 120, requires: ['r_infra2'], col: 2, row: 3, effect: { kind: 'offline', value: 180 } },
-  { id: 'r_infra4', glyph: '🍽', title: 'Экономный рацион', desc: 'Коты едят на 25% меньше корма',
-    dna: 150, requires: ['r_infra3'], col: 3, row: 3, effect: { kind: 'feedEff', value: 0.25 } },
-  { id: 'r_infra5', glyph: '🤖', title: 'Автокормушка', desc: 'Сама докупает корм за 💰 при опустошении',
-    dna: 300, requires: ['r_infra4'], col: 4, row: 3, effect: { kind: 'autoFeed', value: 1 } },
+  // ветка 3 — 🏠 Хозяйство (за 💰: вместимости, кормушка, корм, автокормушка)
+  { id: 'r_nursery', glyph: '🏠', title: 'Пристройка', desc: '+2 места в питомнике за уровень',
+    currency: 'coins', effectKind: 'nurseryCap', requires: [], col: 0, row: 3, levels: [
+      { cost: 200, value: 2, minLevel: 2 },
+      { cost: 450, value: 2, minLevel: 3 },
+      { cost: 1000, value: 2, minLevel: 5 },
+      { cost: 2400, value: 2, minLevel: 7 },
+      { cost: 6000, value: 2, minLevel: 9 },
+    ] },
+  { id: 'r_shelter', glyph: '🏡', title: 'Приют+', desc: '+3 места в приюте за уровень',
+    currency: 'coins', effectKind: 'shelterCap', requires: ['r_nursery'], col: 1, row: 3, levels: [
+      { cost: 150, value: 3, minLevel: 2 },
+      { cost: 380, value: 3, minLevel: 4 },
+      { cost: 900, value: 3, minLevel: 6 },
+      { cost: 2200, value: 3, minLevel: 8 },
+      { cost: 5500, value: 3, minLevel: 10 },
+    ] },
+  { id: 'r_food', glyph: '🥫', title: 'Большая кормушка', desc: '+200 к ёмкости кормушки за уровень',
+    currency: 'coins', effectKind: 'foodCap', requires: ['r_shelter'], col: 2, row: 3, levels: [
+      { cost: 250, value: 200, minLevel: 3 },
+      { cost: 800, value: 200, minLevel: 5 },
+      { cost: 2500, value: 200, minLevel: 8 },
+    ] },
+  { id: 'r_feed', glyph: '🍽', title: 'Экономный рацион', desc: 'Коты едят на 15% меньше корма за уровень',
+    currency: 'coins', effectKind: 'feedEff', requires: ['r_food'], col: 3, row: 3, levels: [
+      { cost: 400, value: 0.15, minLevel: 4 },
+      { cost: 1400, value: 0.15, minLevel: 7 },
+    ] },
+  { id: 'r_autofeed', glyph: '🤖', title: 'Автокормушка', desc: 'Сама докупает корм за 💰 при опустошении',
+    currency: 'coins', effectKind: 'autoFeed', requires: ['r_feed'], col: 4, row: 3, levels: [
+      { cost: 3000, value: 1, minLevel: 8 },
+    ] },
 ];
 
 export interface UpgradeDef {
@@ -304,15 +364,14 @@ export interface UpgradeDef {
 
 /**
  * Дерево прокачки за валюту. Слоты вязки — особый случай (см. economy.upgradeCost).
- * Вместимости питомника/приюта расширяются в основном исследованиями «Хозяйства»
- * (r_infra1/r_infra2), но апгрейд-ключи оставлены для аддитивного бонуса.
- * Легаси-записи (скорость/мутаген/помёт/выставка/связи/биобанк/селекция/фонд/офлайн)
- * удалены на этапе C0 — они нигде не продавались, их роль ушла в дерево исследований.
+ * Вместимости питомника/приюта теперь расширяются ТОЛЬКО деревом исследований
+ * (узлы r_nursery/r_shelter, многоуровневые) — легаси-апгрейды за 💰 удалены, чтобы
+ * прокачка вместимости жила в одном месте.
+ * Легаси-записи (скорость/мутаген/помёт/выставка/связи/биобанк/селекция/фонд/офлайн/
+ * слоты-питомника/слоты-приюта) удалены — они нигде не продавались.
  */
 export const UPGRADES: Record<string, UpgradeDef> = {
   slots: { label: 'Слоты вязки', currency: 'coins', baseCost: 500, mult: 4, max: 2 },
-  nurseryCap: { label: 'Слоты питомника', currency: 'coins', baseCost: 200, mult: 1.6, max: 3 },
-  shelterCap: { label: 'Слоты приюта', currency: 'coins', baseCost: 120, mult: 1.5, max: 3 },
   // 1 → 5 пьедесталов (base 1 + до 4 апгрейдов), покупки гейтит уровень (PEDESTAL_UNLOCK_LEVELS).
   // ВНИМАНИЕ (тюнинг): при mult 4 верхние уровни очень дороги (~160к 💰 за 5-й) — проверить на плейтесте.
   championSlots: { label: 'Слоты выставки', currency: 'coins', baseCost: 2500, mult: 4, max: 4 },
@@ -367,7 +426,6 @@ export function unlocksAtLevel(level: number): string[] {
     research: '🔬 исследования',
     engineering: '🧪 усилители вязки',
     clinic: '💉 клиника лечения',
-    researchAdvanced: '🔬 верхние исследования',
   };
   for (const key of Object.keys(featNames) as LabFeature[]) {
     if (LAB_UNLOCKS[key] === level) out.push(featNames[key]!);

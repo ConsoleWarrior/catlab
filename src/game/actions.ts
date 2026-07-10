@@ -523,19 +523,26 @@ export function buyBoost(state: GameState, id: string, currency: Currency = 'dna
   return { ok: true };
 }
 
-/** Изучить узел дерева исследований (постоянный бонус за 🧬). */
+/**
+ * Прокачать следующий уровень узла дерева исследований (постоянный бонус). Валюта —
+ * своя у узла (🧬 у Селекции, 💰 у остальных веток). Гейт двойной: всё дерево — с
+ * LAB_UNLOCKS.research, а КАЖДЫЙ уровень узла — со своего `minLevel` (растянуто L2→L10).
+ */
 export function unlockResearch(state: GameState, id: string): Result {
   const def = C.RESEARCH.find((r) => r.id === id);
   if (!def) return { ok: false, reason: 'нет такого исследования' };
   if (!E.isUnlocked(state, 'research')) return { ok: false, reason: 'locked' };
-  // Верхние узлы веток (дальние колонки) открываются позже — на уровне researchAdvanced.
-  if (def.col >= 2 && !E.isUnlocked(state, 'researchAdvanced')) return { ok: false, reason: 'locked' };
-  if (state.research.includes(id)) return { ok: false, reason: 'уже изучено' };
-  if (!def.requires.every((req) => state.research.includes(req))) {
+  const next = E.researchNext(state, def);
+  if (!next) return { ok: false, reason: 'уже изучено' };
+  // Гейт уровня: этот уровень узла открывается только с нужного уровня лаборатории.
+  if (state.level < next.minLevel) return { ok: false, reason: 'locked' };
+  if (!def.requires.every((req) => E.researchOwned(state, req))) {
     return { ok: false, reason: 'сначала изучи предыдущее' };
   }
-  if (!spend(state, 'dna', def.dna)) return { ok: false, reason: 'не хватает ДНК' };
-  state.research.push(id);
+  if (!spend(state, def.currency, next.cost)) {
+    return { ok: false, reason: def.currency === 'coins' ? 'не хватает монет' : 'не хватает ДНК' };
+  }
+  state.research[id] = E.researchLevel(state, id) + 1;
   return { ok: true };
 }
 

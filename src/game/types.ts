@@ -92,7 +92,7 @@ export interface GameState {
   unlockedGenes: string[];          // открытые гены/фичи (Генолаб, легаси)
   discoveredBreeds: string[];       // когда-либо полученные породы (Котодекс)
   boosts: Record<string, number>;   // заряды генной инженерии (применяются при рождении)
-  research: string[];               // изученные узлы дерева исследований (постоянные бонусы)
+  research: Record<string, number>; // id узла дерева исследований → купленный уровень (0/нет — не начат)
   unlockedRooms: RoomId[];
   orders: Order[];
   champions: (string | null)[];     // id кота-чемпиона по индексу пьедестала (null — слот пуст)

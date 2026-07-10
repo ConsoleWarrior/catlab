@@ -268,7 +268,7 @@ describe('лаборатория и ускорение', () => {
     s.cats = [];
     const cat = addCat(s, 'savannah');
     const base = championIncomePerMin(s, cat);
-    s.research = ['r_income1', 'r_income2']; // +25% +35% = +60%
-    expect(championIncomePerMin(s, cat)).toBeCloseTo(base * (1 + 0.25 + 0.35));
+    s.research = { r_show: 2 }; // «Дрессировка» ур.1+ур.2 = +20% +25% = +45%
+    expect(championIncomePerMin(s, cat)).toBeCloseTo(base * (1 + 0.20 + 0.25));
   });
 });

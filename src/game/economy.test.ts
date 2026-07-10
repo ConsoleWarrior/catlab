@@ -23,14 +23,13 @@ describe('createInitialState', () => {
 });
 
 describe('геттеры прокачки', () => {
-  it('вместимости растут с уровнем', () => {
+  it('вместимости растут узлами дерева (r_nursery +2/ур, r_shelter +3/ур)', () => {
     const s = createInitialState(makeRng(2), 0);
     expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP);
     expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP);
-    s.upgrades.nurseryCap = 2;
-    s.upgrades.shelterCap = 1;
-    expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP + 2 * C.NURSERY_CAP_STEP);
-    expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + C.SHELTER_CAP_STEP);
+    s.research = { r_nursery: 2, r_shelter: 1 };
+    expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP + 4); // 2 уровня × +2
+    expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + 3); // 1 уровень × +3
   });
 
   it('длительность инкубации постоянна (апгрейд скорости удалён на C0)', () => {
@@ -50,8 +49,8 @@ describe('геттеры прокачки', () => {
   it('потолок офлайн-дохода растёт узлом «Ночной смотритель»', () => {
     const s = createInitialState(makeRng(5), 0);
     expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN);
-    s.research = ['r_infra1', 'r_infra2', 'r_infra3'];
-    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 180);
+    s.research = { r_offline: 2 }; // 2×120
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 240);
   });
 });
 
@@ -65,9 +64,9 @@ describe('стоимость апгрейдов', () => {
 
   it('обычный апгрейд дорожает по mult', () => {
     const s = createInitialState(makeRng(7), 0);
-    expect(upgradeCost(s, 'nurseryCap')).toEqual({ currency: 'coins', amount: 200 });
-    s.upgrades.nurseryCap = 1;
-    expect(upgradeCost(s, 'nurseryCap')).toEqual({ currency: 'coins', amount: Math.round(200 * 1.6) });
+    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: 2500 });
+    s.upgrades.championSlots = 1;
+    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: Math.round(2500 * 4) });
   });
 
   it('upgradeMaxed по достижении максимума', () => {
@@ -141,21 +140,21 @@ describe('здоровье (сердца) и возраст', () => {
 describe('дерево исследований (эффекты)', () => {
   it('инфраструктура расширяет вместимости и потолок офлайна', () => {
     const s = createInitialState(makeRng(30), 0);
-    s.research = ['r_infra1', 'r_infra2', 'r_infra3'];
-    expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP + 4);
-    expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + 6);
-    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 180);
+    s.research = { r_nursery: 2, r_shelter: 2, r_offline: 1 };
+    expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP + 4); // 2×+2
+    expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + 6); // 2×+3
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 120);
   });
 
   it('доходные узлы дают множитель и бонус за коллекцию', () => {
     const s = createInitialState(makeRng(31), 0);
     s.champions = [s.cats[0]!.id]; // доход идёт от чемпиона
     const base = passiveRatePerMin(s);
-    s.research = ['r_income1']; // +25% пассива
-    expect(passiveRatePerMin(s)).toBeCloseTo(base * 1.25);
-    s.research = ['r_income3']; // +0.5 💰/мин за каждую открытую породу
+    s.research = { r_show: 1 }; // +20% пассива («Дрессировка» ур.1)
+    expect(passiveRatePerMin(s)).toBeCloseTo(base * 1.20);
+    s.research = { r_collection: 1 }; // +0.25 💰/мин за каждую открытую породу
     s.discoveredBreeds = ['a', 'b', 'c', 'd'];
-    expect(passiveRatePerMin(s)).toBeCloseTo(base + 4 * 0.5);
+    expect(passiveRatePerMin(s)).toBeCloseTo(base + 4 * 0.25);
   });
 
   it('узлы пристройства увеличивают 💰 и 🧬', () => {
@@ -163,10 +162,10 @@ describe('дерево исследований (эффекты)', () => {
     const cat = s.cats[0]!;
     const market = catMarketValue(cat);
     const dnaBase = C.TIER_VALUE[cat.rarityTier].dna;
-    s.research = ['r_adopt1', 'r_adopt2', 'r_adopt3']; // +0.30 и +0.50 к 💰, +0.40 к 🧬
+    s.research = { r_adopt_coins: 2, r_adopt_dna: 1 }; // +0.40 к 💰 (2×0.20), +0.15 к 🧬
     expect(adoptReward(s, cat)).toEqual({
-      coins: Math.round(market * C.ADOPT_COIN_FRACTION * (1 + 0.30 + 0.50)),
-      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION * (1 + 0.40))),
+      coins: Math.round(market * C.ADOPT_COIN_FRACTION * (1 + 0.40)),
+      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION * (1 + 0.15))),
     });
   });
 });

@@ -302,7 +302,7 @@ export class Game implements UiContext {
   /** DEV: наполнить сцену котами и активной вязкой для скриншотов/проверки. */
   private demo(): void {
     this.state.coins += 8000; this.state.crystals += 60; this.state.dna += 800;
-    this.state.upgrades.nurseryCap = 3; // запас места (макс. уровень слотов питомника)
+    this.state.research.r_nursery = 5; // запас места (макс. уровень «Пристройки» в дереве)
     const now = this.now();
     const spawn = (room: 'nursery' | 'shelter'): void => {
       const b = pick(this.rng, BREEDS);
@@ -327,7 +327,10 @@ export class Game implements UiContext {
 
   /** DEV: парад коллекции — по коту на каждую породу в Питомник (для проверки арта). */
   private collection(): void {
-    this.state.upgrades.nurseryCap = Math.ceil(BREEDS.length / 2) + 2;
+    // DEV-парад: максимум вместимости из дерева (рендер комнаты всё равно показывает
+    // всех котов, вместимость лишь для счётчика).
+    this.state.research.r_nursery = 5;
+    this.state.research.r_shelter = 5;
     const now = this.now();
     // освобождаем Питомник, чтобы парад был наглядным
     this.state.cats = this.state.cats.filter((c) => c.location !== 'nursery');
