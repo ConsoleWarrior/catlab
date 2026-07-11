@@ -21,4 +21,9 @@ export {
   resolveBreeding, breedingOutcomes, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
 } from './recipes.js';
 export type { Recipe, SideSpec, BreedSide, BreedingContext, KinshipLevel, BreedingOutcome } from './recipes.js';
+export {
+  TRAITS, TRAIT_BY_ID, BREED_TRAITS, breedTraits, sortTraits,
+  carriedTraitSet, dormantTraits, traitTag,
+} from './traits.js';
+export type { TraitId, TraitGroup, TraitDef } from './traits.js';
 export { breedValueMult, VALUE_MULT_MIN, VALUE_MULT_MAX } from './breedValue.js';

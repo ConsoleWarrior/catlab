@@ -14,6 +14,7 @@ export {
   CHAMPION_SLOTS_BASE,
   HEAL_AD_HEARTS, HEAL_AD_COOLDOWN_MS, HEAL_CRYSTAL_PER_HEART,
   CRYO_BASE_CAP, CLONE_LAB_MULT,
+  FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature } from './config.js';
 export {

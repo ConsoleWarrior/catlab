@@ -11,7 +11,7 @@
  *   - иначе — «???» (не изучена).
  */
 
-import { RECIPES, recipeKey, recipesFor } from '../genetics/index.js';
+import { RECIPES, recipeKey, recipesFor, isPedigreeRecipe } from '../genetics/index.js';
 import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, GameState } from './types.js';
 
@@ -55,10 +55,17 @@ export function researchableRecipes(state: GameState): Recipe[] {
 }
 
 /**
- * Исход раскрыт в превью пары (иначе — «❓ <тир> — X%»): рецепт открыт в
- * Котодексе И скрытые гены ОБОИХ родителей вскрыты анализом (дизайн 2026-07-11 —
- * условие общее, в том числе для прямых рецептов без родословных условий).
+ * Исход раскрыт в превью пары (иначе — «❓ <тир> — X%»). Раскрытие завязано на два
+ * разных вида знания:
+ *   1. Рецепт открыт в Котодексе (выведен или изучен) — иначе исход неизвестен.
+ *   2. Для РОДОСЛОВНЫХ рецептов (читают породы предков — скрытые гены) нужен ещё
+ *      анализ ОБОИХ родителей: иначе имя исхода «слило» бы содержимое тумана
+ *      родословной без анализа. Прямые/сцепленные/инбридинг-рецепты скрытых генов
+ *      не читают — им достаточно изученного рецепта (исправление: изученная порода
+ *      больше не висит как «❓ редкий», если пара очевидно её даёт).
  */
 export function outcomeRevealed(state: GameState, mother: Cat, father: Cat, r: Recipe): boolean {
-  return recipeIsKnown(state, r) && mother.analyzed && father.analyzed;
+  if (!recipeIsKnown(state, r)) return false;
+  if (!isPedigreeRecipe(r)) return true;
+  return mother.analyzed && father.analyzed;
 }

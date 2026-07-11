@@ -285,15 +285,23 @@ describe('превью пары (этап E): breedingOutcomes', () => {
     expect(momFb!.p).toBeCloseTo(dadFb!.p, 9); // родители наследуются поровну
   });
 
-  it('раскрытие исхода: рецепт в Котодексе И оба родителя проанализированы', () => {
+  it('раскрытие прямого рецепта: достаточно, что он в Котодексе (скрытых генов не читает)', () => {
     const { s, mom, dad } = setup(55);
-    const r = recipesFor('himalayan')[0]!; // persian × SIAM — прямой рецепт нашей пары
-    expect(outcomeRevealed(s, mom, dad, r)).toBe(false);        // ничего не известно
+    const r = recipesFor('himalayan')[0]!; // persian × SIAM — прямой рецепт без условий родословной
+    expect(outcomeRevealed(s, mom, dad, r)).toBe(false);        // рецепт ещё не изучен
     s.knownRecipes.push(recipeKey(r));
-    expect(outcomeRevealed(s, mom, dad, r)).toBe(false);        // рецепт есть, генов нет
+    expect(outcomeRevealed(s, mom, dad, r)).toBe(true);         // изучен → раскрыт (анализ не нужен)
+  });
+
+  it('раскрытие родословного рецепта: нужен ещё анализ ОБОИХ родителей (читает скрытые гены)', () => {
+    const { s, mom, dad } = setup(56);
+    const r = recipesFor('british_shorthair')[0]!; // ALLEY × ALLEY + ancestorAny — родословный
+    s.knownRecipes.push(recipeKey(r));
+    expect(outcomeRevealed(s, mom, dad, r)).toBe(false);        // рецепт есть, но гены в тумане
     mom.analyzed = true;
+    expect(outcomeRevealed(s, mom, dad, r)).toBe(false);        // вскрыт только один
     dad.analyzed = true;
-    expect(outcomeRevealed(s, mom, dad, r)).toBe(true);         // всё вскрыто
+    expect(outcomeRevealed(s, mom, dad, r)).toBe(true);         // оба вскрыты
   });
 });
 

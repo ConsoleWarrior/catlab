@@ -13,14 +13,15 @@ import {
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
   adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
   sendToLab, labReward,
-  healCat, isUnlocked, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
-  isChampion, cryoUnlocked, freezeCat, cloneCat, disposeCryo, cloneCost,
+  healCat, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
+  freezeCat, cloneCat, disposeCryo, cloneCost, cryoCount, cryoCapacity,
+  FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
   analyzeCat, ANALYZE_COIN_COST, ANALYZE_AD_COOLDOWN_MS, KINSHIP_RU,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
-import { breedName, tierOfBreed, TIER_LEVEL, breedingOutcomes } from '../genetics/index.js';
+import { breedName, tierOfBreed, TIER_LEVEL, breedingOutcomes, dormantTraits, traitTag } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
@@ -585,9 +586,15 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   };
 
   if (cat.analyzed) {
-    // анализ сделан: показываем «скрытые гены» — породы предков (материал рецептов)
-    const genes = knownAncestorBreeds(cat);
-    if (genes.length > 0) footNote(`🧬 гены предков: ${genes.map(breedName).join(', ')}`, COLORS.ink);
+    // анализ сделан: показываем «скрытые гены» как признаки, дремлющие в родословной
+    // (есть у предков, но не у самой породы кота) — материал родословных рецептов.
+    const hidden = dormantTraits(cat.breed, knownAncestorBreeds(cat));
+    footNote(
+      hidden.length > 0
+        ? `🧬 скрытые гены: ${hidden.map(traitTag).join(' · ')}`
+        : '🧬 скрытых генов в роду нет — родословная чистая по признакам',
+      hidden.length > 0 ? COLORS.ink : COLORS.inkSoft,
+    );
   } else if (fog) {
     footNote('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', COLORS.inkSoft);
     const anBtn = new Button({ text: '🧬 Анализ', w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
@@ -633,8 +640,8 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   who.position.set(W / 2, 180);
 
   const note = new Text({
-    text: 'Знание не меняет исход вязок — гены предков работали и в тумане. '
-      + 'Анализ раскрывает их для рецептов и превью пары.',
+    text: 'Знание не меняет исход вязок — скрытые гены работали и в тумане. '
+      + 'Анализ раскрывает родословную и признаки предков для рецептов и превью пары.',
     style: {
       fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 16,
@@ -772,11 +779,14 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
       root.addChild(div);
       y += 10;
     }
+    // Единый формат карточки: родители → условия (скрытые гены/пол/родословная,
+    // инбридинг) → базовый шанс → факт о породе (одно предложение).
     const { pair, conds } = describeRecipe(r);
     addLine(`🧪 ${pair}`, 13.5, COLORS.ink, '800');
-    addLine(`базовый шанс: ${pct(r.chance)}`, 12, COLORS.dna, '800');
+    if (conds.length === 0) addLine('· без доп. условий — только породы родителей', 11.5, COLORS.inkSoft, '700');
     for (const cLine of conds) addLine(`· ${cLine}`, 11.5, COLORS.inkSoft, '700');
-    addLine(r.note, 11, COLORS.inkSoft, '600');
+    addLine(`базовый шанс: ${pct(r.chance)}`, 12, COLORS.dna, '800');
+    addLine(`📖 ${r.note}`, 11, COLORS.inkSoft, '600');
     y += 4;
   });
   y += 6;
@@ -833,8 +843,10 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
   y += 6;
 
   // строки исходов: 🧪 рецепты (редкие первыми — как бросает игра), затем 🐾 фолбэк
+  let anyHidden = false;
   for (const o of outcomes) {
     const revealed = !o.recipe || outcomeRevealed(ctx.state, mother, father, o.recipe);
+    if (!revealed) anyHidden = true;
     const tierO = tierOfBreed(o.breed);
     const name = revealed
       ? `${o.recipe ? '🧪' : '🐾'} ${breedName(o.breed)}`
@@ -855,7 +867,7 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
   root.addChild(legend);
   y += 20;
 
-  if (!(mother.analyzed && father.analyzed)) {
+  if (anyHidden) {
     const hint = new Text({
       text: '🧬 Генетический анализ обоих котов + рецепт в Котодексе раскроют названия «❓» исходов',
       style: {
@@ -887,7 +899,8 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   const busy = isBusy(ctx.state, cat.id);
 
   const traits = catTraits(cat);
-  const H = 150 + traits.length * 20 + (busy ? 28 : 0) + 4 * 54;
+  // +22 — запас на перенос длинной строки «признаки: …» (визитка породы)
+  const H = 150 + traits.length * 20 + 22 + (busy ? 28 : 0) + 4 * 54;
   root.addChild(panel(W, H, COLORS.hud, 18));
 
   const named = cat.name?.trim();
@@ -992,28 +1005,9 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     addBtn('🧬 Генетический анализ', COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
   }
 
-  // Клиника: альтернатива перетаскиванию на станцию-шприц (есть что лечить,
-  // не бесплодный, клиника открыта уровнем). Кота в слоте вязки не лечим.
-  if (isUnlocked(ctx.state, 'clinic') && !isSterile(cat) && breedsLeft(cat) < heartsOf(cat)
-      && !isInSlot(ctx.state, cat.id)) {
-    addBtn('💉 Полечить', COLORS.good, true, () => ctx.openHealConfirm(cat));
-  }
-
-  // Крио-банк: заморозить кота в капсулу (открыт узлом «Криогенетика», кот не занят,
-  // не в слоте вязки и не чемпион — чемпиона сначала снимают с пьедестала).
-  if (cryoUnlocked(ctx.state) && !busy && !isInSlot(ctx.state, cat.id) && !isChampion(ctx.state, cat.id)) {
-    addBtn('🧊 Заморозить', COLORS.secondary, true, () => {
-      const r = freezeCat(ctx.state, cat.id, ctx.now());
-      if (!r.ok) {
-        ctx.toast(r.reason === 'locked' ? 'Крио-банк ещё закрыт 🔒'
-          : r.reason === 'нет свободной капсулы' ? 'Нет свободной капсулы ❄️ (открой ещё в Криогенетике)'
-            : r.reason);
-        return;
-      }
-      close(); ctx.commit();
-      ctx.toast('Кот в криокапсуле ❄️');
-    });
-  }
+  // Лечение (клиника-шприц) и заморозка (криокапсула) — только перетаскиванием кота
+  // на соответствующую станцию в Питомнике (кнопок в меню кота больше нет, чтобы не
+  // засорять список и держать действия у станций). См. rooms/nursery.ts.
 
   // Переезд между комнатами: в слоте вязки — обе кнопки, иначе одна (в комнату,
   // где кота нет). Занятого активной вязкой кота не двигаем — он breeding'ится.
@@ -1214,6 +1208,109 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
 }
 
 /**
+ * Криокапсула: диалог заморозки кота (🧊). Открывается перетаскиванием кота на
+ * станцию-криокапсулу в Питомнике (кнопки в меню кота больше нет). Три пути оплаты,
+ * как в клинике/анализе: 📺 реклама (бесплатно, глобальный кулдаун), 💰 монеты или
+ * 💎 кристаллы. В капсуле кот не ест и не даёт доход; разморозки нет — только клон/утиль.
+ */
+export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+
+  const title = label('🧊 Заморозить кота?', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+  const sub = label('в криокапсулу — витрина коллекции', 12.5, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 50);
+
+  const sp = catSprite(ctx.app, cat, 84);
+  sp.position.set(W / 2, 150);
+  const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
+  who.position.set(W / 2, 172);
+
+  const note = new Text({
+    text: '❄️ В капсуле кот не ест и не приносит доход. Разморозки нет — освободить капсулу можно клоном 🧬 или утилизацией.',
+    style: {
+      fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
+      align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 16,
+    },
+  });
+  note.anchor.set(0.5, 0);
+  note.position.set(W / 2, 192);
+
+  let y = 192 + note.height + 14;
+  root.addChild(title, sub, sp, who, note);
+
+  const btnW = W - 48;
+  const done = (r: { coins: number; crystals: number }): void => {
+    ctx.commit();
+    ctx.toast(`Кот в криокапсуле ❄️${r.coins ? `  −💰${r.coins}` : ''}${r.crystals ? `  −💎${r.crystals}` : ''}`);
+    close();
+  };
+  const fail = (reason: string): void => {
+    ctx.toast(reason === 'locked' ? 'Крио-банк ещё закрыт 🔒'
+      : reason === 'нет свободной капсулы' ? 'Нет свободной капсулы ❄️ (открой ещё в Криогенетике)'
+        : reason);
+  };
+
+  if (cryoCount(ctx.state) >= cryoCapacity(ctx.state)) {
+    const noCap = label('Нет свободной капсулы ❄️ (открой ещё в Криогенетике)', 12, COLORS.warn, '800');
+    noCap.position.set(W / 2, y);
+    root.addChild(noCap);
+    y += 28;
+  } else {
+    // 📺 реклама: бесплатно, но с глобальным кулдауном (0 = ещё не смотрели)
+    const cdLeft = ctx.state.lastFreezeAdAt > 0
+      ? FREEZE_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastFreezeAdAt) : 0;
+    const adReady = cdLeft <= 0;
+    const adBtn = new Button({
+      text: adReady ? '📺 Бесплатно за рекламу' : `📺 через ${Math.ceil(cdLeft / 60_000)} мин`,
+      w: btnW, h: 44, color: adReady ? COLORS.good : COLORS.cardEdge,
+      textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+    });
+    adBtn.enabled = adReady;
+    adBtn.position.set(W / 2, y + 22);
+    adBtn.onTap = () => { const r = freezeCat(ctx.state, cat.id, 'ad', ctx.now()); if (!r.ok) { fail(r.reason); return; } done(r); };
+    root.addChild(adBtn);
+    y += 52;
+
+    // 💰 монеты
+    const affordCoin = ctx.state.coins >= FREEZE_COIN_COST;
+    const coinBtn = new Button({
+      text: `💰 Заморозить · ${FREEZE_COIN_COST}`,
+      w: btnW, h: 44, color: affordCoin ? COLORS.primary : COLORS.cardEdge,
+      textColor: affordCoin ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+    });
+    coinBtn.enabled = affordCoin;
+    coinBtn.position.set(W / 2, y + 22);
+    coinBtn.onTap = () => { const r = freezeCat(ctx.state, cat.id, 'coins', ctx.now()); if (!r.ok) { fail(r.reason); return; } done(r); };
+    root.addChild(coinBtn);
+    y += 52;
+
+    // 💎 кристаллы (премиум, мгновенно)
+    const affordCrys = ctx.state.crystals >= FREEZE_CRYSTAL_COST;
+    const crysBtn = new Button({
+      text: `💎 Заморозить · ${FREEZE_CRYSTAL_COST}`,
+      w: btnW, h: 44, color: affordCrys ? COLORS.secondary : COLORS.cardEdge,
+      textColor: affordCrys ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+    });
+    crysBtn.enabled = affordCrys;
+    crysBtn.position.set(W / 2, y + 22);
+    crysBtn.onTap = () => { const r = freezeCat(ctx.state, cat.id, 'crystals', ctx.now()); if (!r.ok) { fail(r.reason); return; } done(r); };
+    root.addChild(crysBtn);
+    y += 52;
+  }
+
+  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 20);
+  closeBtn.onTap = close;
+  root.addChild(closeBtn);
+  y += 50;
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  return root;
+}
+
+/**
  * Меню криокапсулы (Крио-банк): портрет замороженного кота + здоровье/родословная и
  * два действия — 🧬 клонировать (за ДНК, цена ∝ ценности особи; клон появляется в
  * питомнике) или ♻️ утилизировать (необратимо, с подтверждением). Разморозки НЕТ.
@@ -1303,6 +1400,10 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
       );
       if (cat.motherBreed || cat.fatherBreed || cat.pedigree) {
         addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+      }
+      // Генетический анализ доступен и в капсуле: вскрыть родословную/скрытые гены.
+      if (!cat.analyzed && pedigreeHasFog(cat)) {
+        addBtn('🧬 Генетический анализ', COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
       }
       addBtn('♻️ Утилизировать', COLORS.warn, true, () => { confirmDispose = true; render(); });
     }

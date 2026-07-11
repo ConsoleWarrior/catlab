@@ -6,6 +6,7 @@ import {
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
+  revealPedigree, pedigreeHasFog,
 } from './index.js';
 import { STARTER_CAT_COST, MAX_HEARTS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
 import type { GameState } from './index.js';
@@ -33,6 +34,29 @@ describe('инкубатор', () => {
     expect(ev[0]!.kitten).toBeDefined();
     expect(s.cats).toHaveLength(3);
     expect(s.slots[0]!.readyAt).toBe(0); // слот освобождён
+  });
+
+  it('рождённый от изученных родителей — analyzed сразу (тумана нет, скрытые гены видны)', () => {
+    const rng = makeRng(77);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    // стартовые коты уже со скрытой родословной — вскрываем обоих производителей
+    revealPedigree(female);
+    revealPedigree(male);
+    startBreeding(s, 0, female.id, male.id, 0);
+    const kitten = collectReady(s, incubationDuration(s), rng)[0]!.kitten!;
+    expect(pedigreeHasFog(kitten)).toBe(false); // родословная досталась целиком вскрытой
+    expect(kitten.analyzed).toBe(true);         // → рождён уже изученным
+  });
+
+  it('рождённый от НЕизученных родителей — с туманом, анализ ещё нужен', () => {
+    const rng = makeRng(78);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    startBreeding(s, 0, female.id, male.id, 0);
+    const kitten = collectReady(s, incubationDuration(s), rng)[0]!.kitten!;
+    expect(pedigreeHasFog(kitten)).toBe(true);  // деды в тумане
+    expect(kitten.analyzed).toBe(false);        // → предложим Генетический анализ
   });
 
   it('валидации: тот же кот / неверный пол', () => {

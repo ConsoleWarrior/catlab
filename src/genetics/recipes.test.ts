@@ -6,6 +6,7 @@ import {
   RECIPES, recipesFor, recipeMatches, recipeChance, resolveBreeding, isPedigreeRecipe,
 } from './recipes.js';
 import type { BreedingContext, BreedSide, KinshipLevel, Recipe } from './recipes.js';
+import { carriedTraitSet, TRAIT_BY_ID } from './traits.js';
 
 /** Контекст пары для тестов: породы + опционально предки/родство/фенотип. */
 function ctx(
@@ -21,6 +22,7 @@ function ctx(
   const side = (breed: string, anc: string[]): BreedSide => ({
     breed,
     ancestorBreeds: new Set(anc),
+    traits: carriedTraitSet(breed, anc),
     pureLine: opts.pure ?? false,
     baseColor: opts.color ?? 'black',
     tabby: opts.tabby ?? false,
@@ -61,6 +63,8 @@ describe('таблица рецептов', () => {
       for (const k of r.ancestorAny ?? []) check(k);
       for (const k of r.ancestorBoth ?? []) check(k);
       if (r.ancestorTotal) check(r.ancestorTotal.breed);
+      if (r.traitAny) expect(TRAIT_BY_ID[r.traitAny], r.traitAny).toBeDefined();
+      if (r.traitBoth) expect(TRAIT_BY_ID[r.traitBoth], r.traitBoth).toBeDefined();
     }
   });
 

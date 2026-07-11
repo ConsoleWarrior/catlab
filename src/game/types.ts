@@ -119,5 +119,6 @@ export interface GameState {
   lastSeenAt: number;               // для офлайн/пассивного дохода
   lastHealAdAt: number;             // глобальный кулдаун 📺-лечения в клинике (этап D)
   lastAnalyzeAdAt: number;          // глобальный кулдаун 📺-варианта Генетического анализа
+  lastFreezeAdAt: number;           // глобальный кулдаун 📺-варианта заморозки в крио-банке
   nextId: number;                   // счётчик уникальных id
 }

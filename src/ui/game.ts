@@ -36,7 +36,7 @@ import { createCryobank } from './rooms/cryobank.js';
 import {
   buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildHealConfirm, buildCryoMenu,
-  buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
+  buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu,
 } from './overlays.js';
 
@@ -309,7 +309,8 @@ export class Game implements UiContext {
           const pool = this.state.cats
             .filter((c) => isAdult(c, now) && !isInSlot(this.state, c.id))
             .slice(0, 8);
-          for (const c of pool) freezeCat(this.state, c.id, now);
+          // DEV: сбрасываем кулдаун 📺 перед каждой заморозкой, чтобы заморозить всех разом
+          for (const c of pool) { this.state.lastFreezeAdAt = 0; freezeCat(this.state, c.id, 'ad', now); }
           this.commit(); // пересборка ряда комнат отложена на тик — переходим после неё
           setTimeout(() => this.goRoom(this.rooms.length - 1), 30);
         },
@@ -525,6 +526,11 @@ export class Game implements UiContext {
   openCryoMenu(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildCryoMenu(this, cat, close));
+  }
+
+  openFreezeConfirm(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildFreezeConfirm(this, cat, close));
   }
 
   openPedigree(cat: Cat): void {

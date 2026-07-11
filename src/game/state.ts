@@ -36,6 +36,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastSeenAt: now,
     lastHealAdAt: 0,     // 📺-лечение в клинике сразу доступно (без стартового кулдауна)
     lastAnalyzeAdAt: 0,  // 📺-вариант Генетического анализа сразу доступен
+    lastFreezeAdAt: 0,   // 📺-вариант заморозки сразу доступен
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -93,6 +94,7 @@ export function deserialize(json: string): GameState {
     data.recipeResearch = { startedAt: 0, readyAt: 0 };
   }
   if (typeof data.lastAnalyzeAdAt !== 'number') data.lastAnalyzeAdAt = 0;
+  if (typeof data.lastFreezeAdAt !== 'number') data.lastFreezeAdAt = 0;
   // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
   // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;
   // рождённым в инкубаторе (есть motherBreed/fatherBreed) раскрываем родителей —

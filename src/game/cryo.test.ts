@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { makeRng, makeCat } from '../genetics/index.js';
 import {
   createInitialState, serialize, deserialize, makeCatInstance,
-  freezeCat, cloneCat, disposeCryo,
+  freezeCat, cloneCat, disposeCryo, analyzeCat,
   cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
   catMarketValue, kinshipLevel, heartsOf, isAdult,
-  setChampion, assignBreeder,
+  setChampion, assignBreeder, attachHiddenPedigree, pedigreeHasFog,
 } from './index.js';
 import * as C from './config.js';
 import type { Cat, GameState } from './index.js';
@@ -25,7 +25,7 @@ describe('крио-банк: заморозка', () => {
   it('морозит взрослого: уходит из cats в cryo как есть', () => {
     const { s, cat } = setup(1);
     const before = s.cats.length;
-    const r = freezeCat(s, cat.id, 0);
+    const r = freezeCat(s, cat.id, 'ad', 0);
     expect(r.ok).toBe(true);
     expect(s.cats.some((c) => c.id === cat.id)).toBe(false);
     expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
@@ -33,11 +33,36 @@ describe('крио-банк: заморозка', () => {
     expect(cryoCount(s)).toBe(1);
   });
 
+  it('оплата: 📺 бесплатно с кулдауном, 💰 монеты, 💎 кристаллы', () => {
+    // 💰 монеты
+    const a = setup(40);
+    a.s.coins = C.FREEZE_COIN_COST;
+    expect(freezeCat(a.s, a.cat.id, 'coins', 0)).toMatchObject({ ok: true, coins: C.FREEZE_COIN_COST });
+    expect(a.s.coins).toBe(0);
+    // 💎 кристаллы
+    const b = setup(41);
+    b.s.crystals = C.FREEZE_CRYSTAL_COST;
+    expect(freezeCat(b.s, b.cat.id, 'crystals', 0)).toMatchObject({ ok: true, crystals: C.FREEZE_CRYSTAL_COST });
+    expect(b.s.crystals).toBe(0);
+    // 📺 реклама: первый раз бесплатно, повторно сразу — кулдаун
+    const c = setup(42);
+    const c2 = makeCatInstance(c.s, makeCat('male'), 0, 'nursery', 'siamese');
+    c.s.cats.push(c2);
+    expect(freezeCat(c.s, c.cat.id, 'ad', 1000).ok).toBe(true);
+    expect(freezeCat(c.s, c2.id, 'ad', 2000)).toMatchObject({ ok: false, reason: 'реклама заморозки ещё недоступна' });
+    expect(freezeCat(c.s, c2.id, 'ad', 1000 + C.FREEZE_AD_COOLDOWN_MS).ok).toBe(true);
+    // не хватает валюты — отказ, кот в питомнике
+    const d = setup(43);
+    d.s.coins = 0;
+    expect(freezeCat(d.s, d.cat.id, 'coins', 0)).toMatchObject({ ok: false, reason: 'не хватает монет' });
+    expect(d.s.cats.some((x) => x.id === d.cat.id)).toBe(true);
+  });
+
   it('без узла Криогенетики — locked (крио-банк закрыт)', () => {
     const { s, cat } = setup(2, 0); // rank 0 → узел не куплен
     expect(cryoUnlocked(s)).toBe(false);
     expect(cryoCapacity(s)).toBe(0);
-    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'locked' });
+    expect(freezeCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'locked' });
   });
 
   it('котёнка (не взрослого) не морозит', () => {
@@ -45,19 +70,19 @@ describe('крио-банк: заморозка', () => {
     cat.bornAt = 0;
     cat.growthMs = C.KITTEN_GROWTH_MS;
     expect(isAdult(cat, 1000)).toBe(false);
-    expect(freezeCat(s, cat.id, 1000)).toMatchObject({ ok: false, reason: 'котёнок ещё не вырос' });
+    expect(freezeCat(s, cat.id, 'ad', 1000)).toMatchObject({ ok: false, reason: 'котёнок ещё не вырос' });
   });
 
   it('кота в слоте вязки не морозит', () => {
     const { s, cat } = setup(4);
     expect(assignBreeder(s, 0, cat.id, 0).ok).toBe(true);
-    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'кот в слоте вязки' });
+    expect(freezeCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'кот в слоте вязки' });
   });
 
   it('чемпиона не морозит (сначала снять с пьедестала)', () => {
     const { s, cat } = setup(5);
     expect(setChampion(s, cat.id, 0, 0).ok).toBe(true);
-    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'сначала снять с пьедестала' });
+    expect(freezeCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'сначала снять с пьедестала' });
   });
 
   it('нет свободной капсулы — отказ', () => {
@@ -65,7 +90,7 @@ describe('крио-банк: заморозка', () => {
     const cap = cryoCapacity(s);
     for (let i = 0; i < cap; i++) s.cryo.push(makeCatInstance(s, makeCat('male'), 0, 'nursery', 'siamese'));
     expect(cryoCount(s)).toBe(cap);
-    expect(freezeCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'нет свободной капсулы' });
+    expect(freezeCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'нет свободной капсулы' });
   });
 });
 
@@ -73,7 +98,7 @@ describe('крио-банк: клонирование', () => {
   it('клон = новорождённый в питомнике, копия породы/пола, breedCount 0, наследует maxHearts', () => {
     const { s, cat } = setup(7);
     cat.maxHearts = 4; // урезанный потолок
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const r = cloneCat(s, cat.id, 1000);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -92,7 +117,7 @@ describe('крио-банк: клонирование', () => {
   it('клон изучен сразу (analyzed) и наследует вариант внешности оригинала', () => {
     const { s, cat } = setup(20);
     cat.analyzed = false;                 // оригинал даже не изучен
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const r = cloneCat(s, cat.id, 0);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -107,7 +132,7 @@ describe('крио-банк: клонирование', () => {
       mother: { id: 'a_m', breed: 'siamese', mother: { id: 'a_mm', breed: 'persian' }, father: { id: 'a_mf', breed: 'bengal' } },
       father: { id: 'a_f', breed: 'persian', mother: { id: 'a_fm', breed: 'moggie' }, father: { id: 'a_ff', breed: 'siamese' } },
     };
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const r = cloneCat(s, cat.id, 0);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -124,7 +149,7 @@ describe('крио-банк: клонирование', () => {
 
   it('цена = CLONE_LAB_MULT × выход лаборатории того же кота; списывает ДНК', () => {
     const { s, cat } = setup(8);
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const orig = s.cryo.find((c) => c.id === cat.id)!;
     const expected = C.CLONE_LAB_MULT * Math.max(1, Math.round(catMarketValue(orig) * C.LAB_DNA_RATE));
     expect(cloneCost(orig)).toBe(expected);
@@ -138,7 +163,7 @@ describe('крио-банк: клонирование', () => {
 
   it('клон × оригинал = критическое родство (готовый kinship, не собрать «чистую пару»)', () => {
     const { s, cat } = setup(9);
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const orig = s.cryo.find((c) => c.id === cat.id)!;
     const r = cloneCat(s, cat.id, 0);
     expect(r.ok).toBe(true);
@@ -150,7 +175,7 @@ describe('крио-банк: клонирование', () => {
   it('бесплодный (0 ❤) клонируется бесплодным', () => {
     const { s, cat } = setup(10);
     cat.maxHearts = 0;
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const r = cloneCat(s, cat.id, 0);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -159,7 +184,7 @@ describe('крио-банк: клонирование', () => {
 
   it('за клон опыта ⭐ не начисляется (это не рождение)', () => {
     const { s, cat } = setup(11);
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const repBefore = s.reputation;
     cloneCat(s, cat.id, 0);
     expect(s.reputation).toBe(repBefore);
@@ -180,7 +205,7 @@ describe('крио-банк: клонирование', () => {
 
   it('не хватает ДНК — отказ, капсула цела', () => {
     const { s, cat } = setup(13);
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     s.dna = 0;
     expect(cloneCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'не хватает ДНК' });
     expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
@@ -192,10 +217,26 @@ describe('крио-банк: клонирование', () => {
   });
 });
 
+describe('крио-банк: анализ замороженного кота', () => {
+  it('генетический анализ доступен коту в капсуле (не «кот не найден»)', () => {
+    const { s, cat } = setup(30);
+    attachHiddenPedigree(s, cat, makeRng(31));
+    s.coins = C.ANALYZE_COIN_COST;
+    freezeCat(s, cat.id, 'ad', 0);
+    const frozen = s.cryo.find((c) => c.id === cat.id)!;
+    expect(frozen.analyzed).toBe(false);
+    expect(pedigreeHasFog(frozen)).toBe(true);
+    const r = analyzeCat(s, cat.id, 'coins', 1000);
+    expect(r.ok).toBe(true);
+    expect(frozen.analyzed).toBe(true);
+    expect(pedigreeHasFog(frozen)).toBe(false); // родословная вскрыта прямо в капсуле
+  });
+});
+
 describe('крио-банк: утилизация', () => {
   it('освобождает капсулу навсегда, наград нет', () => {
     const { s, cat } = setup(15);
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const snap = { coins: s.coins, dna: s.dna, crystals: s.crystals };
     const r = disposeCryo(s, cat.id);
     expect(r.ok).toBe(true);
@@ -236,7 +277,7 @@ describe('крио-банк: миграция сейва', () => {
 
   it('сериализация сохраняет замороженных котов', () => {
     const { s, cat } = setup(19);
-    freezeCat(s, cat.id, 0);
+    freezeCat(s, cat.id, 'ad', 0);
     const restored = deserialize(serialize(s));
     expect(restored.cryo.some((c) => c.id === cat.id)).toBe(true);
   });

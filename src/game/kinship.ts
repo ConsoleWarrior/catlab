@@ -16,7 +16,7 @@
  * бросок здоровья котёнка (rollKittenHearts) — риск ↔ награда инбридинга.
  */
 
-import { expressPhenotype, tierOfBreed } from '../genetics/index.js';
+import { expressPhenotype, tierOfBreed, carriedTraitSet } from '../genetics/index.js';
 import type { KinshipLevel, BreedSide, BreedingContext, RarityTier } from '../genetics/index.js';
 import type { Cat, Ancestor } from './types.js';
 import * as C from './config.js';
@@ -110,9 +110,11 @@ export function isPureLine(cat: Cat): boolean {
 
 function sideOf(cat: Cat): BreedSide {
   const phen = expressPhenotype(cat.genotype);
+  const ancestors = ancestorBreedList(cat);
   return {
     breed: cat.breed,
-    ancestorBreeds: new Set(ancestorBreedList(cat)),
+    ancestorBreeds: new Set(ancestors),
+    traits: carriedTraitSet(cat.breed, ancestors),
     pureLine: isPureLine(cat),
     baseColor: phen.baseColor,
     tabby: phen.pattern !== null,

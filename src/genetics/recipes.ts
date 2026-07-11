@@ -25,6 +25,7 @@
 import type { RarityTier } from './types.js';
 import type { Rng } from './random.js';
 import type { BreedBoosts } from './catalog.js';
+import type { TraitId } from './traits.js';
 import { tierOfBreed, TIER_LEVEL, isBaseBreed } from './catalog.js';
 
 /** Уровень родства пары (вычисляется по ID предков в game/kinship.ts). */
@@ -47,6 +48,8 @@ export interface BreedSide {
   breed: string;
   /** Породы всех предков в дереве pedigree (без самого кота). */
   ancestorBreeds: ReadonlySet<string>;
+  /** Все признаки, что несёт кот: визитка его породы ∪ визитки пород-предков. */
+  traits: ReadonlySet<TraitId>;
   /** Родословная известна и в ней нет дворовых/домашних (T1) — «чистая линия». */
   pureLine: boolean;
   /** Фенотип для цвет/паттерн-условий. */
@@ -75,6 +78,10 @@ export interface Recipe {
   a: SideSpec;
   b: SideSpec;
   sexLinked?: boolean;
+  /** Признак (скрытый ген) несёт хотя бы ОДИН родитель — своей породой или предком. */
+  traitAny?: TraitId;
+  /** Признак несёт КАЖДЫЙ родитель (глубокий крафт). */
+  traitBoth?: TraitId;
   /** Предок из списка есть хотя бы у ОДНОГО родителя (скрытый ген). */
   ancestorAny?: readonly string[];
   /** Предок из списка есть у КАЖДОГО родителя (глубокий крафт). */
@@ -116,11 +123,11 @@ export const RECIPES: readonly Recipe[] = [
     ancestorAny: ['british_shorthair'],
     note: 'Рецепт родословной: массивный «британский» предок в древе одного из родителей.' },
   { result: 'siamese', a: ALLEY, b: ALLEY, chance: 0.35,
-    ancestorAny: SIAM,
+    traitAny: 'colorpoint',
     note: 'Скрытый ген окраса «Сиам» в родословной — тёмные лапки и маска проявляются сами.' },
   { result: 'persian', a: 'domestic_longhair', b: 'domestic_longhair', chance: 0.35,
-    ancestorAny: ['persian', 'himalayan'],
-    note: 'Пушистая пара + персидский предок в древе: длинная шерсть и приплюснутая морда.' },
+    traitAny: 'flat_face',
+    note: 'Пушистая пара + приплюснутомордый предок в древе: длинная шерсть и брахи-морда.' },
   { result: 'scottish_fold', a: 'british_shorthair', b: ALLEY, chance: 0.30, sexLinked: true,
     note: 'Сцеплено с полом: ген вислоухости передаёт МАТЬ-британка (отец — дворовый).' },
   { result: 'thai', a: 'siamese', b: ALLEY, chance: 0.50,
@@ -138,7 +145,7 @@ export const RECIPES: readonly Recipe[] = [
   { result: 'exotic_shorthair', a: 'persian', b: 'british_shorthair', chance: 0.90,
     note: 'Плюшевый перс с короткой шерстью: почти гарантированный прямой рецепт.' },
   { result: 'abyssinian', a: SIAM, b: ALLEY, chance: 0.30,
-    ancestorAny: ['abyssinian', 'somali'],
+    traitAny: 'ticked',
     note: 'Скрытый ген «тикинг» в родословной: дикий заячий окрас без полос.' },
   { result: 'birman', a: 'persian', b: 'siamese', chance: 0.25,
     note: 'Священная бирма: длинная шерсть + сиамский окрас + белые «носочки».' },
@@ -149,25 +156,26 @@ export const RECIPES: readonly Recipe[] = [
   { result: 'norwegian_forest', a: 'siberian', b: 'maine_coon', chance: 0.25, kinshipBoost: true,
     note: 'Лесная кошка фьордов. Умеренный инбридинг закрепляет тип.' },
   { result: 'ragdoll', a: 'persian', b: 'birman', chance: 0.25,
-    note: 'Тряпичная кукла: крупный, пушистый, обмякает на руках.' },
+    traitAny: 'big',
+    note: 'Тряпичная кукла: пушистая пара + крупный предок в древе даёт рослый мягкий тип.' },
   { result: 'bengal', a: 'abyssinian', b: ALLEY, chance: 0.20,
-    ancestorBoth: ['bengal', 'ocicat', 'egyptian_mau'],
+    traitBoth: 'spotted',
     note: 'Рецепт родословной: «леопардовый» предок у ОБОИХ родителей — дикие пятна.' },
   { result: 'donskoy', a: ALLEY, b: ALLEY, chance: 0.25,
-    ancestorBoth: ['donskoy', 'sphynx', 'peterbald'],
+    traitBoth: 'hairless',
     note: 'Рецепт родословной: скрытый ген лысости у обеих линий — доминантная мутация.' },
   { result: 'sphynx', a: 'donskoy', b: SIAM, chance: 0.40, minKinship: 'high',
     note: 'Рецессивная лысость: без близкородственного скрещивания (высокое+) не проявится.' },
   { result: 'cornish_rex', a: 'abyssinian', b: 'siamese', chance: 0.25,
-    ancestorAny: ['cornish_rex', 'devon_rex', 'laperm', 'selkirk_rex'],
+    traitAny: 'curly',
     note: 'Скрытая мутация каракулевой шерсти в родословной.' },
   { result: 'devon_rex', a: 'cornish_rex', b: 'sphynx', chance: 0.30,
     note: 'Кот-эльф: кудрявая шерсть + огромные уши.' },
   { result: 'munchkin', a: 'american_shorthair', b: ALLEY, chance: 0.25,
-    ancestorAny: ['munchkin', 'bambino', 'kinkalow', 'skookum', 'minskin', 'dwelf'],
+    traitAny: 'short_legs',
     note: 'Скрытый ген коротких лап в родословной — кошачья «такса».' },
   { result: 'kurilian_bobtail', a: 'siberian', b: ALLEY, chance: 0.25,
-    ancestorAny: ['kurilian_bobtail', 'japanese_bobtail', 'manx', 'pixiebob'],
+    traitAny: 'short_tail',
     note: 'Скрытый ген короткого хвоста-помпона в родословной.' },
   { result: 'japanese_bobtail', a: SIAM, b: 'kurilian_bobtail', chance: 0.35,
     note: 'Грациозный короткохвостый кот: восточная линия + бобтейл.' },
@@ -178,7 +186,7 @@ export const RECIPES: readonly Recipe[] = [
   { result: 'somali', a: 'abyssinian', b: 'turkish_angora', chance: 0.30,
     note: 'Пушистая абиссинская: тикинг + длинная шерсть.' },
   { result: 'ocicat', a: 'abyssinian', b: SIAM, chance: 0.25,
-    ancestorAny: ['ocicat', 'egyptian_mau', 'bengal'],
+    traitAny: 'spotted',
     note: 'Рецепт родословной: пятнистый предок — дикий окрас без дикой крови.' },
   { result: 'chartreux', a: 'british_shorthair', b: 'russian_blue', chance: 0.35, minKinship: 'high',
     note: 'Старинная французская линия: замкнутое (родственное) разведение голубых кошек.' },
@@ -205,7 +213,7 @@ export const RECIPES: readonly Recipe[] = [
   { result: 'skookum', a: 'munchkin', b: 'cornish_rex', chance: 0.25,
     note: 'Кудрявый коротколапый кот.' },
   { result: 'minskin', a: 'bambino', b: 'devon_rex', chance: 0.20,
-    ancestorBoth: ['sphynx', 'donskoy'],
+    traitBoth: 'hairless',
     note: 'Рецепт родословной: лысость с обеих сторон — шерсть остаётся только на лапках.' },
   { result: 'lykoi', a: 'donskoy', b: 'domestic_shorthair', chance: 0.20, minKinship: 'critical',
     note: 'Кот-оборотень: ген просыпается ТОЛЬКО при критическом инбридинге.' },
@@ -218,7 +226,8 @@ export const RECIPES: readonly Recipe[] = [
   { result: 'singapura', a: 'burmese', b: 'abyssinian', chance: 0.20,
     note: 'Самая маленькая породистая кошка в мире.' },
   { result: 'selkirk_rex', a: 'persian', b: 'cornish_rex', chance: 0.25,
-    note: 'Плюшевый кудрявый медвежонок.' },
+    traitBoth: 'curly',
+    note: 'Плюшевый кудрявый медвежонок: кудрявость нужна с обеих сторон (перс должен нести ген).' },
   { result: 'pixiebob', a: 'kurilian_bobtail', b: 'maine_coon', chance: 0.15,
     note: 'Домашняя рысь: короткий хвост + крупный костяк.' },
   { result: 'toyger', a: 'bengal', b: 'american_shorthair', chance: 0.15, tabbyBoth: true,
@@ -283,9 +292,10 @@ export function recipeKey(r: Recipe): string {
   return `${r.result}|${side(r.a)}|${side(r.b)}`;
 }
 
-/** Родословный ли рецепт (проверяет предков) — такие усиливает инбридинг. */
+/** Родословный ли рецепт (читает предков/скрытые признаки) — такие усиливает инбридинг. */
 export function isPedigreeRecipe(r: Recipe): boolean {
-  return !!(r.ancestorAny || r.ancestorBoth || r.ancestorTotal || r.distinctTiers || r.pureLine);
+  return !!(r.traitAny || r.traitBoth
+    || r.ancestorAny || r.ancestorBoth || r.ancestorTotal || r.distinctTiers || r.pureLine);
 }
 
 function sideIs(breed: string, spec: SideSpec): boolean {
@@ -303,6 +313,8 @@ export function pairMatches(r: Recipe, mother: string, father: string): boolean 
 export function recipeMatches(r: Recipe, ctx: BreedingContext): boolean {
   if (!pairMatches(r, ctx.mother.breed, ctx.father.breed)) return false;
   const sides = [ctx.mother, ctx.father];
+  if (r.traitAny && !sides.some((s) => s.traits.has(r.traitAny!))) return false;
+  if (r.traitBoth && !sides.every((s) => s.traits.has(r.traitBoth!))) return false;
   if (r.ancestorAny && !sides.some((s) => r.ancestorAny!.some((k) => s.ancestorBreeds.has(k)))) return false;
   if (r.ancestorBoth && !sides.every((s) => r.ancestorBoth!.some((k) => s.ancestorBreeds.has(k)))) return false;
   if (r.ancestorTotal && ctx.ancestorCount(r.ancestorTotal.breed) < r.ancestorTotal.count) return false;

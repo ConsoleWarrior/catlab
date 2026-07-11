@@ -9,7 +9,7 @@ import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
 import { matchesOrder } from './orders.js';
-import { attachHiddenPedigree, buildPedigree, revealPedigree } from './pedigree.js';
+import { attachHiddenPedigree, buildPedigree, revealPedigree, pedigreeHasFog } from './pedigree.js';
 import { buildBreedingContext, rollKittenHearts } from './kinship.js';
 import { researchableRecipes } from './knowledge.js';
 
@@ -227,6 +227,11 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     kitten.motherBreed = mother.breed; // родословная — покажем в карточке кота
     kitten.fatherBreed = father.breed;
     kitten.pedigree = buildPedigree(mother, father, C.PEDIGREE_DEPTH); // дерево до прадедов
+    // Анализ производителей «протекает» в потомка: если оба родителя изучены,
+    // родословная досталась без тумана — котёнок рождается уже изученным. Его
+    // скрытые гены (породы предков) видны сразу, а кнопки анализа нет — вскрывать
+    // нечего. Если у родителей был туман — котёнок наследует его и анализ остаётся.
+    if (!pedigreeHasFog(kitten)) kitten.analyzed = true;
     // Цена инбридинга: котёнок может родиться с урезанным запасом сердец (0 —
     // «Бесплодный», тупик). «Генетические маркеры» снижают риск, «Витамины роста»
     // дают +1 ❤ (но бесплодных 0 ❤ не спасают — честный тупик).
@@ -472,12 +477,16 @@ export function renameCat(state: GameState, catId: string, name: string): Result
 /**
  * Заморозить кота в криокапсулу: он уходит из `state.cats` в `state.cryo` как есть
  * (сердца/вязки/родословная сохраняются). В капсуле не ест, не приносит доход и
- * недоступен для вязки — витрина коллекции без живого кота на сцене. Бесплатно.
+ * недоступен для вязки — витрина коллекции без живого кота на сцене.
+ * Оплата (по образцу клиники/анализа): '📺 ad' — бесплатно с глобальным кулдауном
+ * (заглушка рекламы), '💰 coins' (FREEZE_COIN_COST) или '💎 crystals' (FREEZE_CRYSTAL_COST).
  * Ограничения: крио-банк открыт (узел «Криогенетика»), кот взрослый, не в слоте
  * вязки, не чемпион (сначала снять с пьедестала), есть свободная капсула.
  * РАЗМОРОЗКИ НЕТ (решение дизайна) — освободить капсулу можно только утилизацией.
  */
-export function freezeCat(state: GameState, catId: string, now: number): Result {
+export function freezeCat(
+  state: GameState, catId: string, mode: 'ad' | 'coins' | 'crystals' = 'ad', now = 0,
+): Result<{ coins: number; crystals: number }> {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (!E.cryoUnlocked(state)) return { ok: false, reason: 'locked' };
@@ -485,10 +494,25 @@ export function freezeCat(state: GameState, catId: string, now: number): Result 
   if (E.isInSlot(state, catId)) return { ok: false, reason: 'кот в слоте вязки' };
   if (E.isChampion(state, catId)) return { ok: false, reason: 'сначала снять с пьедестала' };
   if (E.cryoCount(state) >= E.cryoCapacity(state)) return { ok: false, reason: 'нет свободной капсулы' };
+  // Оплата — только после того, как заморозка гарантированно пройдёт (ничего не спишем впустую).
+  let coins = 0, crystals = 0;
+  if (mode === 'ad') {
+    // lastFreezeAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
+    if (state.lastFreezeAdAt > 0 && now - state.lastFreezeAdAt < C.FREEZE_AD_COOLDOWN_MS) {
+      return { ok: false, reason: 'реклама заморозки ещё недоступна' };
+    }
+    state.lastFreezeAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
+  } else if (mode === 'coins') {
+    if (!spend(state, 'coins', C.FREEZE_COIN_COST)) return { ok: false, reason: 'не хватает монет' };
+    coins = C.FREEZE_COIN_COST;
+  } else {
+    if (!spend(state, 'crystals', C.FREEZE_CRYSTAL_COST)) return { ok: false, reason: 'не хватает кристаллов' };
+    crystals = C.FREEZE_CRYSTAL_COST;
+  }
   removeCat(state, catId);   // убрать из cats (с выставки уже сняли бы — чемпиону отказали)
   if (!state.cryo) state.cryo = [];
   state.cryo.push(cat);
-  return { ok: true };
+  return { ok: true, coins, crystals };
 }
 
 /**
@@ -586,7 +610,8 @@ export function unlockGene(state: GameState, geneId: string): Result {
 export function analyzeCat(
   state: GameState, catId: string, mode: 'coins' | 'ad' = 'coins', now = 0,
 ): Result<{ coins: number }> {
-  const cat = findCat(state, catId);
+  // Анализ доступен и замороженным котам (крио-банк) — родословную вскрывают и в капсуле.
+  const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (cat.analyzed) { revealPedigree(cat); return { ok: true, coins: 0 }; } // уже изучен
   if (mode === 'ad') {
