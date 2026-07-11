@@ -89,6 +89,39 @@ describe('крио-банк: клонирование', () => {
     expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
   });
 
+  it('клон изучен сразу (analyzed) и наследует вариант внешности оригинала', () => {
+    const { s, cat } = setup(20);
+    cat.analyzed = false;                 // оригинал даже не изучен
+    freezeCat(s, cat.id, 0);
+    const r = cloneCat(s, cat.id, 0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.clone.analyzed).toBe(true);          // клонирование = полное секвенирование
+    expect(r.clone.artId).toBe(cat.id);           // тот же базовый арт, что у оригинала
+  });
+
+  it('родословная клона = точная копия родословной оригинала (не «потомок»)', () => {
+    const { s, cat } = setup(21);
+    // задаём оригиналу известную родословную (родители + деды-заглушки)
+    cat.pedigree = {
+      mother: { id: 'a_m', breed: 'siamese', mother: { id: 'a_mm', breed: 'persian' }, father: { id: 'a_mf', breed: 'bengal' } },
+      father: { id: 'a_f', breed: 'persian', mother: { id: 'a_fm', breed: 'moggie' }, father: { id: 'a_ff', breed: 'siamese' } },
+    };
+    freezeCat(s, cat.id, 0);
+    const r = cloneCat(s, cat.id, 0);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // те же предки (id/породы); клон analyzed → его дерево вскрыто (known: true на узлах)
+    const ids = (a?: { id: string; mother?: unknown; father?: unknown }): unknown =>
+      a && { id: a.id, mother: ids(a.mother as never), father: ids(a.father as never) };
+    expect(ids(r.clone.pedigree!.mother)).toEqual(ids(cat.pedigree.mother));
+    expect(ids(r.clone.pedigree!.father)).toEqual(ids(cat.pedigree.father));
+    expect(r.clone.pedigree).not.toBe(cat.pedigree);          // глубокая копия, не общая ссылка
+    expect(r.clone.pedigree!.mother!.known).toBe(true);       // секвенирование = без тумана
+    expect(cat.pedigree.mother!.known).toBeUndefined();       // оригинал в капсуле НЕ вскрыт
+    expect(r.clone.pedigree!.mother!.id).toBe('a_m');         // оригинал НЕ вставлен как родитель
+  });
+
   it('цена = CLONE_LAB_MULT × выход лаборатории того же кота; списывает ДНК', () => {
     const { s, cat } = setup(8);
     freezeCat(s, cat.id, 0);

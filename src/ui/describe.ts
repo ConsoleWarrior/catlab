@@ -4,7 +4,9 @@
  */
 
 import { breedName } from '../genetics/index.js';
+import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, OrderReq } from '../game/index.js';
+import { KINSHIP_RU } from '../game/index.js';
 import { TIER_RU } from './theme.js';
 
 const PATTERN_RU: Record<string, string> = {
@@ -33,6 +35,42 @@ export function catTraits(cat: Cat): string[] {
     lines.push(`родители: ${breedName(cat.motherBreed)} ♀ × ${breedName(cat.fatherBreed)} ♂`);
   }
   return lines;
+}
+
+/** Вероятность для UI: «35%», совсем мелкие шансы — «<1%». */
+export function pct(p: number): string {
+  if (p <= 0) return '0%';
+  if (p < 0.01) return '<1%';
+  return `${Math.round(p * 100)}%`;
+}
+
+/** Сторона рецепта: одна порода или «А / Б» (любая из списка). */
+function sideRu(s: SideSpec): string {
+  return typeof s === 'string' ? breedName(s) : s.map(breedName).join(' / ');
+}
+
+/**
+ * RU-описание рецепта для Котодекса-рецептурника: строка пары + список доп. условий.
+ * Базовый шанс подписывает вызывающая сторона (breedCard/превью) — здесь только условия.
+ */
+export function describeRecipe(r: Recipe): { pair: string; conds: string[] } {
+  const pair = r.sexLinked
+    ? `♀ ${sideRu(r.a)} × ♂ ${sideRu(r.b)}`
+    : `${sideRu(r.a)} × ${sideRu(r.b)}`;
+  const conds: string[] = [];
+  if (r.sexLinked) conds.push('строго по полу: мать и отец — как указано');
+  if (r.ancestorAny) conds.push(`скрытый ген: предок ${r.ancestorAny.map(breedName).join(' / ')} хотя бы у одного`);
+  if (r.ancestorBoth) conds.push(`скрытый ген у ОБОИХ: предок ${r.ancestorBoth.map(breedName).join(' / ')}`);
+  if (r.ancestorTotal) conds.push(`суммарно ≥${r.ancestorTotal.count} предков «${breedName(r.ancestorTotal.breed)}» у пары`);
+  if (r.distinctTiers) {
+    conds.push(`≥${r.distinctTiers.count} разных пород (${r.distinctTiers.tiers.map((t) => TIER_RU[t]).join(' / ')}) среди пары и предков`);
+  }
+  if (r.pureLine) conds.push('обе родословные чистые — без дворовых кровей');
+  if (r.colorBoth) conds.push(`окрас обоих родителей: ${colorRu(r.colorBoth)}`);
+  if (r.tabbyBoth) conds.push('оба родителя с рисунком табби');
+  if (r.minKinship) conds.push(`нужно родство пары: ${KINSHIP_RU[r.minKinship]} и выше`);
+  else if (r.kinshipBoost) conds.push('инбридинг повышает шанс');
+  return { pair, conds };
 }
 
 /** Требования заказа одной строкой. */

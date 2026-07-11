@@ -1,8 +1,13 @@
 /**
  * Комната «Генолаб» — хаб для 🧬 ДНК. Разбита на под-секции (табы):
- *   📖 Котодекс    — альбом всех пород по тирам (силуэт, пока не выведена);
- *   🔬 Исследования — дерево постоянных бонусов за 🧬 (4 ветки: Селекция, Обучение,
- *                     Пристройство, Хозяйство); открывается уровнем лаборатории.
+ *   📖 Котодекс     — рецептурник: альбом пород по тирам (цветная — выведена,
+ *                     чёрный силуэт — рецепт открыт исследованием, «?» — туман);
+ *                     тап по изученной породе открывает карточку с рецептами;
+ *   🔬 Улучшения    — дерево постоянных бонусов (4 ветки: Селекция, Обучение,
+ *                     Пристройство, Хозяйство); открывается уровнем лаборатории;
+ *                     (бывш. «Исследования» — внутренний id research не меняем);
+ *   🧪 Исследования — стол исследования рецептов: за 💰+🧬 таймер открывает
+ *                     случайный рецепт из достижимого пула (система знаний).
  *
  * Крио-банк вынесен в ОТДЕЛЬНУЮ комнату (5-я в разрезе, см. rooms/cryobank.ts) —
  * появляется после покупки узла Селекции «❄️ Криогенетика».
@@ -11,11 +16,15 @@
 
 import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { FederatedWheelEvent } from 'pixi.js';
-import { BREEDS, BREEDS_BY_TIER, breedName } from '../../genetics/index.js';
+import { BREEDS, BREEDS_BY_TIER, breedName, tierOfBreed, RECIPES, recipeKey } from '../../genetics/index.js';
 import type { RarityTier } from '../../genetics/index.js';
 import {
   RESEARCH, unlockResearch, isUnlocked, unlockLevelOf,
   researchLevel, researchOwned, researchMaxed, researchNext,
+  breedDiscovered, breedStudied, researchableRecipes,
+  startRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
+  RECIPE_RESEARCH_MS, RECIPE_RESEARCH_COST_COINS, RECIPE_RESEARCH_COST_DNA,
+  speedUpCost, AD_SKIP_MS,
 } from '../../game/index.js';
 import type { ResearchDef } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
@@ -23,14 +32,14 @@ import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel, TIER_RU, TIER_COLOR, TIERS } from '../theme.js';
 import { breedThumbTexture } from '../catTextures.js';
 
-type Section = 'codex' | 'research';
+type Section = 'codex' | 'research' | 'recipes';
 
 // Активная секция и позиции скролла переживают пересборку комнаты (ресайз окна
-// пересоздаёт Генолаб целиком): без этого открытые «Исследования» слетали бы
+// пересоздаёт Генолаб целиком): без этого открытые «Улучшения» слетали бы
 // обратно на Котодекс, а прокрутка — в начало, при каждом изменении окна.
 const remembered = {
   section: 'codex' as Section,
-  scroll: { codex: 0, research: 0 } as Record<'codex' | 'research', number>,
+  scroll: { codex: 0, research: 0, recipes: 0 } as Record<Section, number>,
 };
 
 /** Метаданные веток дерева исследований (ряд → заголовок + валюта прокачки). */
@@ -93,7 +102,8 @@ export function createGenolab(ctx: UiContext): Room {
     const c = new Container();
     const defs: { id: Section; text: string }[] = [
       { id: 'codex', text: '📖 Котодекс' },
-      { id: 'research', text: '🔬 Исследования' },
+      { id: 'research', text: '🔬 Улучшения' },
+      { id: 'recipes', text: '🧪 Исследования' },
     ];
     const gap = 8;
     const bw = (shell.contentW - gap * (defs.length - 1)) / defs.length;
@@ -102,7 +112,7 @@ export function createGenolab(ctx: UiContext): Room {
       const b = new Button({
         text: d.text, w: bw, h: 38,
         color: active ? COLORS.primary : COLORS.card,
-        textColor: active ? 0xffffff : COLORS.ink, fontSize: 13,
+        textColor: active ? 0xffffff : COLORS.ink, fontSize: 12.5,
       });
       b.position.set(bw / 2 + i * (bw + gap), 19);
       b.onTap = () => { section = d.id; remembered.section = d.id; refresh(); };
@@ -111,15 +121,17 @@ export function createGenolab(ctx: UiContext): Room {
     return c;
   }
 
-  function discovered(key: string): boolean {
-    return ctx.state.discoveredBreeds.includes(key);
-  }
-
-  /** Клетка Котодекса: портрет породы (если выведена) или силуэт-замок. */
+  /**
+   * Клетка Котодекса-рецептурника, три состояния (система знаний):
+   *   выведена → цветной портрет; известен только рецепт → ЧЁРНЫЙ СИЛУЭТ по
+   *   форме породы; не изучена → «?»-замок. Тап по изученной — карточка породы
+   *   с рецептами (условия + шансы), по неизученной — подсказка-тост.
+   */
   function codexCell(key: string, tier: RarityTier, cx: number, cy: number, size: number): Container {
     const c = new Container();
     c.position.set(cx, cy);
-    const open = discovered(key);
+    const open = breedDiscovered(ctx.state, key);
+    const studied = open || breedStudied(ctx.state, key); // силуэт: рецепт известен, порода не выведена
 
     const bg = new Graphics();
     // фон всегда непрозрачный (под ним — ИИ-арт комнаты): открытая клетка светлая,
@@ -129,18 +141,17 @@ export function createGenolab(ctx: UiContext): Room {
       .stroke({ width: 2, color: TIER_COLOR[tier], alpha: open ? 0.9 : 0.5 });
     c.addChild(bg);
 
-    if (open) {
-      const tex = breedThumbTexture(key);
-      if (tex) {
-        const sp = new Sprite(tex);
-        sp.anchor.set(0.5, 1);
-        sp.scale.set(Math.min((size * 0.92) / tex.height, (size * 1.05) / tex.width));
-        sp.position.set(0, size / 2 - 3);
-        c.addChild(sp);
-      } else {
-        const paw = label('🐾', size * 0.4, COLORS.ink, '700');
-        c.addChild(paw);
-      }
+    const tex = studied ? breedThumbTexture(key) : null;
+    if (tex) {
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 1);
+      sp.scale.set(Math.min((size * 0.92) / tex.height, (size * 1.05) / tex.width));
+      sp.position.set(0, size / 2 - 3);
+      if (!open) sp.tint = 0x241d29; // чёрный силуэт: форма породы без окраса
+      c.addChild(sp);
+    } else if (studied) {
+      const paw = label('🐾', size * 0.4, open ? COLORS.ink : shade(COLORS.ink, 0.4), '700');
+      c.addChild(paw);
     } else {
       const q = label('?', size * 0.42, TIER_COLOR[tier], '800');
       q.alpha = 0.7;
@@ -151,7 +162,8 @@ export function createGenolab(ctx: UiContext): Room {
     c.cursor = 'pointer';
     c.on('pointertap', () => {
       if (suppressTap) return;          // это был скролл/свайп, а не тап
-      ctx.toast(open ? `${breedName(key)} · ${TIER_RU[tier]}` : 'ещё не выведена');
+      if (studied) ctx.openBreedCard(key);
+      else ctx.toast('не изучена: выведи породу или исследуй рецепт 🧪');
     });
     return c;
   }
@@ -159,11 +171,11 @@ export function createGenolab(ctx: UiContext): Room {
   /**
    * 📖 Котодекс: альбом пород по тирам. Клетки крупные и читаемые (особенно на
    * мобиле); каждый тир — подзаголовок + сетка с переносом по строкам, всё лишнее
-   * уходит под вертикальную прокрутку (как в Исследованиях).
+   * уходит под вертикальную прокрутку (как в Улучшениях).
    */
   function renderCodex(): void {
     const top = 46;
-    const haveCount = BREEDS.filter((b) => discovered(b.key)).length;
+    const haveCount = BREEDS.filter((b) => breedDiscovered(ctx.state, b.key)).length;
     const header = pillRow([{ text: `Открыто пород: ${haveCount} / ${BREEDS.length}`, size: 15, color: COLORS.ink, weight: '800' }]);
     header.position.set(2, top + 11);
     shell.body.addChild(header);
@@ -194,7 +206,7 @@ export function createGenolab(ctx: UiContext): Room {
     let y = 4;
     TIERS.forEach((tier) => {
       const list = BREEDS_BY_TIER[tier];
-      const got = list.filter((b) => discovered(b.key)).length;
+      const got = list.filter((b) => breedDiscovered(ctx.state, b.key)).length;
 
       const tierChip = pillRow([
         { text: TIER_RU[tier], size: 14, color: TIER_COLOR[tier], weight: '800' },
@@ -244,7 +256,7 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /**
-   * Карточка узла дерева исследований (многоуровневого). Валюта своя у ветки: 🧬 у
+   * Карточка узла дерева улучшений (многоуровневого). Валюта своя у ветки: 🧬 у
    * Селекции, 💰 у остальных. Состояния: прокачан полностью (зелёная), доступен
    * следующий уровень (подсвечена, рамка валюты), заперт предыдущим узлом или уровнем
    * лаборатории этого уровня (приглушённая, замок). Пипсы показывают прогресс уровней.
@@ -316,7 +328,7 @@ export function createGenolab(ctx: UiContext): Room {
         ctx.toast(total > 1 ? `${def.glyph} ${def.title} · ур. ${lvlNow}/${total} ✅`
           : `${def.glyph} ${def.title} изучено ✅`);
       } else ctx.toast(
-        r.reason === 'locked' ? 'Исследования ещё заперты 🔒'
+        r.reason === 'locked' ? 'Улучшения ещё заперты 🔒'
           : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
             : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason,
       );
@@ -334,7 +346,7 @@ export function createGenolab(ctx: UiContext): Room {
    * соседнюю комнату, а контент не дёргается — либо вниз меню, либо вбок комната.
    */
   function setupScroll(
-    store: Record<'codex' | 'research', number>, key: 'codex' | 'research',
+    store: Record<Section, number>, key: Section,
     viewport: Container, content: Container, viewW: number, viewH: number, contentH: number,
   ): void {
     const maxScroll = Math.max(0, contentH - viewH);
@@ -385,7 +397,7 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /**
-   * 🔬 Исследования: дерево постоянных бонусов — 4 ветки (Селекция за 🧬; Обучение,
+   * 🔬 Улучшения: дерево постоянных бонусов — 4 ветки (Селекция за 🧬; Обучение,
    * Пристройство, Хозяйство за 💰), в каждой цепочка многоуровневых узлов слева
    * направо. Всё дерево открывается уровнем лаборатории (research), а отдельные
    * УРОВНИ узлов гейтятся своим minLevel. Содержимое прокручивается по вертикали.
@@ -395,14 +407,14 @@ export function createGenolab(ctx: UiContext): Room {
     const viewW = shell.contentW;
     const viewH = shell.contentH - viewTop;
 
-    // Гейт: пока уровень лаборатории не открыл исследования — вместо дерева замок.
+    // Гейт: пока уровень лаборатории не открыл улучшения — вместо дерева замок.
     if (!isUnlocked(ctx.state, 'research')) {
       const need = unlockLevelOf('research');
       const p = panel(viewW, Math.max(120, viewH), COLORS.card, 16);
       p.position.set(0, viewTop);
       shell.body.addChild(p);
       const cy = viewTop + viewH / 2;
-      const t = label('🔬 Исследования', 18, COLORS.ink, '800');
+      const t = label('🔬 Улучшения', 18, COLORS.ink, '800');
       t.position.set(viewW / 2, cy - 28);
       const lock = label(`Откроются на уровне ${need} 🔒`, 15, COLORS.warn, '800');
       lock.position.set(viewW / 2, cy + 2);
@@ -461,15 +473,207 @@ export function createGenolab(ctx: UiContext): Room {
     setupScroll(scroll, 'research', viewport, content, viewW, viewH, y);
   }
 
+  // живые ссылки прогресса стола исследований (обновляются в tick, как в инкубаторе)
+  let recipeBar: Graphics | null = null;
+  let recipeTime: Text | null = null;
+  let recipeBarGeom = { x: 0, y: 0, w: 0 };
+
+  function mmss(ms: number): string {
+    const s = Math.max(0, Math.ceil(ms / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  /**
+   * 🧪 Исследования: стол исследования рецептов (система знаний, этап D).
+   * Один слот-таймер за 💰+🧬 выдаёт случайный ещё не открытый рецепт из
+   * ДОСТИЖИМОГО пула (обе родительские породы выведены). Ускорение — 📺/💎.
+   * Завершение ловит game.update (finishRecipeResearch) — тост + силуэт в Котодексе.
+   * Ниже — список рецептов, уже открытых исследованием (тап → карточка породы).
+   */
+  function renderRecipes(): void {
+    const viewTop = 46;
+    const viewW = shell.contentW;
+    const viewH = shell.contentH - viewTop;
+    recipeBar = null;
+    recipeTime = null;
+
+    // Гейт уровнем лаборатории — как у Улучшений.
+    if (!isUnlocked(ctx.state, 'recipeLab')) {
+      const need = unlockLevelOf('recipeLab');
+      const p = panel(viewW, Math.max(120, viewH), COLORS.card, 16);
+      p.position.set(0, viewTop);
+      shell.body.addChild(p);
+      const cy = viewTop + viewH / 2;
+      const t = label('🧪 Исследования', 18, COLORS.ink, '800');
+      t.position.set(viewW / 2, cy - 28);
+      const lock = label(`Откроются на уровне ${need} 🔒`, 15, COLORS.warn, '800');
+      lock.position.set(viewW / 2, cy + 2);
+      const hint = label('Стол исследований открывает рецепты новых пород', 12, COLORS.inkSoft, '600');
+      hint.position.set(viewW / 2, cy + 28);
+      shell.body.addChild(t, lock, hint);
+      return;
+    }
+
+    const rr = ctx.state.recipeResearch;
+    const busy = rr.readyAt > 0;
+    const pool = researchableRecipes(ctx.state);
+
+    // --- карточка стола ---
+    const deskH = 158;
+    const desk = panel(viewW, deskH, COLORS.card, 16);
+    desk.position.set(0, viewTop);
+    shell.body.addChild(desk);
+
+    const title = label('🧪 Стол исследований', 16, COLORS.ink, '800');
+    title.anchor.set(0, 0.5);
+    title.position.set(18, viewTop + 24);
+    shell.body.addChild(title);
+    const sub = label('открывает случайный рецепт из достижимых (обе породы пары уже выведены)', 11.5, COLORS.inkSoft, '600');
+    sub.anchor.set(0, 0.5);
+    sub.position.set(18, viewTop + 44);
+    shell.body.addChild(sub);
+
+    if (busy) {
+      // идёт исследование: прогресс-бар + время + ускорения 📺/💎 (как в слоте вязки)
+      const barW = Math.round(viewW * 0.6);
+      const barX = Math.round((viewW - barW) / 2);
+      const barY = viewTop + 66;
+      const barBg = new Graphics();
+      barBg.roundRect(barX, barY, barW, 12, 6).fill({ color: 0x000000, alpha: 0.08 });
+      recipeBar = new Graphics();
+      recipeTime = label('', 13, COLORS.ink, '700');
+      recipeTime.position.set(viewW / 2, barY + 24);
+      recipeBarGeom = { x: barX, y: barY, w: barW };
+      shell.body.addChild(barBg, recipeBar, recipeTime);
+
+      const remain = Math.max(0, rr.readyAt - ctx.now());
+      const cost = speedUpCost(remain);
+      const skipMin = Math.round(AD_SKIP_MS / 60_000);
+      const bw = Math.min(200, Math.round(viewW * 0.3));
+      const yy = barY + 58;
+      const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw, h: 34, color: COLORS.secondary, fontSize: 13 });
+      adBtn.position.set(viewW / 2 - bw / 2 - 6, yy);
+      adBtn.onTap = () => {
+        const r = adSkipRecipeResearch(ctx.state, ctx.now());
+        if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+      };
+      const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw, h: 34, color: COLORS.primary, fontSize: 13 });
+      crBtn.position.set(viewW / 2 + bw / 2 + 6, yy);
+      crBtn.onTap = () => {
+        const r = speedUpRecipeResearch(ctx.state, ctx.now());
+        if (r.ok) { ctx.commit(); ctx.toast('Исследование завершено! 📜'); } else ctx.toast(r.reason);
+      };
+      shell.body.addChild(adBtn, crBtn);
+    } else if (pool.length === 0) {
+      // пул пуст: исследовать нечего — кнопку прячем (грейс), подсказываем путь
+      const done = label('Все достижимые рецепты изучены ✅', 14, COLORS.good, '800');
+      done.position.set(viewW / 2, viewTop + 84);
+      const hint = label('выведи новые породы — пул исследований пополнится', 12, COLORS.inkSoft, '600');
+      hint.position.set(viewW / 2, viewTop + 108);
+      shell.body.addChild(done, hint);
+    } else {
+      // стол свободен: цена 💰+🧬, длительность и запуск
+      const durText = RECIPE_RESEARCH_MS >= 60_000
+        ? `${Math.round(RECIPE_RESEARCH_MS / 60_000)} мин` : `${Math.round(RECIPE_RESEARCH_MS / 1000)} с`;
+      const afford = ctx.state.coins >= RECIPE_RESEARCH_COST_COINS && ctx.state.dna >= RECIPE_RESEARCH_COST_DNA;
+      const info = label(
+        `в пуле: ${pool.length} · цена 💰 ${RECIPE_RESEARCH_COST_COINS} + 🧬 ${RECIPE_RESEARCH_COST_DNA} · ⏱ ${durText}`,
+        12.5, COLORS.ink, '700',
+      );
+      info.position.set(viewW / 2, viewTop + 76);
+      shell.body.addChild(info);
+
+      const start = new Button({
+        text: 'Исследовать рецепт 🧪', w: Math.min(320, viewW - 48), h: 42,
+        color: afford ? COLORS.dna : COLORS.cardEdge,
+        textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+      });
+      start.enabled = afford;
+      start.position.set(viewW / 2, viewTop + 118);
+      start.onTap = () => {
+        const r = startRecipeResearch(ctx.state, ctx.now());
+        if (r.ok) { ctx.commit(); ctx.toast('Исследование началось 🧪'); }
+        else ctx.toast(r.reason === 'locked' ? 'Стол ещё заперт 🔒' : r.reason);
+      };
+      shell.body.addChild(start);
+    }
+
+    // --- список рецептов, открытых исследованием (📜 силуэты в Котодексе) ---
+    const listTop = viewTop + deskH + 10;
+    const opened = RECIPES.filter((r) => ctx.state.knownRecipes.includes(recipeKey(r)));
+    const head = pillRow([{ text: `Открытые рецепты · ${opened.length}`, size: 13, color: COLORS.ink, weight: '800' }]);
+    head.position.set(2, listTop + 10);
+    shell.body.addChild(head);
+
+    const viewport = new Container();
+    viewport.position.set(0, listTop + 24);
+    const listH = shell.contentH - (listTop + 24);
+    const maskG = new Graphics();
+    maskG.rect(0, 0, viewW, listH).fill(0xffffff);
+    const content = new Container();
+    viewport.addChild(content, maskG);
+    content.mask = maskG;
+    shell.body.addChild(viewport);
+
+    let y = 4;
+    if (opened.length === 0) {
+      const empty = label('пока пусто — исследуй первый рецепт', 12, COLORS.inkSoft, '600');
+      empty.anchor.set(0, 0.5);
+      empty.position.set(6, y + 14);
+      content.addChild(empty);
+      y += 34;
+    }
+    const rowH = 40;
+    for (const r of opened) {
+      const row = new Container();
+      row.addChild(panel(viewW, rowH - 6, COLORS.card, 10));
+      // имя породы — цветом её тира; выведена ли уже — подписью справа
+      const name = label(`📜 ${breedName(r.result)}`, 13.5, TIER_COLOR[tierOfBreed(r.result)], '800');
+      name.anchor.set(0, 0.5);
+      name.position.set(12, (rowH - 6) / 2);
+      row.addChild(name);
+      const st = ctx.state.discoveredBreeds.includes(r.result) ? '✅ выведена' : 'силуэт в Котодексе';
+      const stT = label(st, 11, COLORS.inkSoft, '600');
+      stT.anchor.set(1, 0.5);
+      stT.position.set(viewW - 12, (rowH - 6) / 2);
+      row.addChild(stT);
+      row.eventMode = 'static';
+      row.cursor = 'pointer';
+      row.on('pointertap', () => { if (!suppressTap) ctx.openBreedCard(r.result); });
+      row.position.set(0, y);
+      content.addChild(row);
+      y += rowH;
+    }
+    setupScroll(scroll, 'recipes', viewport, content, viewW, listH, y);
+  }
+
   function refresh(): void {
     shell.body.removeChildren();
+    recipeBar = null;
+    recipeTime = null;
     shell.body.addChild(tabBar());
     if (section === 'codex') renderCodex();
-    else renderResearch();
+    else if (section === 'research') renderResearch();
+    else renderRecipes();
+  }
+
+  /** Живой прогресс стола исследований (бар + счётчик), пока открыта вкладка. */
+  function tick(_dt: number): void {
+    if (!recipeBar || !recipeTime) return;
+    const rr = ctx.state.recipeResearch;
+    if (rr.readyAt === 0) return; // завершение обработает game.update → commit → refresh
+    const now = ctx.now();
+    const total = Math.max(1, rr.readyAt - rr.startedAt);
+    const remain = Math.max(0, rr.readyAt - now);
+    const prog = Math.max(0, Math.min(1, 1 - remain / total));
+    recipeBar.clear();
+    recipeBar.roundRect(recipeBarGeom.x, recipeBarGeom.y, Math.max(2, recipeBarGeom.w * prog), 12, 6)
+      .fill(remain <= 0 ? COLORS.good : COLORS.dna);
+    recipeTime.text = remain <= 0 ? 'Готово! 📜' : mmss(remain);
   }
 
   return {
-    id: 'genolab', title: '🔬 Генолаб', container: shell.container, refresh,
+    id: 'genolab', title: '🔬 Генолаб', container: shell.container, refresh, tick,
     setSection: (id: string) => { section = id as Section; remembered.section = section; refresh(); },
   };
 }

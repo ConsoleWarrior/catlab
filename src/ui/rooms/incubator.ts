@@ -1,7 +1,7 @@
 ﻿/**
  * Комната «Инкубатор»: места вязки (выбор пары → таймер → котёнок).
  * Пара выбирается в Питомнике (ctx.selection). Апгрейды слотов вязки и
- * скорости инкубации переехали в Генолаб → Исследования (4-я ветка).
+ * скорости инкубации переехали в Генолаб → Улучшения (4-я ветка).
  * Справа от названия — чипы усилителей вязки (Генная инженерия): активируешь
  * за 🧬 гены или 💎 кристаллы, заряженный чип «горит» и срабатывает на первой
  * следующей вязке.
@@ -526,18 +526,24 @@ export function createIncubator(ctx: UiContext): Room {
           warn.position.set(w / 2, h - 50 + ctrlShift);
           card.addChild(warn);
         }
+        // «Свести» + 🔮 прогноз пары (превью исходов — breedingOutcomes, система знаний)
+        const rowW = Math.round((w - 24) * 0.85);
+        const pvW = 46;
         const btn = new Button({
           text: 'Свести 🐾',
-          w: Math.round((w - 24) * 0.85), h: 38, color: COLORS.primary,
+          w: rowW - pvW - 8, h: 38, color: COLORS.primary,
           textColor: 0xffffff, fontSize: 15,
         });
-        btn.position.set(w / 2, h - 22 + ctrlShift);
+        btn.position.set(w / 2 - (pvW + 8) / 2, h - 22 + ctrlShift);
         btn.onTap = () => {
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
           if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast('Вязка началась 🐾'); }
           else ctx.toast(r.reason);
         };
-        card.addChild(btn);
+        const pv = new Button({ text: '🔮', w: pvW, h: 38, color: COLORS.secondary, fontSize: 17 });
+        pv.position.set(w / 2 + rowW / 2 - pvW / 2, h - 22 + ctrlShift);
+        pv.onTap = () => ctx.openPairPreview(mother!, father!);
+        card.addChild(btn, pv);
       } else {
         const hint = label('Добавь котов для скрещивания', 13, COLORS.inkSoft, '600');
         hint.position.set(w / 2, h - 22 + ctrlShift);
@@ -572,7 +578,7 @@ export function createIncubator(ctx: UiContext): Room {
   /**
    * Закрытое окно вязки (слот ещё не куплен). Выглядит как притушённая мини-комната
    * с замком. Следующий по очереди слот можно открыть прямо здесь за 💰 (тот же
-   * апгрейд «Слоты вязки», что и в Генолабе → Исследования); более дальний — ждёт,
+   * апгрейд «Слоты вязки», что и в Генолабе → Улучшения); более дальний — ждёт,
    * пока откроют предыдущий.
    */
   function buildLockedSlot(i: number, w: number, h: number): Container {

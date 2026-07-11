@@ -17,8 +17,8 @@ export {
 } from './catalog.js';
 export type { BreedDef, BreedKind, BreedBoosts } from './catalog.js';
 export {
-  RECIPES, recipesFor, isPedigreeRecipe, pairMatches, recipeMatches, recipeChance,
-  resolveBreeding, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
+  RECIPES, recipesFor, recipeKey, isPedigreeRecipe, pairMatches, recipeMatches, recipeChance,
+  resolveBreeding, breedingOutcomes, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
 } from './recipes.js';
-export type { Recipe, SideSpec, BreedSide, BreedingContext, KinshipLevel } from './recipes.js';
+export type { Recipe, SideSpec, BreedSide, BreedingContext, KinshipLevel, BreedingOutcome } from './recipes.js';
 export { breedValueMult, VALUE_MULT_MIN, VALUE_MULT_MAX } from './breedValue.js';

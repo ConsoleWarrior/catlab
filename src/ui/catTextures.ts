@@ -111,9 +111,11 @@ function breedTexFor(cat: Cat): Texture | null {
       ?? breedTex.get(`${breed}__male`)
       ?? null;
   }
-  // базовый кот: вариант по полу, иначе вариант другого пола
-  return pickVariant(baseList(sex), cat.id)
-    ?? pickVariant(baseList(sex === 'female' ? 'male' : 'female'), cat.id);
+  // базовый кот: вариант по полу, иначе вариант другого пола. Сид — artId (клон
+  // наследует его от оригинала, чтобы окрас совпал), иначе собственный id.
+  const seed = cat.artId ?? cat.id;
+  return pickVariant(baseList(sex), seed)
+    ?? pickVariant(baseList(sex === 'female' ? 'male' : 'female'), seed);
 }
 
 /** Сидячий спрайт кота из коллекции (если арт загружен), иначе null → процедурный. */

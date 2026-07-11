@@ -7,7 +7,7 @@ import type { Rng } from '../genetics/index.js';
 import type { GameState } from './types.js';
 import { BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, levelForReputation } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
-import { attachHiddenPedigree } from './pedigree.js';
+import { attachHiddenPedigree, revealPedigree } from './pedigree.js';
 import { refillOrders } from './orders.js';
 
 /** Новое состояние новой игры: стартовая пара котов, 1 слот, базовые гены, заказы. */
@@ -26,6 +26,8 @@ export function createInitialState(rng: Rng, now: number): GameState {
     discoveredBreeds: [],
     boosts: {},
     research: {},
+    knownRecipes: [],
+    recipeResearch: { startedAt: 0, readyAt: 0 },
     cryo: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
@@ -33,6 +35,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     food: FOOD_CAP_BASE, // кормушка стартует полной
     lastSeenAt: now,
     lastHealAdAt: 0,     // 📺-лечение в клинике сразу доступно (без стартового кулдауна)
+    lastAnalyzeAdAt: 0,  // 📺-вариант Генетического анализа сразу доступен
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -84,5 +87,22 @@ export function deserialize(json: string): GameState {
   if (typeof data.food !== 'number') data.food = FOOD_CAP_BASE;
   // Кулдаун 📺-лечения клиники — поле этапа D; 0 = реклама сразу доступна.
   if (typeof data.lastHealAdAt !== 'number') data.lastHealAdAt = 0;
+  // --- Система знаний (поля добавлены позже; мягкие дефолты без бампа версии) ---
+  if (!Array.isArray(data.knownRecipes)) data.knownRecipes = [];
+  if (!data.recipeResearch || typeof data.recipeResearch !== 'object') {
+    data.recipeResearch = { startedAt: 0, readyAt: 0 };
+  }
+  if (typeof data.lastAnalyzeAdAt !== 'number') data.lastAnalyzeAdAt = 0;
+  // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
+  // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;
+  // рождённым в инкубаторе (есть motherBreed/fatherBreed) раскрываем родителей —
+  // они известны по факту вязки. Глубже реконструировать нечестно — пусть туман.
+  for (const cat of [...data.cats, ...(data.cryo ?? [])]) {
+    if (cat.analyzed) revealPedigree(cat);
+    else if (cat.pedigree && (cat.motherBreed || cat.fatherBreed)) {
+      if (cat.pedigree.mother) cat.pedigree.mother.known = true;
+      if (cat.pedigree.father) cat.pedigree.father.known = true;
+    }
+  }
   return data;
 }

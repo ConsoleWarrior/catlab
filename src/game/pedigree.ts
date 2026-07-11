@@ -16,9 +16,10 @@ import { BREEDS_BY_TIER, LEVEL_TIER } from '../genetics/index.js';
 import type { Cat, Ancestor, GameState } from './types.js';
 import { HIDDEN_GENE_TIER_WEIGHTS, PEDIGREE_DEPTH } from './config.js';
 
-/** Усекает поддерево предков глубиной depth (1 — только сам узел). */
+/** Усекает поддерево предков глубиной depth (1 — только сам узел). Флаг тумана копируется. */
 function trimAncestor(a: Ancestor, depth: number): Ancestor {
   const node: Ancestor = { id: a.id, breed: a.breed };
+  if (a.known) node.known = true;
   if (depth > 1) {
     if (a.mother) node.mother = trimAncestor(a.mother, depth - 1);
     if (a.father) node.father = trimAncestor(a.father, depth - 1);
@@ -26,9 +27,14 @@ function trimAncestor(a: Ancestor, depth: number): Ancestor {
   return node;
 }
 
-/** Узел-предок для кота: его id и порода + его родословная (до depth уровней вглубь). */
+/**
+ * Узел-предок для кота: его id и порода + его родословная (до depth уровней вглубь).
+ * Сам родитель котёнку ИЗВЕСТЕН (факт вязки — known: true), а глубже известность —
+ * снимок дерева родителя на момент рождения: анализ производителя «протекает» в
+ * потомков, но сделанный ПОЗЖЕ анализ уже рождённых котят не раскрывает.
+ */
 function ancestorOf(cat: Cat, depth: number): Ancestor {
-  const node: Ancestor = { id: cat.id, breed: cat.breed };
+  const node: Ancestor = { id: cat.id, breed: cat.breed, known: true };
   if (depth > 1) {
     const ped = catAncestors(cat);
     if (ped.mother) node.mother = trimAncestor(ped.mother, depth - 1);
@@ -45,8 +51,9 @@ function ancestorOf(cat: Cat, depth: number): Ancestor {
 export function catAncestors(cat: Cat): { mother?: Ancestor; father?: Ancestor } {
   if (cat.pedigree && (cat.pedigree.mother || cat.pedigree.father)) return cat.pedigree;
   const out: { mother?: Ancestor; father?: Ancestor } = {};
-  if (cat.motherBreed) out.mother = { id: cat.id + '~m', breed: cat.motherBreed };
-  if (cat.fatherBreed) out.father = { id: cat.id + '~f', breed: cat.fatherBreed };
+  // legacy-поля заполнялись только у рождённых в инкубаторе — родители известны по факту вязки
+  if (cat.motherBreed) out.mother = { id: cat.id + '~m', breed: cat.motherBreed, known: true };
+  if (cat.fatherBreed) out.father = { id: cat.id + '~f', breed: cat.fatherBreed, known: true };
   return out;
 }
 
@@ -60,12 +67,59 @@ export function buildPedigree(
   };
 }
 
-/** Сколько поколений предков реально известно (0 — родословной нет, 1 — только родители). */
+/** Сколько поколений предков ЕСТЬ в дереве (0 — родословной нет, 1 — только родители).
+ *  Считает и узлы в тумане — это «глубина данных», не знаний игрока. */
 export function pedigreeDepth(cat: Cat): number {
   const depthOf = (a: Ancestor | undefined): number =>
     a ? 1 + Math.max(depthOf(a.mother), depthOf(a.father)) : 0;
   const ped = catAncestors(cat);
   return Math.max(depthOf(ped.mother), depthOf(ped.father));
+}
+
+// --- Туман родословной (система знаний) ---
+
+/** Раскрыть ВСЁ дерево родословной кота (Генетический анализ). Мутирует cat.pedigree. */
+export function revealPedigree(cat: Cat): void {
+  const walk = (a: Ancestor | undefined): void => {
+    if (!a) return;
+    a.known = true;
+    walk(a.mother);
+    walk(a.father);
+  };
+  if (cat.pedigree) {
+    walk(cat.pedigree.mother);
+    walk(cat.pedigree.father);
+  }
+}
+
+/** Есть ли в родословной узлы в тумане (нечего вскрывать → false; дерева нет → false). */
+export function pedigreeHasFog(cat: Cat): boolean {
+  let fog = false;
+  const walk = (a: Ancestor | undefined): void => {
+    if (!a || fog) return;
+    if (!a.known) { fog = true; return; }
+    walk(a.mother);
+    walk(a.father);
+  };
+  const ped = catAncestors(cat);
+  walk(ped.mother);
+  walk(ped.father);
+  return fog;
+}
+
+/** Породы ИЗВЕСТНЫХ игроку предков («скрытые гены», вскрытые анализом), без дублей. */
+export function knownAncestorBreeds(cat: Cat): string[] {
+  const out = new Set<string>();
+  const walk = (a: Ancestor | undefined): void => {
+    if (!a || !a.known) return; // туман монотонен: под неизвестным узлом известных нет
+    out.add(a.breed);
+    walk(a.mother);
+    walk(a.father);
+  };
+  const ped = catAncestors(cat);
+  walk(ped.mother);
+  walk(ped.father);
+  return [...out];
 }
 
 // --- Скрытая родословная стартовых котов ---

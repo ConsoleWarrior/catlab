@@ -3,7 +3,7 @@
  * Возвращают Container с панелью; центрирование и затемнение — на Game.
  */
 
-import { Container, Graphics, Text } from 'pixi.js';
+import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
   isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
@@ -15,13 +15,16 @@ import {
   sendToLab, labReward,
   healCat, isUnlocked, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   isChampion, cryoUnlocked, freezeCat, cloneCat, disposeCryo, cloneCost,
+  analyzeCat, ANALYZE_COIN_COST, ANALYZE_AD_COOLDOWN_MS, KINSHIP_RU,
+  pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
+  breedDiscovered, knownRecipesFor, outcomeRevealed,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
-import { breedName, tierOfBreed, TIER_LEVEL } from '../genetics/index.js';
+import { breedName, tierOfBreed, TIER_LEVEL, breedingOutcomes } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
-import { describeCat, catTraits, describeReq } from './describe.js';
-import { catSprite } from './catTextures.js';
+import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
+import { catSprite, breedThumbTexture } from './catTextures.js';
 
 /**
  * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
@@ -92,7 +95,8 @@ export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
     '🛡 Усилители. У названия Инкубатора — чипы генной инженерии: активируй за 🧬 гены или 💎 кристаллы. Заряженный усилитель сработает на следующей вязке.',
     '🏆 Питомник. Ценные коты приносят пассивный доход 💰/мин. Тап по коту открывает меню действий.',
     '🏠 Приют. Обычных котиков пристраивай «в добрые руки» — получишь 💰 и 🧬 ДНК.',
-    '🔬 Генолаб. Котодекс — альбом всех пород: собирай редких в коллекцию. Дальше — улучшения за 🧬 ДНК.',
+    '🔬 Генолаб. Котодекс — рецептурник пород: тапни изученную породу и узнай её рецепты. «Улучшения» — постоянные бонусы, «Исследования» — стол, открывающий новые рецепты.',
+    '🧬 Знания. Родословная скрыта туманом «???» — Генетический анализ вскроет предков и скрытые гены. Кнопка 🔮 в инкубаторе покажет шансы пары.',
     '📋 Заказы. Приведи кота нужной породы или редкости → 💰, 💎 и опыт ⭐.',
     '⭐ Опыт и уровень. Опыт дают рождения, продажи по заказам, пристройство и лаборатория. Новый уровень лаборатории открывает слоты вязки, пьедесталы, станции и исследования.',
     '🛒 Нет котиков? В Питомнике купи простого. Если котов нет совсем — первый бесплатно.',
@@ -466,15 +470,16 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
 
 /**
  * Дерево родословной кота: колонки-поколения слева направо
- * (сам кот → родители → деды → прадеды). Рисуется только то, что известно;
- * с каждым поколением вязок дерево заполняется глубже. Если столбцы не влезают —
- * Game автоматически вписывает панель в экран (showOverlay масштабирует).
+ * (сам кот → родители → деды → прадеды). Туман родословной: рисуются только
+ * ИЗВЕСТНЫЕ узлы (known), неизвестный предок — серая ячейка «???» без намёка на
+ * тир, его поддерево не раскрывается. Вскрыть всё — Генетический анализ (кнопка
+ * внизу). Если столбцы не влезают — Game вписывает панель в экран (showOverlay).
  */
-export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void): Container {
+export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void): Container {
   const root = new Container();
 
   const ped = catAncestors(cat);
-  const subject: Ancestor = { id: cat.id, breed: cat.breed, mother: ped.mother, father: ped.father };
+  const subject: Ancestor = { id: cat.id, breed: cat.breed, known: true, mother: ped.mother, father: ped.father };
   const maxDepth = PEDIGREE_DEPTH; // 0=кот, 1=родители, 2=деды, 3=прадеды
 
   // геометрия ячеек/колонок
@@ -492,7 +497,8 @@ export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void)
   const layout = (node: Ancestor, depth: number, isRoot: boolean): number => {
     usedDepth = Math.max(usedDepth, depth);
     const kids: Ancestor[] = [];
-    if (depth < maxDepth) {
+    // в поддерево неизвестного узла не заглядываем — «???» схлопывает ветку
+    if (depth < maxDepth && node.known) {
       if (node.mother) kids.push(node.mother);
       if (node.father) kids.push(node.father);
     }
@@ -512,7 +518,8 @@ export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void)
 
   const W = padX * 2 + (usedDepth + 1) * cellW + usedDepth * colGap;
   const treeBottom = padTop + leafIndex * slotH;
-  const known = pedigreeDepth(cat); // известных поколений предков
+  const known = pedigreeDepth(cat); // поколений предков в данных (включая туман)
+  const fog = pedigreeHasFog(cat);  // есть ли скрытые узлы — предложим анализ
 
   // соединители (рисуем под ячейками)
   const wires = new Graphics();
@@ -522,21 +529,23 @@ export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void)
   }
   wires.stroke({ width: 1.5, color: COLORS.cardEdge, alpha: 0.9 });
 
-  // ячейка-предок: рамка в цвет тира + точка тира + имя породы (с переносом)
+  // ячейка-предок: рамка в цвет тира + точка тира + имя породы (с переносом);
+  // узел в тумане — серый «🔒 ???» БЕЗ цвета тира (не подсказываем редкость)
   const cell = (p: Placed): Container => {
     const c = new Container();
-    const tier = tierOfBreed(p.node.breed);
-    const col = TIER_COLOR[tier];
+    const hidden = !p.isRoot && !p.node.known;
+    const col = hidden ? COLORS.cardEdge : TIER_COLOR[tierOfBreed(p.node.breed)];
     const g = new Graphics();
     g.roundRect(-cellW / 2, -cellH / 2, cellW, cellH, 9)
-      .fill({ color: p.isRoot ? COLORS.card : COLORS.hud })
-      .stroke({ width: p.isRoot ? 3 : 2, color: col, alpha: 0.95 });
+      .fill({ color: p.isRoot ? COLORS.card : COLORS.hud, alpha: hidden ? 0.7 : 1 })
+      .stroke({ width: p.isRoot ? 3 : 2, color: col, alpha: hidden ? 0.8 : 0.95 });
     g.circle(-cellW / 2 + 11, 0, 4).fill({ color: col });
-    const name = p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
+    const name = hidden ? '🔒 ???'
+      : p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
     const t = new Text({
       text: name,
       style: {
-        fontFamily: FONT, fontSize: 11, fontWeight: '700', fill: COLORS.ink,
+        fontFamily: FONT, fontSize: 11, fontWeight: '700', fill: hidden ? COLORS.inkSoft : COLORS.ink,
         wordWrap: true, breakWords: true, wordWrapWidth: cellW - 26, lineHeight: 12, align: 'center',
       },
     });
@@ -561,11 +570,34 @@ export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void)
 
   let y = treeBottom + 8;
   const footer: Container[] = [];
+  const footNote = (text: string, color: number): void => {
+    const t = new Text({
+      text,
+      style: {
+        fontFamily: FONT, fontSize: 11, fontWeight: '600', fill: color,
+        align: 'center', wordWrap: true, wordWrapWidth: W - 28, lineHeight: 15,
+      },
+    });
+    t.anchor.set(0.5, 0);
+    t.position.set(W / 2, y + 2);
+    footer.push(t);
+    y += t.height + 8;
+  };
+
+  if (cat.analyzed) {
+    // анализ сделан: показываем «скрытые гены» — породы предков (материал рецептов)
+    const genes = knownAncestorBreeds(cat);
+    if (genes.length > 0) footNote(`🧬 гены предков: ${genes.map(breedName).join(', ')}`, COLORS.ink);
+  } else if (fog) {
+    footNote('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', COLORS.inkSoft);
+    const anBtn = new Button({ text: '🧬 Анализ', w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
+    anBtn.position.set(W / 2, y + 20);
+    anBtn.onTap = () => ctx.openAnalyzeConfirm(cat);
+    footer.push(anBtn);
+    y += 48;
+  }
   if (known < maxDepth) {
-    const hint = label('родословная пополняется с каждым поколением', 11, COLORS.inkSoft, '600');
-    hint.position.set(W / 2, y + 8);
-    footer.push(hint);
-    y += 22;
+    footNote('родословная пополняется с каждым поколением', COLORS.inkSoft);
   }
 
   const closeBtn = new Button({ text: 'Закрыть', w: 160, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
@@ -577,6 +609,273 @@ export function buildPedigreePanel(_ctx: UiContext, cat: Cat, close: () => void)
   root.addChild(panel(W, H, COLORS.hud, 18), title, ...headers, wires);
   for (const p of placed) root.addChild(cell(p));
   root.addChild(...footer, closeBtn);
+  return root;
+}
+
+/**
+ * Подтверждение Генетического анализа (система знаний, этап B): вскрывает СРАЗУ
+ * всю родословную кота и его скрытые гены (породы предков). Механику не меняет —
+ * скрытые гены работали и до анализа. Оплата 💰 или 📺 (глобальный кулдаун).
+ * После успеха открывает родословную — показать игроку, что он купил.
+ */
+export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+
+  const title = label('🧬 Генетический анализ', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+  const sub = label('вскроет родословную и скрытые гены', 12.5, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 50);
+
+  const sp = catSprite(ctx.app, cat, 84);
+  sp.position.set(W / 2, 158);
+  const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
+  who.position.set(W / 2, 180);
+
+  const note = new Text({
+    text: 'Знание не меняет исход вязок — гены предков работали и в тумане. '
+      + 'Анализ раскрывает их для рецептов и превью пары.',
+    style: {
+      fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
+      align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 16,
+    },
+  });
+  note.anchor.set(0.5, 0);
+  note.position.set(W / 2, 200);
+
+  let y = 200 + note.height + 14;
+  root.addChild(title, sub, sp, who, note);
+
+  const btnW = W - 48;
+  const done = (): void => { ctx.commit(); ctx.toast('Анализ готов 🧬 родословная вскрыта'); close(); ctx.openPedigree(cat); };
+
+  // 💰 основная цена
+  const afford = ctx.state.coins >= ANALYZE_COIN_COST;
+  const coinBtn = new Button({
+    text: `💰 Провести анализ · ${ANALYZE_COIN_COST}`,
+    w: btnW, h: 44, color: afford ? COLORS.primary : COLORS.cardEdge,
+    textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+  });
+  coinBtn.enabled = afford;
+  coinBtn.position.set(W / 2, y + 22);
+  coinBtn.onTap = () => {
+    const r = analyzeCat(ctx.state, cat.id, 'coins', ctx.now());
+    if (!r.ok) { ctx.toast(r.reason); return; }
+    done();
+  };
+  root.addChild(coinBtn);
+  y += 52;
+
+  // 📺 бесплатная альтернатива с глобальным кулдауном (заглушка рекламы)
+  const cdLeft = ctx.state.lastAnalyzeAdAt > 0
+    ? ANALYZE_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastAnalyzeAdAt) : 0;
+  const adReady = cdLeft <= 0;
+  const adBtn = new Button({
+    text: adReady ? '📺 Бесплатно за рекламу' : `📺 через ${Math.ceil(cdLeft / 60_000)} мин`,
+    w: btnW, h: 44, color: adReady ? COLORS.good : COLORS.cardEdge,
+    textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+  });
+  adBtn.enabled = adReady;
+  adBtn.position.set(W / 2, y + 22);
+  adBtn.onTap = () => {
+    const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
+    if (!r.ok) { ctx.toast(r.reason); return; }
+    done();
+  };
+  root.addChild(adBtn);
+  y += 52;
+
+  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 20);
+  closeBtn.onTap = close;
+  root.addChild(closeBtn);
+  y += 50;
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  return root;
+}
+
+/**
+ * Карточка породы из Котодекса-рецептурника: портрет (цветной у выведенной,
+ * чёрный силуэт у известной только рецептом) + рецепты с условиями и шансами.
+ * Открывается тапом по изученной клетке Котодекса.
+ */
+export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => void): Container {
+  const W = 400;
+  const root = new Container();
+  const tier = tierOfBreed(breedKey);
+  const tierCol = TIER_COLOR[tier];
+  const opened = breedDiscovered(ctx.state, breedKey);
+
+  const title = label(stackWords(breedName(breedKey)), 19, tierCol, '800');
+  title.anchor.set(0.5, 0);
+  title.position.set(W / 2, 18);
+  root.addChild(title);
+  let y = 18 + title.height + 8;
+
+  const st = stars(tier, 15);
+  st.position.set(W / 2, y);
+  root.addChild(st);
+  y += 20;
+  const tierT = label(TIER_RU[tier], 12.5, tierCol, '800');
+  tierT.position.set(W / 2, y);
+  root.addChild(tierT);
+  y += 16;
+
+  // портрет породы; не выведена (известен только рецепт) → чёрный силуэт по форме
+  const boxH = 110;
+  const tex = breedThumbTexture(breedKey);
+  if (tex) {
+    const sp = new Sprite(tex);
+    sp.anchor.set(0.5, 1);
+    sp.scale.set(Math.min((boxH * 0.95) / tex.height, (W * 0.5) / tex.width));
+    sp.position.set(W / 2, y + boxH);
+    if (!opened) sp.tint = 0x241d29; // силуэт: форма породы без окраса
+    root.addChild(sp);
+  }
+  y += boxH + 12;
+
+  const status = label(
+    opened ? '✅ порода выведена' : '📜 рецепт изучен — порода ещё не выведена',
+    12.5, opened ? COLORS.good : COLORS.inkSoft, '800',
+  );
+  status.position.set(W / 2, y);
+  root.addChild(status);
+  y += 24;
+
+  // Рецепты породы: у выведенной — все, у силуэта — только открытые исследованием.
+  const recipes = knownRecipesFor(ctx.state, breedKey);
+  const addLine = (text: string, size: number, color: number, weight: '600' | '700' | '800', indent = 24): number => {
+    const t = new Text({
+      text,
+      style: {
+        fontFamily: FONT, fontSize: size, fontWeight: weight, fill: color,
+        wordWrap: true, wordWrapWidth: W - indent - 20, lineHeight: size + 4, align: 'left',
+      },
+    });
+    t.anchor.set(0, 0);
+    t.position.set(indent, y);
+    root.addChild(t);
+    y += t.height + 3;
+    return t.height;
+  };
+
+  if (recipes.length === 0) {
+    addLine(breedKey === 'moggie'
+      ? '🐾 Стартовая порода: дворовых котов покупают в питомнике, рецепт не нужен.'
+      : '🐾 Рецептов у породы нет.', 12.5, COLORS.inkSoft, '600');
+  }
+  recipes.forEach((r, i) => {
+    if (i > 0) {
+      const div = new Graphics();
+      div.moveTo(24, y + 3).lineTo(W - 24, y + 3).stroke({ width: 1, color: COLORS.cardEdge, alpha: 0.8 });
+      root.addChild(div);
+      y += 10;
+    }
+    const { pair, conds } = describeRecipe(r);
+    addLine(`🧪 ${pair}`, 13.5, COLORS.ink, '800');
+    addLine(`базовый шанс: ${pct(r.chance)}`, 12, COLORS.dna, '800');
+    for (const cLine of conds) addLine(`· ${cLine}`, 11.5, COLORS.inkSoft, '700');
+    addLine(r.note, 11, COLORS.inkSoft, '600');
+    y += 4;
+  });
+  y += 6;
+
+  const closeBtn = new Button({ text: 'Закрыть', w: 180, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 20);
+  closeBtn.onTap = close;
+  root.addChild(closeBtn);
+  y += 50;
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  return root;
+}
+
+/**
+ * Превью пары «тир-тизер» (этап E системы знаний): распределение исходов вязки —
+ * последовательные шансы рецептов + фолбэк-наследование (breedingOutcomes, та же
+ * математика, что при рождении). Раскрытый исход показывает породу; нераскрытый —
+ * только «❓ тир — X%»: рецепт надо открыть в Котодексе, а скрытые гены пары
+ * вскрыть анализом. Заряженный Катализатор и бонусы «Селекции» учтены.
+ */
+export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close: () => void): Container {
+  const W = 380;
+  const root = new Container();
+
+  const bctx = buildBreedingContext(mother, father);
+  const lucky = boostCharges(ctx.state, 'luckyUp') > 0;
+  const outcomes = breedingOutcomes(bctx, lucky, breedChanceMult(ctx.state));
+
+  const title = label('🔮 Прогноз пары', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+  root.addChild(title);
+  const who = label(
+    `${mother.name?.trim() || breedName(mother.breed)} ♀ × ${father.name?.trim() || breedName(father.breed)} ♂`,
+    12.5, COLORS.inkSoft, '700',
+  );
+  who.position.set(W / 2, 50);
+  root.addChild(who);
+
+  let y = 68;
+  if (bctx.kinship !== 'none') {
+    const kin = label(`⚠️ родство: ${KINSHIP_RU[bctx.kinship]} — родословные рецепты усилены`, 11.5,
+      bctx.kinship === 'critical' ? COLORS.warn : COLORS.inkSoft, '800');
+    kin.position.set(W / 2, y);
+    root.addChild(kin);
+    y += 20;
+  }
+  if (lucky) {
+    const lk = label('🍀 Катализатор заряжен — шансы учтены (×2)', 11.5, COLORS.good, '800');
+    lk.position.set(W / 2, y);
+    root.addChild(lk);
+    y += 20;
+  }
+  y += 6;
+
+  // строки исходов: 🧪 рецепты (редкие первыми — как бросает игра), затем 🐾 фолбэк
+  for (const o of outcomes) {
+    const revealed = !o.recipe || outcomeRevealed(ctx.state, mother, father, o.recipe);
+    const tierO = tierOfBreed(o.breed);
+    const name = revealed
+      ? `${o.recipe ? '🧪' : '🐾'} ${breedName(o.breed)}`
+      : `🧪 ❓ ${TIER_RU[tierO]}`;
+    const nameT = label(name, 13.5, revealed ? TIER_COLOR[tierO] : COLORS.inkSoft, '800');
+    nameT.anchor.set(0, 0.5);
+    nameT.position.set(28, y + 9);
+    const pctT = label(pct(o.p), 13.5, COLORS.ink, '800');
+    pctT.anchor.set(1, 0.5);
+    pctT.position.set(W - 28, y + 9);
+    root.addChild(nameT, pctT);
+    y += 24;
+  }
+  y += 4;
+
+  const legend = label('🧪 рецепт · 🐾 наследование породы', 11, COLORS.inkSoft, '600');
+  legend.position.set(W / 2, y + 6);
+  root.addChild(legend);
+  y += 20;
+
+  if (!(mother.analyzed && father.analyzed)) {
+    const hint = new Text({
+      text: '🧬 Генетический анализ обоих котов + рецепт в Котодексе раскроют названия «❓» исходов',
+      style: {
+        fontFamily: FONT, fontSize: 11, fontWeight: '600', fill: COLORS.inkSoft,
+        align: 'center', wordWrap: true, wordWrapWidth: W - 40, lineHeight: 15,
+      },
+    });
+    hint.anchor.set(0.5, 0);
+    hint.position.set(W / 2, y + 2);
+    root.addChild(hint);
+    y += hint.height + 10;
+  }
+
+  const closeBtn = new Button({ text: 'Закрыть', w: 180, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 22);
+  closeBtn.onTap = close;
+  root.addChild(closeBtn);
+  y += 52;
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
   return root;
 }
 
@@ -683,9 +982,14 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     });
   });
 
-  // Родословная: дерево предков до прадедов (только если родители известны).
-  if (cat.motherBreed || cat.fatherBreed) {
+  // Родословная: дерево предков до прадедов (есть и у стартовых — скрытая, в тумане).
+  if (cat.motherBreed || cat.fatherBreed || cat.pedigree) {
     addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+  }
+
+  // Генетический анализ (система знаний): вскрыть родословную и скрытые гены.
+  if (!cat.analyzed && pedigreeHasFog(cat)) {
+    addBtn('🧬 Генетический анализ', COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
   }
 
   // Клиника: альтернатива перетаскиванию на станцию-шприц (есть что лечить,

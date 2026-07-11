@@ -9,7 +9,7 @@ import {
   Application, Assets, Container, Graphics, Rectangle, Sprite, Text, BlurFilter,
 } from 'pixi.js';
 import type { Texture, FederatedPointerEvent } from 'pixi.js';
-import { makeRng, randomCat, expressPhenotype, pick, BREEDS } from '../genetics/index.js';
+import { makeRng, randomCat, expressPhenotype, pick, BREEDS, breedName } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { Sex } from '../genetics/index.js';
 import { buildCat } from '../render/catSprite.js';
@@ -19,6 +19,7 @@ import {
   moveCat, clearBreederSlot, keepKittenWithParents,
   nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
+  finishRecipeResearch,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -35,6 +36,7 @@ import { createCryobank } from './rooms/cryobank.js';
 import {
   buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildHealConfirm, buildCryoMenu,
+  buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu,
 } from './overlays.js';
 
@@ -271,8 +273,9 @@ export class Game implements UiContext {
           const base = this.state.cats[0];
           if (!base) return;
           let demoId = 0;
+          // known: true — демо показывает полностью вскрытое дерево (без тумана)
           const A = (breed: string, mother?: Ancestor, father?: Ancestor): Ancestor =>
-            ({ id: 'demo' + demoId++, breed, mother, father });
+            ({ id: 'demo' + demoId++, breed, known: true, mother, father });
           const demo: Cat = {
             ...base, name: undefined, breed: 'moggie', rarityTier: 'common',
             motherBreed: 'abyssinian', fatherBreed: 'manx',
@@ -527,6 +530,21 @@ export class Game implements UiContext {
   openPedigree(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildPedigreePanel(this, cat, close));
+  }
+
+  openAnalyzeConfirm(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildAnalyzeConfirm(this, cat, close));
+  }
+
+  openBreedCard(breedKey: string): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildBreedCard(this, breedKey, close));
+  }
+
+  openPairPreview(mother: Cat, father: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildPairPreview(this, mother, father, close));
   }
 
   openBirthCard(events: BirthEvent[]): void {
@@ -1176,6 +1194,15 @@ export class Game implements UiContext {
         const base = born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾';
         this.toast(rep ? `${base} +${rep} ⭐` : base);
       } else if (dead) this.toast('Котёнок не выжил 😿');
+    }
+
+    // стол исследований (Генолаб → Исследования): таймер дошёл → открываем
+    // случайный рецепт из достижимого пула (в Котодексе появится чёрный силуэт)
+    if (this.state.recipeResearch?.readyAt > 0 && this.now() >= this.state.recipeResearch.readyAt) {
+      const res = finishRecipeResearch(this.state, this.now(), this.rng);
+      this.commit();
+      if (res.recipe) this.toast(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`);
+      else if (res.refunded) this.toast('Исследовать нечего — все рецепты открыты, ресурсы возвращены ↩');
     }
 
     this.updateHud();

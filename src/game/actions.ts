@@ -3,14 +3,15 @@
  * Время передаётся параметром `now` (тестируемо), RNG — параметром. См. GAME.md §10.
  */
 
-import { breed, isLethal, simpleCat, resolveBreeding } from '../genetics/index.js';
-import type { Rng, BreedBoosts, KinshipLevel } from '../genetics/index.js';
+import { breed, isLethal, simpleCat, resolveBreeding, recipeKey } from '../genetics/index.js';
+import type { Rng, BreedBoosts, KinshipLevel, Recipe } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
 import { matchesOrder } from './orders.js';
-import { attachHiddenPedigree, buildPedigree } from './pedigree.js';
+import { attachHiddenPedigree, buildPedigree, revealPedigree } from './pedigree.js';
 import { buildBreedingContext, rollKittenHearts } from './kinship.js';
+import { researchableRecipes } from './knowledge.js';
 
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; reason: string };
 
@@ -492,11 +493,14 @@ export function freezeCat(state: GameState, catId: string, now: number): Result 
 
 /**
  * Клонировать замороженного кота за 🧬 (цена = ×CLONE_LAB_MULT от выхода лаборатории
- * этого экземпляра). Клон = новорождённый котёнок в питомнике: генотип/порода/пол —
- * копия, `maxHearts` наследуется (бесплодный клонируется бесплодным), `breedCount = 0`.
- * Оригинал остаётся в капсуле. Анти-эксплойты: родословная клона = сам оригинал как
- * мать И отец → клон×оригинал даёт критическое родство (готовый kinship), «фабрику
- * чистых пар» не собрать; опыта ⭐ за клона нет (не рождение), порода не переоткрывается.
+ * этого экземпляра). Клон = ТОЧНАЯ копия оригинала: генотип/порода/пол/внешность и
+ * родословная совпадают; сразу `analyzed` (клонирование = полное секвенирование);
+ * `maxHearts` наследуется (бесплодный клонируется бесплодным), `breedCount = 0`.
+ * Появляется маленьким котёнком в питомнике и растёт (как настоящий).
+ * Оригинал остаётся в капсуле. Анти-эксплойты: у клона та же родословная, что у
+ * оригинала → они делят всех предков, поэтому клон×оригинал (и клон×клон) даёт
+ * критическое родство, «фабрику чистых пар» не собрать; опыта ⭐ за клона нет (не
+ * рождение), порода не переоткрывается.
  */
 export function cloneCat(
   state: GameState, cryoId: string, now: number,
@@ -514,9 +518,16 @@ export function cloneCat(
   const clone = E.makeCatInstance(state, genotype, now, 'nursery', original.breed);
   clone.bornAt = now;                    // клон появляется маленьким и растёт (как настоящий)
   clone.maxHearts = original.maxHearts;  // потолок сердец наследуется от оригинала
-  clone.pedigree = buildPedigree(original, original, C.PEDIGREE_DEPTH); // оригинал как оба родителя
-  clone.motherBreed = original.breed;
-  clone.fatherBreed = original.breed;
+  clone.analyzed = true;                 // клонирование = полное секвенирование → геном/родословная уже изучены
+  clone.artId = original.artId ?? original.id; // тот же вариант базового арта, что у оригинала
+  // Родословная — точная копия оригинала (те же предки → идентичный облик и родство).
+  // Fallback для legacy-котов без сохранённого дерева: оригинал как оба родителя.
+  clone.pedigree = original.pedigree
+    ? structuredClone(original.pedigree)
+    : buildPedigree(original, original, C.PEDIGREE_DEPTH);
+  clone.motherBreed = original.motherBreed;
+  clone.fatherBreed = original.fatherBreed;
+  revealPedigree(clone); // analyzed → дерево клона без тумана (даже если оригинал не вскрыт)
   state.cats.push(clone);
   return { ok: true, clone, dna: cost };
 }
@@ -565,12 +576,92 @@ export function unlockGene(state: GameState, geneId: string): Result {
   return { ok: true };
 }
 
-export function analyzeCat(state: GameState, catId: string): Result {
+/**
+ * Генетический анализ кота (система знаний, этап B): вскрывает СРАЗУ всё дерево
+ * родословной (туман) и список скрытых генов — пород предков. Механику НЕ меняет:
+ * скрытые гены влияли на рецепты и до анализа, игрок лишь получает информацию.
+ * Оплата: 💰 (ANALYZE_COIN_COST) или '📺 ad' — бесплатно с глобальным кулдауном
+ * (заглушка рекламы, как adSkipBreeding; реальный SDK — бэклог).
+ */
+export function analyzeCat(
+  state: GameState, catId: string, mode: 'coins' | 'ad' = 'coins', now = 0,
+): Result<{ coins: number }> {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (cat.analyzed) return { ok: true };
-  if (!spend(state, 'dna', C.ANALYZE_DNA_COST)) return { ok: false, reason: 'не хватает ДНК' };
+  if (cat.analyzed) { revealPedigree(cat); return { ok: true, coins: 0 }; } // уже изучен
+  if (mode === 'ad') {
+    // lastAnalyzeAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
+    if (state.lastAnalyzeAdAt > 0 && now - state.lastAnalyzeAdAt < C.ANALYZE_AD_COOLDOWN_MS) {
+      return { ok: false, reason: 'реклама анализа ещё недоступна' };
+    }
+    state.lastAnalyzeAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
+  } else if (!spend(state, 'coins', C.ANALYZE_COIN_COST)) {
+    return { ok: false, reason: 'не хватает монет' };
+  }
   cat.analyzed = true;
+  revealPedigree(cat);
+  return { ok: true, coins: mode === 'coins' ? C.ANALYZE_COIN_COST : 0 };
+}
+
+// --- Исследование рецептов (вкладка «Исследования» Генолаба, этап D) ---
+
+/**
+ * Запустить стол исследований: комбинированная цена 💰 + 🧬, один слот-таймер.
+ * Итог по готовности выдаёт finishRecipeResearch. Запуск невозможен, если пул
+ * достижимых рецептов пуст (UI в этом случае прячет кнопку).
+ */
+export function startRecipeResearch(state: GameState, now: number): Result {
+  if (!E.isUnlocked(state, 'recipeLab')) return { ok: false, reason: 'locked' };
+  if (state.recipeResearch.readyAt > 0) return { ok: false, reason: 'стол занят исследованием' };
+  if (researchableRecipes(state).length === 0) return { ok: false, reason: 'нет доступных рецептов' };
+  if (state.coins < C.RECIPE_RESEARCH_COST_COINS || state.dna < C.RECIPE_RESEARCH_COST_DNA) {
+    return { ok: false, reason: 'не хватает ресурсов' };
+  }
+  state.coins -= C.RECIPE_RESEARCH_COST_COINS;
+  state.dna -= C.RECIPE_RESEARCH_COST_DNA;
+  state.recipeResearch = { startedAt: now, readyAt: now + C.RECIPE_RESEARCH_MS };
+  return { ok: true };
+}
+
+/**
+ * Забрать результат ГОТОВОГО исследования: случайный ещё не открытый рецепт из
+ * достижимого пула → в state.knownRecipes (в Котодексе появится чёрный силуэт).
+ * Таймер не готов → null. Грейс: если пул опустел, пока шло исследование
+ * (например, породу успели вывести), — возвращаем стоимость (refunded: true).
+ */
+export function finishRecipeResearch(
+  state: GameState, now: number, rng: Rng,
+): { recipe: Recipe | null; refunded: boolean } {
+  const rr = state.recipeResearch;
+  if (rr.readyAt === 0 || now < rr.readyAt) return { recipe: null, refunded: false };
+  rr.startedAt = 0;
+  rr.readyAt = 0;
+  const pool = researchableRecipes(state);
+  if (pool.length === 0) {
+    state.coins += C.RECIPE_RESEARCH_COST_COINS;
+    state.dna += C.RECIPE_RESEARCH_COST_DNA;
+    return { recipe: null, refunded: true };
+  }
+  const recipe = pool[Math.floor(rng() * pool.length)]!;
+  state.knownRecipes.push(recipeKey(recipe));
+  return { recipe, refunded: false };
+}
+
+/** Мгновенно завершить исследование рецепта за 💎 (цена ∝ остатку, как у вязки). */
+export function speedUpRecipeResearch(state: GameState, now: number): Result<{ crystals: number }> {
+  const rr = state.recipeResearch;
+  if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
+  const cost = E.speedUpCost(Math.max(0, rr.readyAt - now));
+  if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
+  rr.readyAt = now; // готово немедленно — finishRecipeResearch заберёт рецепт
+  return { ok: true, crystals: cost };
+}
+
+/** Реклама: сократить остаток исследования на AD_SKIP_MS (бесплатно, можно повторять). */
+export function adSkipRecipeResearch(state: GameState, now: number): Result {
+  const rr = state.recipeResearch;
+  if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
+  rr.readyAt = Math.max(now, rr.readyAt - C.AD_SKIP_MS);
   return { ok: true };
 }
 

@@ -273,6 +273,16 @@ export function recipesFor(breed: string): Recipe[] {
   return RECIPES.filter((r) => r.result === breed);
 }
 
+/**
+ * Стабильный ключ рецепта — по нему хранятся открытые исследованием рецепты в
+ * сейве (state.knownRecipes). Формат «result|a|b» НЕ менять и не менять породы
+ * сторон существующих рецептов без миграции — иначе игроки потеряют открытия.
+ */
+export function recipeKey(r: Recipe): string {
+  const side = (s: SideSpec): string => (typeof s === 'string' ? s : s.join('+'));
+  return `${r.result}|${side(r.a)}|${side(r.b)}`;
+}
+
 /** Родословный ли рецепт (проверяет предков) — такие усиливает инбридинг. */
 export function isPedigreeRecipe(r: Recipe): boolean {
   return !!(r.ancestorAny || r.ancestorBoth || r.ancestorTotal || r.distinctTiers || r.pureLine);
@@ -392,6 +402,63 @@ export function resolveBreeding(
       ? ctx.mother.breed
       : ctx.father.breed;
     if (used) used.noDown = true;
+  }
+  return out;
+}
+
+// --- Превью пары (система знаний, «тир-тизер») ---
+
+/** Один исход превью: порода-результат и её вероятность. Без recipe — фолбэк. */
+export interface BreedingOutcome {
+  breed: string;
+  p: number;       // вероятность исхода; сумма по списку = 1
+  recipe?: Recipe; // сработавший рецепт (нет — наследование породы родителя / метис)
+}
+
+/**
+ * Распределение исходов пары — та же математика, что в resolveBreeding, но без
+ * бросков: последовательные шансы рецептов (редкие первыми) + фолбэк-наследование.
+ * Механику НЕ меняет — чистая функция для превью в инкубаторе. `luckyUp` —
+ * заряжен Катализатор (🍀 ×2), `chanceMult` — множитель исследований «Селекции».
+ * Усилители tierUp/noDown в превью не учитываются (гарантии, а не вероятности).
+ */
+export function breedingOutcomes(
+  ctx: BreedingContext, luckyUp = false, chanceMult = 1,
+): BreedingOutcome[] {
+  const matched = RECIPES.filter((r) => recipeMatches(r, ctx))
+    .sort((x, y) => (TIER_LEVEL[tierOfBreed(y.result)] - TIER_LEVEL[tierOfBreed(x.result)])
+      || (x.chance - y.chance));
+
+  const out: BreedingOutcome[] = [];
+  let rest = 1; // масса «ни один из предыдущих рецептов не сработал»
+  for (const r of matched) {
+    const p = recipeChance(r, ctx.kinship, luckyUp, chanceMult);
+    out.push({ breed: r.result, p: rest * p, recipe: r });
+    rest *= 1 - p;
+  }
+
+  // фолбэк — зеркало resolveBreeding; одинаковые породы фолбэка сливаем в одну строку
+  const addFb = (breed: string, p: number): void => {
+    if (p <= 0) return;
+    const prev = out.find((o) => !o.recipe && o.breed === breed);
+    if (prev) prev.p += p;
+    else out.push({ breed, p });
+  };
+  const addMixed = (mass: number): void => {
+    addFb('moggie', mass * 0.5);
+    addFb('domestic_shorthair', mass * 0.3);
+    addFb('domestic_longhair', mass * 0.2);
+  };
+  if (ctx.mother.breed === ctx.father.breed) {
+    if (isBaseBreed(ctx.mother.breed)) addFb(ctx.mother.breed, rest);
+    else {
+      addFb(ctx.mother.breed, rest * FALLBACK_KEEP);
+      addMixed(rest * (1 - FALLBACK_KEEP));
+    }
+  } else {
+    addFb(ctx.mother.breed, rest * FALLBACK_PARENT * 0.5);
+    addFb(ctx.father.breed, rest * FALLBACK_PARENT * 0.5);
+    addMixed(rest * (1 - FALLBACK_PARENT));
   }
   return out;
 }

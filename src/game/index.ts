@@ -3,7 +3,9 @@
 export * from './types.js';
 export {
   SAVE_VERSION, TIER_VALUE, TIER_MARKET_VALUE, UPGRADES, GENES, BASE_GENES, levelForReputation,
-  ANALYZE_DNA_COST, BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
+  ANALYZE_COIN_COST, ANALYZE_AD_COOLDOWN_MS,
+  RECIPE_RESEARCH_MS, RECIPE_RESEARCH_COST_COINS, RECIPE_RESEARCH_COST_DNA,
+  BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
   HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, AD_SKIP_MS,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, nextLevelRep, unlocksAtLevel, LAB_UNLOCKS,
   SLOT_UNLOCK_LEVELS, PEDESTAL_UNLOCK_LEVELS,
@@ -31,7 +33,14 @@ export {
   nextSlotUnlockLevel, nextPedestalUnlockLevel,
 } from './economy.js';
 export { createInitialState, serialize, deserialize } from './state.js';
-export { buildPedigree, catAncestors, pedigreeDepth, attachHiddenPedigree } from './pedigree.js';
+export {
+  buildPedigree, catAncestors, pedigreeDepth, attachHiddenPedigree,
+  revealPedigree, pedigreeHasFog, knownAncestorBreeds,
+} from './pedigree.js';
+export {
+  recipeIsKnown, breedDiscovered, breedStudied, knownRecipesFor,
+  researchableRecipes, outcomeRevealed,
+} from './knowledge.js';
 export {
   relatedness, kinshipLevel, rollKittenHearts, buildBreedingContext,
   ancestorGens, ancestorBreedList, isPureLine, KINSHIP_RU,
@@ -43,5 +52,6 @@ export {
   speedUpBreeding, adSkipBreeding, speedUpGrowth, adSkipGrowth,
   buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
+  startRecipeResearch, finishRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
 } from './actions.js';
 export type { Result, BirthEvent } from './actions.js';
