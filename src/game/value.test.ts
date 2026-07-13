@@ -7,6 +7,7 @@ import {
   startBreeding, collectReady, incubationDuration, speedUpBreeding, speedUpCost,
   adSkipBreeding, speedUpGrowth, adSkipGrowth, growthRemainingMs, isAdult,
   assignBreeder, isInSlot, nurseryCapacity, shelterCapacity, moveCat,
+  adoptAll, sendAllToLab, shelterTotals, catsIn,
 } from './index.js';
 import * as C from './config.js';
 import type { GameState } from './index.js';
@@ -192,6 +193,61 @@ describe('выставка (чемпионы)', () => {
     expect(r.ok).toBe(false);
     expect(isChampion(s, champ.id)).toBe(true); // не «просочился» на пол сверх лимита
     expect(championAt(s, 0)?.id).toBe(champ.id);
+  });
+});
+
+describe('массовые действия приюта', () => {
+  function addShelterCat(s: GameState, breed: string, sex: 'female' | 'male' = 'female') {
+    const c = makeCatInstance(s, makeCat(sex), 0, 'shelter', breed);
+    s.cats.push(c);
+    return c;
+  }
+
+  it('adoptAll раздаёт всех, сумма = shelterTotals (та же цена, что поштучно)', () => {
+    const s = createInitialState(makeRng(20), 0);
+    s.cats = s.cats.filter((c) => c.location !== 'shelter'); // считаем ровно своих
+    addShelterCat(s, 'persian');
+    addShelterCat(s, 'moggie', 'male');
+    const totals = shelterTotals(s);
+    expect(totals.count).toBe(2);
+    const beforeCoins = s.coins, beforeDna = s.dna;
+    const r = adoptAll(s);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.count).toBe(2);
+      expect(r.coins).toBe(totals.adopt.coins);
+      expect(r.dna).toBe(totals.adopt.dna);
+      expect(s.coins).toBe(beforeCoins + r.coins);
+      expect(s.dna).toBe(beforeDna + r.dna);
+    }
+    expect(catsIn(s, 'shelter').length).toBe(0);
+  });
+
+  it('sendAllToLab заперт до открытия лаборатории, при открытой сдаёт всех', () => {
+    const s = createInitialState(makeRng(21), 0);
+    s.cats = s.cats.filter((c) => c.location !== 'shelter');
+    addShelterCat(s, 'persian');
+    addShelterCat(s, 'bengal', 'male');
+    expect(sendAllToLab(s)).toMatchObject({ ok: false, reason: 'locked' }); // ур.0
+    // лаборатория открыта уровнем; опыт держим высоким, чтобы addReputation внутри
+    // цикла не пересчитал уровень вниз и не запер вторую сдачу.
+    s.reputation = 10_000_000; s.level = C.levelForReputation(s.reputation);
+    const totals = shelterTotals(s);
+    const r = sendAllToLab(s);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.count).toBe(2);
+      expect(r.dna).toBe(totals.lab.dna);
+    }
+    expect(catsIn(s, 'shelter').length).toBe(0);
+  });
+
+  it('пустой приют — массовые действия отказывают', () => {
+    const s = createInitialState(makeRng(22), 0);
+    s.cats = s.cats.filter((c) => c.location !== 'shelter');
+    s.level = 10;
+    expect(adoptAll(s).ok).toBe(false);
+    expect(sendAllToLab(s).ok).toBe(false);
   });
 });
 

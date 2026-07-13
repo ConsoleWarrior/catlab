@@ -429,6 +429,25 @@ export function labReward(state: GameState, cat: Cat): { dna: number; coins: num
   };
 }
 
+/**
+ * Сводка для кнопок «…всех» в приюте: число свободных (не занятых вязкой) котов и
+ * суммарная награда за раздать / сдать в лабораторию — та же цена, что поштучно.
+ */
+export function shelterTotals(state: GameState): {
+  count: number;
+  adopt: { coins: number; dna: number };
+  lab: { dna: number; coins: number };
+} {
+  const cats = catsIn(state, 'shelter').filter((c) => !isBusy(state, c.id));
+  const adopt = { coins: 0, dna: 0 };
+  const lab = { dna: 0, coins: 0 };
+  for (const cat of cats) {
+    const a = adoptReward(state, cat); adopt.coins += a.coins; adopt.dna += a.dna;
+    const l = labReward(state, cat); lab.dna += l.dna; lab.coins += l.coins;
+  }
+  return { count: cats.length, adopt, lab };
+}
+
 // --- Крио-банк (криохранилище коллекции) ---
 
 /** Открыт ли крио-банк: куплен ли хотя бы 1-й ранг узла «❄️ Криогенетика». */

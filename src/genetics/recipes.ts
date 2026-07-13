@@ -48,13 +48,10 @@ export interface BreedSide {
   breed: string;
   /** Породы всех предков в дереве pedigree (без самого кота). */
   ancestorBreeds: ReadonlySet<string>;
-  /** Все признаки, что несёт кот: визитка его породы ∪ визитки пород-предков. */
+  /** Наследуемые гены, что несёт кот: визитка его породы ∪ визитки пород-предков. */
   traits: ReadonlySet<TraitId>;
   /** Родословная известна и в ней нет дворовых/домашних (T1) — «чистая линия». */
   pureLine: boolean;
-  /** Фенотип для цвет/паттерн-условий. */
-  baseColor: string;
-  tabby: boolean;
 }
 
 export interface BreedingContext {
@@ -92,10 +89,6 @@ export interface Recipe {
   distinctTiers?: { tiers: readonly RarityTier[]; count: number };
   /** Обе родословные известны и без дворовых кровей. */
   pureLine?: boolean;
-  /** Оба родителя данного базового окраса (фенотип). */
-  colorBoth?: string;
-  /** Оба родителя с рисунком табби (полосатые/пятнистые). */
-  tabbyBoth?: boolean;
   /** Рецепт срабатывает только при родстве этого уровня и выше. */
   minKinship?: KinshipLevel;
   /** Прямой рецепт, который тоже усиливается инбридингом. */
@@ -111,10 +104,10 @@ const SIAM: readonly string[] = ['siamese', 'thai'];
 /** Таблица рецептов всех пород (кроме базового moggie — он старт и «неудача»). */
 export const RECIPES: readonly Recipe[] = [
   // ============ Tier 1 — Обычные ============
-  { result: 'domestic_shorthair', a: 'moggie', b: 'moggie', chance: 0.30,
-    note: 'Отобранные по красоте дворовые коты: скрытый ген «чистота шерсти».' },
-  { result: 'domestic_longhair', a: 'moggie', b: 'moggie', chance: 0.18,
-    note: 'Дворовые с пушистой шерстью: скрытый ген «пушистость».' },
+  { result: 'domestic_shorthair', a: 'moggie', b: 'moggie', chance: 0.55,
+    note: 'Отобранные по красоте дворовые коты: надёжный фундамент селекции.' },
+  { result: 'domestic_longhair', a: 'moggie', b: 'moggie', chance: 0.40,
+    note: 'Дворовые с пушистой шерстью: базовая длинношёрстная линия.' },
 
   // ============ Tier 2 — Популярные ============
   { result: 'european_shorthair', a: 'domestic_shorthair', b: 'domestic_shorthair', chance: 0.40,
@@ -140,8 +133,8 @@ export const RECIPES: readonly Recipe[] = [
     note: 'Крупная лесная кошка. Умеренный инбридинг закрепляет тип (бустит шанс).' },
   { result: 'neva_masquerade', a: 'siberian', b: SIAM, chance: 0.40,
     note: 'Сибирская кошка в сиамском окрасе: прямой рецепт.' },
-  { result: 'american_shorthair', a: ALLEY, b: 'british_shorthair', chance: 0.35, tabbyBoth: true,
-    note: 'Крепкая рабочая кошка: оба родителя должны быть полосатыми (табби).' },
+  { result: 'american_shorthair', a: ALLEY, b: 'british_shorthair', chance: 0.35,
+    note: 'Крепкая рабочая кошка: прямой рецепт из дворовой линии и британца.' },
   { result: 'exotic_shorthair', a: 'persian', b: 'british_shorthair', chance: 0.90,
     note: 'Плюшевый перс с короткой шерстью: почти гарантированный прямой рецепт.' },
   { result: 'abyssinian', a: SIAM, b: ALLEY, chance: 0.30,
@@ -181,8 +174,8 @@ export const RECIPES: readonly Recipe[] = [
     note: 'Грациозный короткохвостый кот: восточная линия + бобтейл.' },
   { result: 'burmese', a: 'siamese', b: 'british_shorthair', chance: 0.30, sexLinked: true,
     note: 'Сцеплено с полом: «кирпич в шёлку» выходит только от МАТЕРИ-сиамки и отца-британца.' },
-  { result: 'bombay', a: 'burmese', b: 'american_shorthair', chance: 0.35, colorBoth: 'black',
-    note: 'Мини-пантера: оба родителя обязаны быть чёрными.' },
+  { result: 'bombay', a: 'burmese', b: 'american_shorthair', chance: 0.35,
+    note: 'Мини-пантера, чёрная как смоль: прямой рецепт бурмы и американской к/ш.' },
   { result: 'somali', a: 'abyssinian', b: 'turkish_angora', chance: 0.30,
     note: 'Пушистая абиссинская: тикинг + длинная шерсть.' },
   { result: 'ocicat', a: 'abyssinian', b: SIAM, chance: 0.25,
@@ -230,8 +223,8 @@ export const RECIPES: readonly Recipe[] = [
     note: 'Плюшевый кудрявый медвежонок: кудрявость нужна с обеих сторон (перс должен нести ген).' },
   { result: 'pixiebob', a: 'kurilian_bobtail', b: 'maine_coon', chance: 0.15,
     note: 'Домашняя рысь: короткий хвост + крупный костяк.' },
-  { result: 'toyger', a: 'bengal', b: 'american_shorthair', chance: 0.15, tabbyBoth: true,
-    note: 'Кот-тигр: оба родителя обязаны быть полосатыми — идеальные полосы.' },
+  { result: 'toyger', a: 'bengal', b: 'american_shorthair', chance: 0.15,
+    note: 'Кот-тигр с идеальными вертикальными полосами: бенгал × американская к/ш.' },
   { result: 'kinkalow', a: 'munchkin', b: 'american_curl', chance: 0.20,
     note: 'Коротколапый кот с ушами-рожками.' },
   { result: 'peterbald', a: 'donskoy', b: 'oriental_shorthair', chance: 0.40,
@@ -320,8 +313,6 @@ export function recipeMatches(r: Recipe, ctx: BreedingContext): boolean {
   if (r.ancestorTotal && ctx.ancestorCount(r.ancestorTotal.breed) < r.ancestorTotal.count) return false;
   if (r.distinctTiers && ctx.distinctOfTiers(r.distinctTiers.tiers) < r.distinctTiers.count) return false;
   if (r.pureLine && !(ctx.mother.pureLine && ctx.father.pureLine)) return false;
-  if (r.colorBoth && !sides.every((s) => s.baseColor === r.colorBoth)) return false;
-  if (r.tabbyBoth && !sides.every((s) => s.tabby)) return false;
   if (r.minKinship && KINSHIP_RANK[ctx.kinship] < KINSHIP_RANK[r.minKinship]) return false;
   return true;
 }

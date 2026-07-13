@@ -35,7 +35,8 @@ import { createGenolab } from './rooms/genolab.js';
 import { createCryobank } from './rooms/cryobank.js';
 import {
   buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
-  buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildHealConfirm, buildCryoMenu,
+  buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
+  buildHealConfirm, buildCryoMenu,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu,
 } from './overlays.js';
@@ -516,6 +517,16 @@ export class Game implements UiContext {
   openLabConfirm(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildLabConfirm(this, cat, close));
+  }
+
+  openBulkAdoptConfirm(): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildBulkAdoptConfirm(this, close));
+  }
+
+  openBulkLabConfirm(): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildBulkLabConfirm(this, close));
   }
 
   openHealConfirm(cat: Cat): void {

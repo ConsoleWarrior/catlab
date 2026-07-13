@@ -295,6 +295,44 @@ export function sendToLab(state: GameState, catId: string): Result<{ dna: number
   return { ok: true, dna, coins, rep };
 }
 
+/** Свободные (не занятые вязкой) коты приюта — цель массовых действий комнаты. */
+function shelterFree(state: GameState): Cat[] {
+  return E.catsIn(state, 'shelter').filter((c) => !E.isBusy(state, c.id));
+}
+
+/**
+ * Раздать «в добрые руки» ВСЕХ котов приюта разом. Награда — сумма поштучных
+ * adoptCat (та же цена, что по одному). Занятые вязкой коты пропускаются.
+ */
+export function adoptAll(state: GameState): Result<{ coins: number; dna: number; rep: number; count: number }> {
+  const cats = shelterFree(state);
+  if (cats.length === 0) return { ok: false, reason: 'В приюте некого раздавать' };
+  let coins = 0, dna = 0, rep = 0, count = 0;
+  for (const cat of cats) {
+    const r = adoptCat(state, cat.id);
+    if (!r.ok) continue;
+    coins += r.coins; dna += r.dna; rep += r.rep; count++;
+  }
+  return { ok: true, coins, dna, rep, count };
+}
+
+/**
+ * Сдать в лабораторию ВСЕХ котов приюта разом за 🧬 (+ немного 💰). Требует открытой
+ * лаборатории (labStation). Занятые вязкой коты пропускаются.
+ */
+export function sendAllToLab(state: GameState): Result<{ dna: number; coins: number; rep: number; count: number }> {
+  if (!E.isUnlocked(state, 'labStation')) return { ok: false, reason: 'locked' };
+  const cats = shelterFree(state);
+  if (cats.length === 0) return { ok: false, reason: 'В приюте некого сдавать' };
+  let dna = 0, coins = 0, rep = 0, count = 0;
+  for (const cat of cats) {
+    const r = sendToLab(state, cat.id);
+    if (!r.ok) continue;
+    dna += r.dna; coins += r.coins; rep += r.rep; count++;
+  }
+  return { ok: true, dna, coins, rep, count };
+}
+
 // --- Выставка (чемпионы) ---
 
 /**

@@ -48,12 +48,12 @@ describe('C: селекция — шанс рецептов', () => {
   });
 
   it('recipeChance ×chanceMult, кап 0.95, Катализатор ×2 без стека с инбридингом', () => {
-    const r = RECIPES.find((x) => x.result === 'domestic_shorthair')!; // 0.30, не родословный
-    expect(recipeChance(r, 'none', false, 1)).toBeCloseTo(0.30);
-    expect(recipeChance(r, 'none', false, 1.15)).toBeCloseTo(0.345);
+    const r = RECIPES.find((x) => x.result === 'domestic_shorthair')!; // 0.55, не родословный
+    expect(recipeChance(r, 'none', false, 1)).toBeCloseTo(0.55);
+    expect(recipeChance(r, 'none', false, 1.15)).toBeCloseTo(0.6325);
     const big = RECIPES.find((x) => x.result === 'exotic_shorthair')!; // 0.90
     expect(recipeChance(big, 'none', false, 1.15)).toBeCloseTo(0.95);   // упёрлись в кап
-    expect(recipeChance(r, 'none', true, 1.15)).toBeCloseTo(0.30 * 2 * 1.15); // прямой рецепт: ×Катализатор
+    expect(recipeChance(r, 'none', true, 1.15)).toBeCloseTo(0.95); // прямой ×Катализатор упёрся в кап
     // родословный рецепт с активным инбридингом: Катализатор НЕ стекается (нет ×2)
     const ped = RECIPES.find((x) => x.result === 'caracat')!; // minKinship critical, база 0.08
     expect(recipeChance(ped, 'critical', false, 1)).toBeCloseTo(0.08 * 2.5); // инбридинг ×2.5 = 0.20

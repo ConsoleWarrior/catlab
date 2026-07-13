@@ -1,35 +1,34 @@
 /**
- * Внешние признаки котов — «человеческий» слой скрытых генов.
+ * Признаки котов — два независимых слоя (см. дизайн-заметку «Система признаков» rev.3).
  *
- * У каждой породы есть ФИКСИРОВАННАЯ визитка (один спрайт на пол/породу = один
- * облик): шерсть, уши, строение, рисунок, окрас, глаза. У кота полный набор
- * признаков = визитка его породы ∪ визитки всех пород-предков в родословной.
- * Проявленные признаки — визитка самой породы (видно сразу); дремлющие —
- * унаследованные от предков, скрыты туманом родословной и вскрываются
- * Генетическим анализом (см. game/pedigree.ts, ui/overlays).
+ *  1. НАСЛЕДУЕМЫЕ ГЕНЫ (строение) — TraitId, 14 штук. Фиксированы за породой,
+ *     одинаковы у кота и кошки. Несутся через родословную (визитка породы ∪ визитки
+ *     пород-предков), дремлют у предков и вскрываются Генетическим анализом.
+ *     ТОЛЬКО их читают рецепты (recipes.ts, traitAny/traitBoth) и показывает анализ.
  *
- * Рецепты (recipes.ts) читают признаки через traitAny/traitBoth: важно, что
- * признак ЕСТЬ у родителя (проявлен или дремлет) и может «выстрелить» у котёнка.
- * На рецепты влияют только НАСЛЕДУЕМЫЕ признаки (inherited: строение + сигнатурные
- * рисунки); окрас/глаза закреплены за породой для облика, но условий рецептов на
- * них нет (цвет самих родителей проверяют отдельные поля colorBoth/tabbyBoth).
+ *  2. ОБЛИК (окрас · рисунок · глаза) — Look, косметика. Ровно по одному значению
+ *     в каждой категории и ЗАДАЁТСЯ ПО ПОЛУ (2 спрайта на породу = кот и кошка).
+ *     В рецептах НЕ участвует; нужен для Котодекса/меню кота. У дворового (moggie)
+ *     визитки нет — облик случаен, потому он и хранит лотерею скрытых генов.
  */
 
+// ============================================================================
+//  Слой 1 — наследуемые гены строения (гейты рецептов)
+// ============================================================================
+
 export type TraitId =
-  // шерсть
-  | 'shorthair' | 'longhair' | 'hairless' | 'curly' | 'wirehair'
+  // длина шерсти (взаимоисключающие)
+  | 'shorthair' | 'longhair' | 'hairless'
+  // текстура
+  | 'curly' | 'wirehair'
   // уши
   | 'folded_ears' | 'curled_ears'
-  // строение
+  // строение (могут стакаться в кроссбридах)
   | 'flat_face' | 'short_tail' | 'short_legs' | 'big'
-  // рисунок
-  | 'colorpoint' | 'ticked' | 'spotted' | 'tiger' | 'marbled'
-  // окрас
-  | 'black' | 'white' | 'blue' | 'chocolate' | 'silver' | 'tortoiseshell'
-  // глаза
-  | 'heterochromia' | 'blue_eyes';
+  // сигнатурный рисунок (наследуемый, определяет породу)
+  | 'colorpoint' | 'ticked' | 'spotted';
 
-export type TraitGroup = 'coat' | 'ears' | 'body' | 'pattern' | 'color' | 'eyes';
+export type TraitGroup = 'length' | 'texture' | 'ears' | 'body' | 'signature';
 
 export interface TraitDef {
   id: TraitId;
@@ -37,77 +36,61 @@ export interface TraitDef {
   label: string;
   emoji: string;
   group: TraitGroup;
-  /**
-   * Наследуется через родословную и может влиять на рецепты (строение + сигнатурные
-   * рисунки: колор-пойнт/тикинг/пятна). Окрас/глаза — только облик (inherited: false).
-   */
-  inherited: boolean;
 }
 
-/** Метаданные всех 24 признаков (порядок = порядок вывода в UI). */
+/** Метаданные всех 14 наследуемых генов (порядок = порядок вывода в UI). */
 export const TRAITS: readonly TraitDef[] = [
-  // --- шерсть ---
-  { id: 'shorthair', label: 'короткая шерсть', emoji: '🐈', group: 'coat', inherited: true },
-  { id: 'longhair', label: 'длинная шерсть', emoji: '🦁', group: 'coat', inherited: true },
-  { id: 'hairless', label: 'бесшёрстность', emoji: '🥚', group: 'coat', inherited: true },
-  { id: 'curly', label: 'кудрявость', emoji: '🌀', group: 'coat', inherited: true },
-  { id: 'wirehair', label: 'жёсткая шерсть', emoji: '🧽', group: 'coat', inherited: true },
+  // --- длина ---
+  { id: 'shorthair', label: 'короткая шерсть', emoji: '🐈', group: 'length' },
+  { id: 'longhair', label: 'длинная шерсть', emoji: '🦁', group: 'length' },
+  { id: 'hairless', label: 'лысый', emoji: '🥚', group: 'length' },
+  // --- текстура ---
+  { id: 'curly', label: 'кудрявая шерсть', emoji: '🌀', group: 'texture' },
+  { id: 'wirehair', label: 'жёсткая шерсть', emoji: '🧽', group: 'texture' },
   // --- уши ---
-  { id: 'folded_ears', label: 'вислоухость', emoji: '📐', group: 'ears', inherited: true },
-  { id: 'curled_ears', label: 'уши-кёрл', emoji: '🌙', group: 'ears', inherited: true },
+  { id: 'folded_ears', label: 'вислоухость', emoji: '📐', group: 'ears' },
+  { id: 'curled_ears', label: 'уши-кёрл', emoji: '🌙', group: 'ears' },
   // --- строение ---
-  { id: 'flat_face', label: 'плоская морда', emoji: '😽', group: 'body', inherited: true },
-  { id: 'short_tail', label: 'короткий хвост', emoji: '🐇', group: 'body', inherited: true },
-  { id: 'short_legs', label: 'короткие лапы', emoji: '🦵', group: 'body', inherited: true },
-  { id: 'big', label: 'крупный', emoji: '🐘', group: 'body', inherited: true },
-  // --- рисунок ---
-  { id: 'colorpoint', label: 'колор-пойнт', emoji: '🎭', group: 'pattern', inherited: true },
-  { id: 'ticked', label: 'тикинг', emoji: '🌾', group: 'pattern', inherited: true },
-  { id: 'spotted', label: 'пятнистость', emoji: '🐆', group: 'pattern', inherited: true },
-  { id: 'tiger', label: 'тигровый рисунок', emoji: '🐅', group: 'pattern', inherited: false },
-  { id: 'marbled', label: 'мраморный рисунок', emoji: '🪵', group: 'pattern', inherited: false },
-  // --- окрас ---
-  { id: 'black', label: 'чёрный окрас', emoji: '⚫', group: 'color', inherited: false },
-  { id: 'white', label: 'белый окрас', emoji: '⚪', group: 'color', inherited: false },
-  { id: 'blue', label: 'голубой окрас', emoji: '🔷', group: 'color', inherited: false },
-  { id: 'chocolate', label: 'шоколадный окрас', emoji: '🍫', group: 'color', inherited: false },
-  { id: 'silver', label: 'серебристый окрас', emoji: '✨', group: 'color', inherited: false },
-  { id: 'tortoiseshell', label: 'черепаховый окрас', emoji: '🐢', group: 'color', inherited: false },
-  // --- глаза ---
-  { id: 'heterochromia', label: 'гетерохромия', emoji: '👁', group: 'eyes', inherited: false },
-  { id: 'blue_eyes', label: 'голубые глаза', emoji: '🔵', group: 'eyes', inherited: false },
+  { id: 'flat_face', label: 'плоская морда', emoji: '😽', group: 'body' },
+  { id: 'short_tail', label: 'короткий хвост', emoji: '🐇', group: 'body' },
+  { id: 'short_legs', label: 'короткие лапы', emoji: '🦵', group: 'body' },
+  { id: 'big', label: 'крупный', emoji: '🐘', group: 'body' },
+  // --- сигнатурный рисунок ---
+  { id: 'colorpoint', label: 'колор-пойнт', emoji: '🎭', group: 'signature' },
+  { id: 'ticked', label: 'тикинг', emoji: '🌾', group: 'signature' },
+  { id: 'spotted', label: 'пятнистость', emoji: '🐆', group: 'signature' },
 ];
 
 export const TRAIT_BY_ID: Record<TraitId, TraitDef> = Object.fromEntries(
   TRAITS.map((t) => [t.id, t]),
 ) as Record<TraitId, TraitDef>;
 
-/** Порядковый индекс признака (для стабильной сортировки списков). */
+/** Порядковый индекс гена (для стабильной сортировки списков). */
 const TRAIT_ORDER: Record<TraitId, number> = Object.fromEntries(
   TRAITS.map((t, i) => [t.id, i]),
 ) as Record<TraitId, number>;
 
 /**
- * Фиксированная визитка каждой породы. Пустой список у «Дворового» (moggie) —
- * его облик случаен, потому он и хранит лотерею скрытых генов в родословной.
- * Ключи совпадают с catalog.ts BREEDS; полнота проверяется тестом.
+ * Наследуемые гены строения каждой породы (одинаковы для обоих полов). Пустой
+ * список у «Дворового» (moggie) — его облик случаен. Ключи совпадают с catalog.ts;
+ * полнота проверяется тестом. Ни один окрас/глаза сюда не входит — это слой 2.
  */
-export const BREED_TRAITS: Record<string, readonly TraitId[]> = {
+export const BREED_GENES: Record<string, readonly TraitId[]> = {
   // --- Tier 1 ---
   moggie: [],
   domestic_shorthair: ['shorthair'],
   domestic_longhair: ['longhair'],
   // --- Tier 2 ---
-  british_shorthair: ['shorthair', 'blue'],
-  scottish_fold: ['folded_ears', 'shorthair'],
+  british_shorthair: ['shorthair', 'flat_face'],
+  scottish_fold: ['folded_ears', 'shorthair', 'flat_face'],
   persian: ['longhair', 'flat_face'],
   siamese: ['shorthair', 'colorpoint'],
   thai: ['shorthair', 'colorpoint'],
-  russian_blue: ['shorthair', 'blue'],
-  turkish_angora: ['longhair', 'white', 'heterochromia'],
+  russian_blue: ['shorthair'],
+  turkish_angora: ['longhair'],
   siberian: ['longhair', 'big'],
   neva_masquerade: ['longhair', 'big', 'colorpoint'],
-  american_shorthair: ['shorthair', 'tiger'],
+  american_shorthair: ['shorthair'],
   exotic_shorthair: ['shorthair', 'flat_face'],
   abyssinian: ['shorthair', 'ticked'],
   birman: ['longhair', 'colorpoint'],
@@ -124,39 +107,39 @@ export const BREED_TRAITS: Record<string, readonly TraitId[]> = {
   munchkin: ['shorthair', 'short_legs'],
   kurilian_bobtail: ['longhair', 'short_tail'],
   japanese_bobtail: ['shorthair', 'short_tail'],
-  burmese: ['shorthair', 'chocolate'],
-  bombay: ['shorthair', 'black'],
+  burmese: ['shorthair', 'flat_face'],
+  bombay: ['shorthair'],
   somali: ['longhair', 'ticked'],
   ocicat: ['shorthair', 'spotted'],
-  chartreux: ['shorthair', 'blue'],
+  chartreux: ['shorthair'],
   oriental_shorthair: ['shorthair'],
   tonkinese: ['shorthair', 'colorpoint'],
   himalayan: ['longhair', 'flat_face', 'colorpoint'],
   manx: ['shorthair', 'short_tail'],
   balinese: ['longhair', 'colorpoint'],
-  turkish_van: ['longhair', 'white', 'heterochromia'],
+  turkish_van: ['longhair'],
   // --- Tier 4 ---
   american_curl: ['curled_ears', 'shorthair'],
   elf: ['hairless', 'curled_ears'],
   bambino: ['hairless', 'short_legs'],
-  skookum: ['curly', 'short_legs'],
+  skookum: ['shorthair', 'curly', 'short_legs'],
   minskin: ['hairless', 'short_legs'],
   lykoi: ['hairless'],
-  chausie: ['shorthair', 'big'],
-  khao_manee: ['shorthair', 'white', 'heterochromia'],
+  chausie: ['shorthair', 'ticked', 'big'],
+  khao_manee: ['shorthair'],
   singapura: ['shorthair', 'ticked'],
   selkirk_rex: ['longhair', 'curly'],
   pixiebob: ['shorthair', 'spotted', 'short_tail', 'big'],
-  toyger: ['shorthair', 'tiger'],
-  kinkalow: ['curled_ears', 'short_legs'],
+  toyger: ['shorthair'],
+  kinkalow: ['shorthair', 'curled_ears', 'short_legs'],
   peterbald: ['hairless'],
   egyptian_mau: ['shorthair', 'spotted'],
-  laperm: ['curly'],
+  laperm: ['longhair', 'curly'],
   american_wirehair: ['shorthair', 'wirehair'],
-  sokoke: ['shorthair', 'marbled'],
-  burmilla: ['shorthair', 'silver'],
-  havana: ['shorthair', 'chocolate'],
-  ojos_azules: ['shorthair', 'blue_eyes'],
+  sokoke: ['shorthair'],
+  burmilla: ['shorthair'],
+  havana: ['shorthair'],
+  ojos_azules: ['shorthair'],
   // --- Tier 5 ---
   savannah: ['shorthair', 'spotted', 'big'],
   caracat: ['shorthair', 'big'],
@@ -166,23 +149,23 @@ export const BREED_TRAITS: Record<string, readonly TraitId[]> = {
   cheetoh: ['shorthair', 'spotted'],
   safari: ['shorthair', 'spotted', 'big'],
   california_spangled: ['shorthair', 'spotted'],
-  khao_manee_diamond: ['shorthair', 'white', 'blue_eyes'],
+  khao_manee_diamond: ['shorthair'],
   lykoi_elf: ['hairless', 'curled_ears'],
 };
 
-/** Визитка породы (пустой список у дворового и незнакомых ключей). */
+/** Наследуемые гены породы (пустой список у дворового и незнакомых ключей). */
 export function breedTraits(breed: string): readonly TraitId[] {
-  return BREED_TRAITS[breed] ?? [];
+  return BREED_GENES[breed] ?? [];
 }
 
-/** Отсортировать признаки в каноническом порядке (шерсть → … → глаза). */
+/** Отсортировать гены в каноническом порядке (длина → … → рисунок). */
 export function sortTraits(ids: Iterable<TraitId>): TraitId[] {
   return [...new Set(ids)].sort((a, b) => TRAIT_ORDER[a] - TRAIT_ORDER[b]);
 }
 
 /**
- * Полный набор признаков кота: визитка его породы ∪ визитки всех пород-предков.
- * Именно его читают рецепты (traitAny/traitBoth) — «несёт ли родитель признак».
+ * Полный набор генов кота: визитка его породы ∪ визитки всех пород-предков.
+ * Именно его читают рецепты (traitAny/traitBoth) — «несёт ли родитель ген».
  */
 export function carriedTraitSet(ownBreed: string, ancestorBreeds: Iterable<string>): Set<TraitId> {
   const out = new Set<TraitId>(breedTraits(ownBreed));
@@ -191,7 +174,7 @@ export function carriedTraitSet(ownBreed: string, ancestorBreeds: Iterable<strin
 }
 
 /**
- * Дремлющие («скрытые») признаки — есть у предков, но НЕ у самой породы кота.
+ * Дремлющие («скрытые») гены — есть у предков, но НЕ у самой породы кота.
  * Это то, что вскрывает анализ. `ancestorBreeds` — известные игроку предки.
  */
 export function dormantTraits(ownBreed: string, ancestorBreeds: Iterable<string>): TraitId[] {
@@ -201,8 +184,188 @@ export function dormantTraits(ownBreed: string, ancestorBreeds: Iterable<string>
   return sortTraits(out);
 }
 
-/** Короткая подпись признака: «🐆 пятнистость». */
+/** Короткая подпись гена: «🐆 пятнистость». */
 export function traitTag(id: TraitId): string {
   const t = TRAIT_BY_ID[id];
   return `${t.emoji} ${t.label}`;
+}
+
+// ============================================================================
+//  Слой 2 — облик (окрас · рисунок · глаза), косметика по полу
+// ============================================================================
+
+export type ColorId =
+  | 'black' | 'blue' | 'white' | 'red' | 'cream' | 'brown' | 'sable' | 'chocolate'
+  | 'silver' | 'bronze' | 'tortoiseshell' | 'calico' | 'red_white' | 'black_roan'
+  | 'skin_pink' | 'skin_grey' | 'seal' | 'sorrel' | 'ruddy' | 'sepia';
+
+export type PatternId = 'tiger' | 'marbled' | 'shaded' | 'spotted' | 'ticked' | 'colorpoint';
+
+export type EyeId = 'heterochromia' | 'blue_eyes';
+
+export type Sex = 'male' | 'female';
+
+/** Облик одного пола породы: ровно один окрас, опц. рисунок и особые глаза. */
+export interface Look {
+  color: ColorId;
+  pattern?: PatternId;
+  eyes?: EyeId;
+}
+
+interface Tagged { label: string; emoji: string; }
+
+export const COLOR_INFO: Record<ColorId, Tagged> = {
+  black: { emoji: '⚫', label: 'чёрный' },
+  blue: { emoji: '🩶', label: 'голубой' },
+  white: { emoji: '⚪', label: 'белый' },
+  red: { emoji: '🟠', label: 'рыжий' },
+  cream: { emoji: '🟡', label: 'кремовый' },
+  brown: { emoji: '🟤', label: 'коричневый' },
+  sable: { emoji: '🟫', label: 'соболиный' },
+  chocolate: { emoji: '🍫', label: 'шоколадный' },
+  silver: { emoji: '⬜', label: 'серебристый' },
+  bronze: { emoji: '🥉', label: 'бронзовый' },
+  tortoiseshell: { emoji: '🐢', label: 'черепаховый' },
+  calico: { emoji: '🎨', label: 'черепахово-белый' },
+  red_white: { emoji: '🔶', label: 'рыже-белый' },
+  black_roan: { emoji: '🐺', label: 'чёрный роан' },
+  skin_pink: { emoji: '🩷', label: 'розовая кожа' },
+  skin_grey: { emoji: '🩶', label: 'серо-голубая кожа' },
+  seal: { emoji: '🟤', label: 'сил-пойнт' },
+  sorrel: { emoji: '🍂', label: 'соррель' },
+  ruddy: { emoji: '🦊', label: 'дикий (ruddy)' },
+  sepia: { emoji: '🫘', label: 'сепия' },
+};
+
+export const PATTERN_INFO: Record<PatternId, Tagged> = {
+  tiger: { emoji: '🐅', label: 'тигровый' },
+  marbled: { emoji: '🪵', label: 'мраморный' },
+  shaded: { emoji: '✨', label: 'затушёванный' },
+  spotted: { emoji: '🐆', label: 'пятнистый' },
+  ticked: { emoji: '🌾', label: 'тикированный' },
+  colorpoint: { emoji: '🎭', label: 'колор-пойнт' },
+};
+
+export const EYE_INFO: Record<EyeId, Tagged> = {
+  heterochromia: { emoji: '👁', label: 'гетерохромия' },
+  blue_eyes: { emoji: '🔵', label: 'голубые глаза' },
+};
+
+const L = (color: ColorId, pattern?: PatternId, eyes?: EyeId): Look => ({
+  color,
+  ...(pattern ? { pattern } : {}),
+  ...(eyes ? { eyes } : {}),
+});
+
+/**
+ * Облик каждой породы отдельно для кота (male) и кошки (female). Дворовый (moggie)
+ * не входит — его облик случаен. Черепаховый/ми-кэ закреплён за самками (генетика),
+ * сплошной рыжий — за котами. Полнота проверяется тестом.
+ */
+export const BREED_LOOK: Record<string, { male: Look; female: Look }> = {
+  // --- Tier 1 ---
+  domestic_shorthair: { male: L('red', 'tiger'), female: L('tortoiseshell') },
+  domestic_longhair: { male: L('brown', 'marbled'), female: L('tortoiseshell') },
+  // --- Tier 2 ---
+  british_shorthair: { male: L('blue'), female: L('silver', 'marbled') },
+  scottish_fold: { male: L('blue'), female: L('silver', 'marbled') },
+  persian: { male: L('white', undefined, 'blue_eyes'), female: L('calico') },
+  siamese: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('blue', 'colorpoint', 'blue_eyes') },
+  thai: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('seal', 'colorpoint', 'blue_eyes') },
+  russian_blue: { male: L('blue'), female: L('blue') },
+  turkish_angora: { male: L('white', undefined, 'heterochromia'), female: L('white', undefined, 'heterochromia') },
+  siberian: { male: L('brown', 'tiger'), female: L('tortoiseshell', 'marbled') },
+  neva_masquerade: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('blue', 'colorpoint', 'blue_eyes') },
+  american_shorthair: { male: L('silver', 'marbled'), female: L('brown', 'tiger') },
+  exotic_shorthair: { male: L('red', 'tiger'), female: L('tortoiseshell') },
+  abyssinian: { male: L('ruddy', 'ticked'), female: L('sorrel', 'ticked') },
+  birman: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('blue', 'colorpoint', 'blue_eyes') },
+  european_shorthair: { male: L('brown', 'tiger'), female: L('tortoiseshell') },
+  // --- Tier 3 ---
+  maine_coon: { male: L('red', 'tiger'), female: L('black', 'marbled') },
+  norwegian_forest: { male: L('brown', 'marbled'), female: L('tortoiseshell') },
+  ragdoll: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('blue', 'colorpoint', 'blue_eyes') },
+  bengal: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  donskoy: { male: L('skin_pink'), female: L('skin_grey') },
+  sphynx: { male: L('skin_pink'), female: L('skin_grey') },
+  cornish_rex: { male: L('red_white'), female: L('blue') },
+  devon_rex: { male: L('brown', 'tiger'), female: L('tortoiseshell') },
+  munchkin: { male: L('red', 'tiger'), female: L('tortoiseshell') },
+  kurilian_bobtail: { male: L('red', 'tiger'), female: L('tortoiseshell', 'marbled') },
+  japanese_bobtail: { male: L('red_white'), female: L('calico') },
+  burmese: { male: L('sable'), female: L('chocolate') },
+  bombay: { male: L('black'), female: L('black') },
+  somali: { male: L('ruddy', 'ticked'), female: L('sorrel', 'ticked') },
+  ocicat: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  chartreux: { male: L('blue'), female: L('blue') },
+  oriental_shorthair: { male: L('black'), female: L('blue') },
+  tonkinese: { male: L('brown', 'colorpoint'), female: L('chocolate', 'colorpoint') },
+  himalayan: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('blue', 'colorpoint', 'blue_eyes') },
+  manx: { male: L('brown', 'tiger'), female: L('tortoiseshell') },
+  balinese: { male: L('seal', 'colorpoint', 'blue_eyes'), female: L('blue', 'colorpoint', 'blue_eyes') },
+  turkish_van: { male: L('red_white', undefined, 'heterochromia'), female: L('red_white', undefined, 'heterochromia') },
+  // --- Tier 4 ---
+  american_curl: { male: L('brown', 'tiger'), female: L('tortoiseshell') },
+  elf: { male: L('skin_pink'), female: L('skin_grey') },
+  bambino: { male: L('skin_pink'), female: L('skin_grey') },
+  skookum: { male: L('red'), female: L('tortoiseshell') },
+  minskin: { male: L('skin_pink'), female: L('skin_grey') },
+  lykoi: { male: L('black_roan'), female: L('black_roan') },
+  chausie: { male: L('ruddy', 'ticked'), female: L('sable', 'ticked') },
+  khao_manee: { male: L('white', undefined, 'heterochromia'), female: L('white', undefined, 'blue_eyes') },
+  singapura: { male: L('sepia', 'ticked'), female: L('sepia', 'ticked') },
+  selkirk_rex: { male: L('blue'), female: L('tortoiseshell') },
+  pixiebob: { male: L('brown', 'spotted'), female: L('brown', 'spotted') },
+  toyger: { male: L('red', 'tiger'), female: L('brown', 'tiger') },
+  kinkalow: { male: L('blue'), female: L('tortoiseshell') },
+  peterbald: { male: L('skin_pink'), female: L('skin_grey') },
+  egyptian_mau: { male: L('silver', 'spotted'), female: L('bronze', 'spotted') },
+  laperm: { male: L('red'), female: L('tortoiseshell') },
+  american_wirehair: { male: L('red', 'tiger'), female: L('tortoiseshell') },
+  sokoke: { male: L('brown', 'marbled'), female: L('brown', 'marbled') },
+  burmilla: { male: L('silver', 'shaded'), female: L('silver', 'shaded') },
+  havana: { male: L('chocolate'), female: L('chocolate') },
+  ojos_azules: { male: L('brown', undefined, 'blue_eyes'), female: L('tortoiseshell', undefined, 'blue_eyes') },
+  // --- Tier 5 ---
+  savannah: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  caracat: { male: L('ruddy'), female: L('sorrel') },
+  ashera: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  dwelf: { male: L('skin_pink'), female: L('skin_grey') },
+  serengeti: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  cheetoh: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  safari: { male: L('brown', 'spotted'), female: L('brown', 'spotted') },
+  california_spangled: { male: L('brown', 'spotted'), female: L('silver', 'spotted') },
+  khao_manee_diamond: { male: L('white', undefined, 'blue_eyes'), female: L('white', undefined, 'blue_eyes') },
+  lykoi_elf: { male: L('black_roan'), female: L('black_roan') },
+};
+
+/** Облик породы для указанного пола (undefined у дворового / незнакомых ключей). */
+export function lookOf(breed: string, sex: Sex): Look | undefined {
+  return BREED_LOOK[breed]?.[sex];
+}
+
+/** Подпись окраса: «🟤 коричневый». */
+export function colorTag(id: ColorId): string {
+  const c = COLOR_INFO[id];
+  return `${c.emoji} ${c.label}`;
+}
+
+/** Подпись рисунка: «🐅 тигровый». */
+export function patternTag(id: PatternId): string {
+  const p = PATTERN_INFO[id];
+  return `${p.emoji} ${p.label}`;
+}
+
+/** Подпись глаз: «👁 гетерохромия». */
+export function eyeTag(id: EyeId): string {
+  const e = EYE_INFO[id];
+  return `${e.emoji} ${e.label}`;
+}
+
+/** Готовые подписи облика: [окрас, рисунок?, глаза?]. */
+export function lookTags(look: Look): string[] {
+  const out = [colorTag(look.color)];
+  if (look.pattern) out.push(patternTag(look.pattern));
+  if (look.eyes) out.push(eyeTag(look.eyes));
+  return out;
 }

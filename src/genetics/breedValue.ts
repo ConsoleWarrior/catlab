@@ -24,7 +24,6 @@ function recipeDifficulty(r: Recipe): number {
   let d = 1 - r.chance;                              // низкий шанс → сложнее
   if (isPedigreeRecipe(r)) d += 0.15;                // требует скрытых генов в родословной
   if (r.minKinship) d += 0.15 * KINSHIP_RANK[r.minKinship]; // требует инбридинга (риск здоровья)
-  if (r.colorBoth || r.tabbyBoth) d += 0.05;         // фенотипическое условие обоих родителей
   return d;
 }
 

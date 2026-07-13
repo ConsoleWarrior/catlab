@@ -5,11 +5,11 @@
  */
 
 import { Container, Graphics, Rectangle } from 'pixi.js';
-import { catsIn, shelterCapacity, isInSlot, isUnlocked, unlockLevelOf } from '../../game/index.js';
+import { catsIn, shelterCapacity, isInSlot, isUnlocked, unlockLevelOf, shelterTotals } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane } from './shell.js';
-import { COLORS, label } from '../theme.js';
+import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 import { decorZone } from '../decorArt.js';
 
@@ -69,6 +69,43 @@ export function createShelter(ctx: UiContext): Room {
     labLayer.addChild(box, flask, badge);
   }
 
+  // Массовые кнопки вверху справа: «Раздать всех» / «В лабораторию всех» — по
+  // суммарной цене (shelterTotals). Пересобираются в refresh() (суммы/замок/пусто
+  // меняются по ходу игры). Открывают диалог-подтверждение (bulk-действие в ядре).
+  const bulkLayer = new Container();
+  shell.container.addChild(bulkLayer);
+
+  function refreshBulkButtons(): void {
+    bulkLayer.removeChildren();
+    const totals = shelterTotals(ctx.state);
+    const labOpen = isUnlocked(ctx.state, 'labStation');
+
+    const BW = 176, BH = 44, GAP = 10, RPAD = 18;
+    const cy = ctx.topInset + 8 + 22;              // центр по титульной плашке комнаты
+    const rightCx = ctx.roomW - RPAD - BW / 2;
+    const leftCx = rightCx - BW - GAP;
+
+    const adoptBtn = new Button({
+      text: `🤝 Раздать всех\n💰${totals.adopt.coins}  🧬${totals.adopt.dna}`,
+      w: BW, h: BH, color: COLORS.good, fontSize: 12.5,
+    });
+    adoptBtn.position.set(leftCx, cy);
+    adoptBtn.enabled = totals.count > 0;
+    adoptBtn.onTap = () => ctx.openBulkAdoptConfirm();
+
+    const labBtn = new Button({
+      text: labOpen
+        ? `🧪 В лабораторию всех\n🧬${totals.lab.dna}${totals.lab.coins > 0 ? `  💰${totals.lab.coins}` : ''}`
+        : `🧪 В лабораторию всех\n🔒 с ур. ${unlockLevelOf('labStation')}`,
+      w: BW, h: BH, color: COLORS.dna, fontSize: 12.5,
+    });
+    labBtn.position.set(rightCx, cy);
+    labBtn.enabled = labOpen && totals.count > 0;
+    labBtn.onTap = () => ctx.openBulkLabConfirm();
+
+    bulkLayer.addChild(adoptBtn, labBtn);
+  }
+
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
@@ -110,6 +147,7 @@ export function createShelter(ctx: UiContext): Room {
     shell.setTitleBadge(`🐱 ${present.length}/${cap}`);
 
     refreshLabStation(); // замок станции снимается, когда уровень дорастает
+    refreshBulkButtons(); // суммы/замок/доступность кнопок «…всех»
     floor.refresh();
   }
 

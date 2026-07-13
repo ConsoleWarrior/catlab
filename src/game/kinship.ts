@@ -10,13 +10,14 @@
  *   дед × внучка:                    r = 0.5^(0+2) = 0.25     → high
  *   дядя × племянница:               r = 2 × 0.5^(1+2) = 0.25 → high
  *   двоюродные (общие деды):         r = 2 × 0.5^(2+2) = 0.125 → moderate
- *   один общий прадед:               r ≈ 0.016                 → moderate
+ *   полу-двоюродные (1 общий дед):   r = 0.5^(2+2) = 0.0625    → moderate
+ *   троюродные / общий прадед:       r ≤ 0.031                 → none (ниже порога)
  *
  * Уровень родства: множит шанс родословных рецептов (recipes.ts) и решает
  * бросок здоровья котёнка (rollKittenHearts) — риск ↔ награда инбридинга.
  */
 
-import { expressPhenotype, tierOfBreed, carriedTraitSet } from '../genetics/index.js';
+import { tierOfBreed, carriedTraitSet } from '../genetics/index.js';
 import type { KinshipLevel, BreedSide, BreedingContext, RarityTier } from '../genetics/index.js';
 import type { Cat, Ancestor } from './types.js';
 import * as C from './config.js';
@@ -109,15 +110,12 @@ export function isPureLine(cat: Cat): boolean {
 }
 
 function sideOf(cat: Cat): BreedSide {
-  const phen = expressPhenotype(cat.genotype);
   const ancestors = ancestorBreedList(cat);
   return {
     breed: cat.breed,
     ancestorBreeds: new Set(ancestors),
     traits: carriedTraitSet(cat.breed, ancestors),
     pureLine: isPureLine(cat),
-    baseColor: phen.baseColor,
-    tabby: phen.pattern !== null,
   };
 }
 

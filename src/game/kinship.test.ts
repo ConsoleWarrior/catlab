@@ -73,7 +73,7 @@ describe('kinshipLevel (уровни родства по id предков)', ()
     expect(kinshipLevel(cousin1, cousin2)).toBe('moderate');
   });
 
-  it('один общий прадед → moderate (слабое, но заметное родство)', () => {
+  it('один общий прадед → none (слишком дальнее родство: r ≈ 0.016 < порога moderate)', () => {
     const ggf = mk('bengal', 'male');     // прадед
     // линия 1: ggf → дочь → внучка (у внучки ggf на 2-м уровне... строим до 3-го)
     const line1a = childOf(mk('moggie'), ggf);
@@ -84,9 +84,9 @@ describe('kinshipLevel (уровни родства по id предков)', ()
     const line2b = childOf(mk('moggie'), line2a, 'male');
     const line2c = childOf(mk('moggie'), line2b, 'male'); // ggf — прадед (gen3)
     const r = relatedness(line1c, line2c);
-    expect(r).toBeGreaterThan(0);
-    expect(r).toBeLessThan(0.24);
-    expect(kinshipLevel(line1c, line2c)).toBe('moderate');
+    expect(r).toBeGreaterThan(0);          // родство математически есть…
+    expect(r).toBeLessThan(0.06);          // …но ниже порога — троюродные не в счёт
+    expect(kinshipLevel(line1c, line2c)).toBe('none');
   });
 
   it('ложных совпадений нет: у котов позднего поколения от разных линий — none', () => {

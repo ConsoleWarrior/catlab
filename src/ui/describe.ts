@@ -3,8 +3,8 @@
  * Идентичность кота теперь — ПОРОДА из каталога + пол; редкость — тир породы.
  */
 
-import { breedName, expressPhenotype, breedTraits, sortTraits, traitTag } from '../genetics/index.js';
-import type { Recipe, SideSpec, TraitId } from '../genetics/index.js';
+import { breedName, breedTraits, sortTraits, traitTag, lookOf, lookTags } from '../genetics/index.js';
+import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, OrderReq } from '../game/index.js';
 import { KINSHIP_RU } from '../game/index.js';
 import { TIER_RU } from './theme.js';
@@ -28,13 +28,13 @@ export function describeCat(cat: Cat): string {
 }
 
 /**
- * Проявленные признаки кота: визитка его породы + черепаховый окрас, если он
- * фактически черепаховый (единственный признак не закреплён за породой).
+ * Видимые признаки кота готовыми подписями: наследуемые гены его породы (визитка)
+ * + облик по полу (окрас · рисунок · глаза). У дворового визитки нет — облик случаен.
  */
-export function catVisibleTraits(cat: Cat): TraitId[] {
-  const ids = new Set<TraitId>(breedTraits(cat.breed));
-  if (expressPhenotype(cat.genotype).isTortie) ids.add('tortoiseshell');
-  return sortTraits(ids);
+export function catVisibleTraits(cat: Cat): string[] {
+  const genes = sortTraits(breedTraits(cat.breed)).map(traitTag);
+  const look = lookOf(cat.breed, cat.genotype.sex);
+  return [...genes, ...(look ? lookTags(look) : [])];
 }
 
 /** Детальные строки облика кота (для меню). Редкость показывают цветные звёзды. */
@@ -42,7 +42,7 @@ export function catTraits(cat: Cat): string[] {
   const sex = cat.genotype.sex === 'female' ? 'пол: самка ♀' : 'пол: самец ♂';
   const lines = [sex, `порода: ${breedName(cat.breed)}`];
   const vis = catVisibleTraits(cat);
-  if (vis.length) lines.push(`признаки: ${vis.map(traitTag).join(' · ')}`);
+  if (vis.length) lines.push(`признаки: ${vis.join(' · ')}`);
   if (cat.motherBreed && cat.fatherBreed) {
     lines.push(`родители: ${breedName(cat.motherBreed)} ♀ × ${breedName(cat.fatherBreed)} ♂`);
   }
@@ -80,8 +80,6 @@ export function describeRecipe(r: Recipe): { pair: string; conds: string[] } {
     conds.push(`≥${r.distinctTiers.count} разных пород (${r.distinctTiers.tiers.map((t) => TIER_RU[t]).join(' / ')}) среди пары и предков`);
   }
   if (r.pureLine) conds.push('обе родословные чистые — без дворовых кровей');
-  if (r.colorBoth) conds.push(`оба родителя ${colorRu(r.colorBoth)}`);
-  if (r.tabbyBoth) conds.push(`оба родителя: ${traitTag('tiger')}`);
   if (r.minKinship) conds.push(`нужно родство пары: ${KINSHIP_RU[r.minKinship]} и выше`);
   else if (r.kinshipBoost) conds.push('инбридинг повышает шанс');
   return { pair, conds };

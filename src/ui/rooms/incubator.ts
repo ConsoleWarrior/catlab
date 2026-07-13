@@ -235,7 +235,8 @@ export function createIncubator(ctx: UiContext): Room {
     if (hasBoxTex) {
       const bgSp = new Sprite(boxTex);
       bgSp.anchor.set(0.5);
-      bgSp.scale.set(Math.max(w / boxTex.width, h / boxTex.height));
+      // −4%: спрайт слегка ужат, чтобы его края сошлись с расширенной полосой кнопок
+      bgSp.scale.set(Math.max(w / boxTex.width, h / boxTex.height) * 0.96);
       bgSp.position.set(w / 2, h / 2);
       card.addChild(bgSp);
     } else {
@@ -253,7 +254,7 @@ export function createIncubator(ctx: UiContext): Room {
     // --- геометрия мини-комнаты ---
     const titleH = 24;
     const ctrlH = 80;                       // под комнатой: прогресс + кнопка
-    const ctrlShift = hasBoxTex ? Math.round((ctrlH + 6) / 2) : 0; // сдвиг панели вниз (≈43px)
+    const ctrlShift = hasBoxTex ? Math.round((ctrlH + 6) / 2) - 7 : 0; // сдвиг панели вниз (≈36px), −7px подняли полосу к ужатому спрайту
     const rx = 9, ry = titleH;
     const rw = w - 18;
     const rh = Math.max(70, h - titleH - ctrlH);
@@ -362,7 +363,7 @@ export function createIncubator(ctx: UiContext): Room {
 
     // перегородка по центру (поднимается при старте вязки)
     const partW = Math.max(7, cw * 0.05);
-    const partTop = cy + 6;
+    const partTop = cy + 15;        // +9px ниже — верх перегородки опущен
     const partR = Math.max(3, partW * 0.5);        // пилюля: полукруглый верх и низ
     const maskBot = cy + ch + (hasBoxTex ? catH * 0.3 : 0);
     // полная длина (множитель нравится пользователю) но не вылезаем за маску минус радиус
@@ -436,7 +437,7 @@ export function createIncubator(ctx: UiContext): Room {
     // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
     if (hasBoxTex) {
       const stripH = ctrlH + 6;
-      const stripW = Math.round(w * 0.92) + 2; // +2px шире, прилегает к краям слота
+      const stripW = Math.round(w * 0.92 * 1.1) + 2; // ≈+10%: края полосы совпадают с ужатым спрайтом
       const stripX = Math.round((w - stripW) / 2);
       const stripY = h - ctrlH - 6 + ctrlShift;
       const GOLDEN_ROSE = 0xedc8b0; // золотисто-розовый, в тон краёв слота

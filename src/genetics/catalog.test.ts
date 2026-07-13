@@ -3,6 +3,7 @@ import {
   BREEDS, BREED_BY_KEY, BREEDS_BY_TIER, PEDIGREE_BREEDS,
   tierOfBreed, breedName, isBaseBreed,
 } from './catalog.js';
+import { BREED_DESC, breedDescription } from './breedInfo.js';
 
 describe('каталог пород (70, 5 тиров)', () => {
   it('всего 70 записей: 3 базовых (T1) + 67 пород', () => {
@@ -43,5 +44,24 @@ describe('каталог пород (70, 5 тиров)', () => {
       'bengal', 'savannah', 'toyger', 'egyptian_mau',
     ];
     for (const k of legacy) expect(BREED_BY_KEY[k], k).toBeDefined();
+  });
+});
+
+describe('справки о породах (Котодекс)', () => {
+  it('у каждой породы каталога есть непустая справка', () => {
+    for (const b of BREEDS) {
+      const d = breedDescription(b.key);
+      expect(d.length, b.key).toBeGreaterThan(0);
+    }
+  });
+
+  it('нет лишних ключей в BREED_DESC', () => {
+    for (const key of Object.keys(BREED_DESC)) {
+      expect(BREED_BY_KEY[key], key).toBeDefined();
+    }
+  });
+
+  it('незнакомый ключ → пустая строка', () => {
+    expect(breedDescription('no_such_breed')).toBe('');
   });
 });

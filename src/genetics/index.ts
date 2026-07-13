@@ -16,14 +16,19 @@ export {
   tierOfBreed, breedName, isBaseBreed,
 } from './catalog.js';
 export type { BreedDef, BreedKind, BreedBoosts } from './catalog.js';
+export { BREED_DESC, breedDescription } from './breedInfo.js';
 export {
   RECIPES, recipesFor, recipeKey, isPedigreeRecipe, pairMatches, recipeMatches, recipeChance,
   resolveBreeding, breedingOutcomes, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
 } from './recipes.js';
 export type { Recipe, SideSpec, BreedSide, BreedingContext, KinshipLevel, BreedingOutcome } from './recipes.js';
 export {
-  TRAITS, TRAIT_BY_ID, BREED_TRAITS, breedTraits, sortTraits,
+  TRAITS, TRAIT_BY_ID, BREED_GENES, breedTraits, sortTraits,
   carriedTraitSet, dormantTraits, traitTag,
+  COLOR_INFO, PATTERN_INFO, EYE_INFO, BREED_LOOK,
+  lookOf, colorTag, patternTag, eyeTag, lookTags,
 } from './traits.js';
-export type { TraitId, TraitGroup, TraitDef } from './traits.js';
+export type {
+  TraitId, TraitGroup, TraitDef, ColorId, PatternId, EyeId, Sex, Look,
+} from './traits.js';
 export { breedValueMult, VALUE_MULT_MIN, VALUE_MULT_MAX } from './breedValue.js';

@@ -26,7 +26,7 @@ export {
   makeCatInstance, buyCatCost, growthScale, growthProgress, growthRemainingMs, isAdult,
   boostCharges, activeBoosts, consumeBoosts, researchBonus,
   researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
-  catMarketValue, pedigreeValueMult, healthValueMult, labReward,
+  catMarketValue, pedigreeValueMult, healthValueMult, labReward, shelterTotals,
   cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
   championSlots, championIds, championCats, championAt, isChampion, championIncomePerMin,
   speedUpCost, effGrowthMs,
@@ -49,7 +49,7 @@ export {
 export { matchesOrder, generateOrder, refillOrders, pruneExpiredOrders } from './orders.js';
 export {
   collectIncome, startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
-  keepKittenWithParents, renameCat, sendToLab, setChampion, unsetChampion,
+  keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
   speedUpBreeding, adSkipBreeding, speedUpGrowth, adSkipGrowth,
   buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,

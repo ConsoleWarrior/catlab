@@ -16,7 +16,6 @@ function ctx(
     motherAnc?: string[]; fatherAnc?: string[];
     kinship?: KinshipLevel;
     pure?: boolean;
-    color?: string; tabby?: boolean;
   } = {},
 ): BreedingContext {
   const side = (breed: string, anc: string[]): BreedSide => ({
@@ -24,8 +23,6 @@ function ctx(
     ancestorBreeds: new Set(anc),
     traits: carriedTraitSet(breed, anc),
     pureLine: opts.pure ?? false,
-    baseColor: opts.color ?? 'black',
-    tabby: opts.tabby ?? false,
   });
   const all = [...(opts.motherAnc ?? []), ...(opts.fatherAnc ?? [])];
   const counts = new Map<string, number>();
@@ -151,13 +148,12 @@ describe('типы рецептов', () => {
     expect(recipeMatches(r, ctx('abyssinian', 'siamese', { pure: true }))).toBe(true);
   });
 
-  it('фенотип: бомбей требует чёрных родителей, тойгер — полосатых', () => {
+  it('прямые (без гейта окраса): бомбей и тойгер выходят от своей пары', () => {
+    // Окрас/табби больше не условие рецепта — облик даёт спрайт породы (rev.3).
     const bombay = recipesFor('bombay')[0]!;
-    expect(recipeMatches(bombay, ctx('burmese', 'american_shorthair', { color: 'black' }))).toBe(true);
-    expect(recipeMatches(bombay, ctx('burmese', 'american_shorthair', { color: 'blue' }))).toBe(false);
+    expect(recipeMatches(bombay, ctx('burmese', 'american_shorthair'))).toBe(true);
     const toyger = recipesFor('toyger')[0]!;
-    expect(recipeMatches(toyger, ctx('bengal', 'american_shorthair', { tabby: true }))).toBe(true);
-    expect(recipeMatches(toyger, ctx('bengal', 'american_shorthair', { tabby: false }))).toBe(false);
+    expect(recipeMatches(toyger, ctx('bengal', 'american_shorthair'))).toBe(true);
   });
 
   it('minKinship: ликой заперт за критическим инбридингом', () => {

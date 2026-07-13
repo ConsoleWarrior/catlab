@@ -12,7 +12,7 @@ import {
   roomCount, nurseryCapacity, shelterCapacity,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
   adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
-  sendToLab, labReward,
+  sendToLab, labReward, shelterTotals, adoptAll, sendAllToLab,
   healCat, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cryoCount, cryoCapacity,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
@@ -21,7 +21,7 @@ import {
   breedDiscovered, knownRecipesFor, outcomeRevealed,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
-import { breedName, tierOfBreed, TIER_LEVEL, breedingOutcomes, dormantTraits, traitTag } from '../genetics/index.js';
+import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, dormantTraits, traitTag } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
@@ -767,6 +767,13 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
     return t.height;
   };
 
+  // Энциклопедическая справка о породе (происхождение / факт / главная черта).
+  const desc = breedDescription(breedKey);
+  if (desc) {
+    addLine(`📖 ${desc}`, 12, COLORS.ink, '700');
+    y += 8;
+  }
+
   if (recipes.length === 0) {
     addLine(breedKey === 'moggie'
       ? '🐾 Стартовая порода: дворовых котов покупают в питомнике, рецепт не нужен.'
@@ -780,13 +787,12 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
       y += 10;
     }
     // Единый формат карточки: родители → условия (скрытые гены/пол/родословная,
-    // инбридинг) → базовый шанс → факт о породе (одно предложение).
+    // инбридинг) → базовый шанс. Справка о породе — выше, над рецептами.
     const { pair, conds } = describeRecipe(r);
     addLine(`🧪 ${pair}`, 13.5, COLORS.ink, '800');
     if (conds.length === 0) addLine('· без доп. условий — только породы родителей', 11.5, COLORS.inkSoft, '700');
     for (const cLine of conds) addLine(`· ${cLine}`, 11.5, COLORS.inkSoft, '700');
     addLine(`базовый шанс: ${pct(r.chance)}`, 12, COLORS.dna, '800');
-    addLine(`📖 ${r.note}`, 11, COLORS.inkSoft, '600');
     y += 4;
   });
   y += 6;
@@ -819,14 +825,17 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
   const title = label('🔮 Прогноз пары', 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
   root.addChild(title);
-  const who = label(
-    `${mother.name?.trim() || breedName(mother.breed)} ♀ × ${father.name?.trim() || breedName(father.breed)} ♂`,
-    12.5, COLORS.inkSoft, '700',
-  );
-  who.position.set(W / 2, 50);
+  // Самец первым; если пара не влезает в одну строку блока — самка переносится
+  // на новую строку (× остаётся хвостом у самца как связка).
+  const maleStr = `${father.name?.trim() || breedName(father.breed)} ♂`;
+  const femaleStr = `${mother.name?.trim() || breedName(mother.breed)} ♀`;
+  const who = label(`${maleStr} × ${femaleStr}`, 12.5, COLORS.inkSoft, '700');
+  const twoLineWho = who.width > W - 40;
+  if (twoLineWho) who.text = `${maleStr} ×\n${femaleStr}`;
+  who.position.set(W / 2, twoLineWho ? 56 : 50);
   root.addChild(who);
 
-  let y = 68;
+  let y = who.y + who.height / 2 + 12;
   if (bctx.kinship !== 'none') {
     const kin = label(`⚠️ родство: ${KINSHIP_RU[bctx.kinship]} — родословные рецепты усилены`, 11.5,
       bctx.kinship === 'critical' ? COLORS.warn : COLORS.inkSoft, '800');
@@ -1109,6 +1118,80 @@ export function buildLabConfirm(ctx: UiContext, cat: Cat, close: () => void): Co
   y += 56;
 
   root.addChild(panel(W, y, COLORS.hud, 18), title, sub, sp, who, reward, noBtn, yesBtn);
+  return root;
+}
+
+/**
+ * Массовое пристройство: «Раздать всех в добрые руки?» — сводка (сколько котов +
+ * суммарные 💰/🧬) и Да/Нет. Открывается кнопкой «Раздать всех» вверху приюта.
+ * Суммы — shelterTotals (та же цена, что поштучно); действие — adoptAll.
+ */
+export function buildBulkAdoptConfirm(ctx: UiContext, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const { count, adopt } = shelterTotals(ctx.state);
+
+  const title = label('Раздать всех в добрые руки?', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 30);
+  const sub = label(`Всего в приюте: ${count} 🐱`, 13, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 54);
+  const reward = label(`Вы получите:   💰 ${adopt.coins}     🧬 ${adopt.dna}`, 16, COLORS.ink, '800');
+  reward.position.set(W / 2, 90);
+
+  const pad = 24, gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  const y = 120;
+  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  noBtn.position.set(pad + bw / 2, y + 24);
+  noBtn.onTap = close;
+  const yesBtn = new Button({ text: `Да 🤝 (${count})`, w: bw, h: 48, color: COLORS.good, fontSize: 16 });
+  yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
+  yesBtn.onTap = () => {
+    const r = adoptAll(ctx.state);
+    if (!r.ok) { ctx.toast(r.reason); close(); return; }
+    ctx.commit();
+    ctx.toast(`Пристроено ${r.count} 🏠  +💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    close();
+  };
+
+  root.addChild(panel(W, y + 56, COLORS.hud, 18), title, sub, reward, noBtn, yesBtn);
+  return root;
+}
+
+/**
+ * Массовая сдача в лабораторию: «Сдать всех котиков на эксперименты?» — сводка
+ * (сколько котов + суммарные 🧬/💰) и Да/Нет. Кнопка «В лабораторию всех» вверху
+ * приюта. Суммы — shelterTotals; действие — sendAllToLab.
+ */
+export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const { count, lab } = shelterTotals(ctx.state);
+
+  const title = label('Сдать всех в лабораторию?', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 30);
+  const sub = label(`на эксперименты — взамен 🧬 гены · ${count} 🐱`, 12.5, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 54);
+  const reward = label(`Вы получите:   🧬 ${lab.dna}${lab.coins > 0 ? `     💰 ${lab.coins}` : ''}`, 16, COLORS.ink, '800');
+  reward.position.set(W / 2, 90);
+
+  const pad = 24, gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  const y = 120;
+  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  noBtn.position.set(pad + bw / 2, y + 24);
+  noBtn.onTap = close;
+  const yesBtn = new Button({ text: `Да 🧪 (${count})`, w: bw, h: 48, color: COLORS.dna, fontSize: 16 });
+  yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
+  yesBtn.onTap = () => {
+    const r = sendAllToLab(ctx.state);
+    if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Лаборатория ещё заперта 🔒' : r.reason); close(); return; }
+    ctx.commit();
+    ctx.toast(`В лаборатории ${r.count} 🧪  +🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    close();
+  };
+
+  root.addChild(panel(W, y + 56, COLORS.hud, 18), title, sub, reward, noBtn, yesBtn);
   return root;
 }
 

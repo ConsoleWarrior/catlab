@@ -268,11 +268,11 @@ describe('превью пары (этап E): breedingOutcomes', () => {
     const total = out.reduce((sum, o) => sum + o.p, 0);
     expect(total).toBeCloseTo(1, 9);
     // последовательные шансы (при равном тире первым бросается МАЛОВЕРОЯТНЫЙ —
-    // как в resolveBreeding): p(dlh) = 0.18, p(dsh) = (1−0.18)×0.30
+    // как в resolveBreeding): p(dlh) = 0.40, p(dsh) = (1−0.40)×0.55
     const dsh = out.find((o) => o.breed === 'domestic_shorthair' && o.recipe)!;
     const dlh = out.find((o) => o.breed === 'domestic_longhair' && o.recipe)!;
-    expect(dlh.p).toBeCloseTo(0.18, 9);
-    expect(dsh.p).toBeCloseTo((1 - 0.18) * 0.30, 9);
+    expect(dlh.p).toBeCloseTo(0.40, 9);
+    expect(dsh.p).toBeCloseTo((1 - 0.40) * 0.55, 9);
   });
 
   it('разные породы: фолбэк делится между родителями и метисом', () => {

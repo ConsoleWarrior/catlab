@@ -17,7 +17,7 @@
 import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { FederatedWheelEvent } from 'pixi.js';
 import { BREEDS, BREEDS_BY_TIER, breedName, tierOfBreed, RECIPES, recipeKey } from '../../genetics/index.js';
-import type { RarityTier } from '../../genetics/index.js';
+import type { RarityTier, Recipe } from '../../genetics/index.js';
 import {
   RESEARCH, unlockResearch, isUnlocked, unlockLevelOf,
   researchLevel, researchOwned, researchMaxed, researchNext,
@@ -599,10 +599,26 @@ export function createGenolab(ctx: UiContext): Room {
     }
 
     // --- список рецептов, открытых исследованием (📜 силуэты в Котодексе) ---
+    // новые сверху; колонки СТАБИЛЬНЫ — рецепт закрепляется за левой или правой
+    // колонкой по чётности своего порядкового номера в state.knownRecipes (индекс
+    // не меняется, т.к. push только добавляет в конец) и больше не «перескакивает»
+    // между колонками. Новый рецепт толкает вниз только ОДНУ колонку по очереди
+    // (левую, потом правую) — иначе при каждом открытии дёргалась бы вся лента.
     const listTop = viewTop + deskH + 10;
-    const opened = RECIPES.filter((r) => ctx.state.knownRecipes.includes(recipeKey(r)));
-    const head = pillRow([{ text: `Открытые рецепты · ${opened.length}`, size: 13, color: COLORS.ink, weight: '800' }]);
-    head.position.set(2, listTop + 10);
+    const recipeByKey = new Map(RECIPES.map((r) => [recipeKey(r), r]));
+    const leftCol: Recipe[] = [];
+    const rightCol: Recipe[] = [];
+    let totalOpened = 0;
+    ctx.state.knownRecipes.forEach((k, idx) => {
+      const r = recipeByKey.get(k);
+      if (!r) return;
+      totalOpened++;
+      (idx % 2 === 0 ? leftCol : rightCol).push(r);
+    });
+    leftCol.reverse();
+    rightCol.reverse();
+    const head = pillRow([{ text: `Открытые рецепты · ${totalOpened}`, size: 13, color: COLORS.ink, weight: '800' }]);
+    head.position.set((viewW - head.width) / 2, listTop + 10);
     shell.body.addChild(head);
 
     const viewport = new Container();
@@ -616,34 +632,45 @@ export function createGenolab(ctx: UiContext): Room {
     shell.body.addChild(viewport);
 
     let y = 4;
-    if (opened.length === 0) {
+    if (totalOpened === 0) {
       const empty = label('пока пусто — исследуй первый рецепт', 12, COLORS.inkSoft, '600');
       empty.anchor.set(0, 0.5);
       empty.position.set(6, y + 14);
       content.addChild(empty);
       y += 34;
     }
-    const rowH = 40;
-    for (const r of opened) {
-      const row = new Container();
-      row.addChild(panel(viewW, rowH - 6, COLORS.card, 10));
-      // имя породы — цветом её тира; выведена ли уже — подписью справа
-      const name = label(`📜 ${breedName(r.result)}`, 13.5, TIER_COLOR[tierOfBreed(r.result)], '800');
+    // сетка 2×N: блоки чуть крупнее прежней однорядной ленты
+    const gap = 8;
+    const colW = (viewW - gap) / 2;
+    const rowH = 48;
+    const placeCard = (r: Recipe, x: number, cardY: number): void => {
+      const card = new Container();
+      card.addChild(panel(colW, rowH - 6, COLORS.card, 10));
+      // имя породы слева (цвет её тира), статус «выведена/силуэт» — справа, на краю блока
+      const name = label(`📜 ${breedName(r.result)}`, 14, TIER_COLOR[tierOfBreed(r.result)], '800');
       name.anchor.set(0, 0.5);
       name.position.set(12, (rowH - 6) / 2);
-      row.addChild(name);
+      card.addChild(name);
       const st = ctx.state.discoveredBreeds.includes(r.result) ? '✅ выведена' : 'силуэт в Котодексе';
-      const stT = label(st, 11, COLORS.inkSoft, '600');
+      const stT = label(st, 10.5, COLORS.inkSoft, '600');
       stT.anchor.set(1, 0.5);
-      stT.position.set(viewW - 12, (rowH - 6) / 2);
-      row.addChild(stT);
-      row.eventMode = 'static';
-      row.cursor = 'pointer';
-      row.on('pointertap', () => { if (!suppressTap) ctx.openBreedCard(r.result); });
-      row.position.set(0, y);
-      content.addChild(row);
-      y += rowH;
+      stT.position.set(colW - 12, (rowH - 6) / 2);
+      card.addChild(stT);
+      card.eventMode = 'static';
+      card.cursor = 'pointer';
+      card.on('pointertap', () => { if (!suppressTap) ctx.openBreedCard(r.result); });
+      card.position.set(x, cardY);
+      content.addChild(card);
+    };
+    const rows = Math.max(leftCol.length, rightCol.length);
+    for (let row = 0; row < rows; row++) {
+      const ly = y + row * rowH;
+      const l = leftCol[row];
+      const rgt = rightCol[row];
+      if (l) placeCard(l, 0, ly);
+      if (rgt) placeCard(rgt, colW + gap, ly);
     }
+    y += rows * rowH;
     setupScroll(scroll, 'recipes', viewport, content, viewW, listH, y);
   }
 
