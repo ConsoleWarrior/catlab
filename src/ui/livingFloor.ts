@@ -7,6 +7,12 @@
  * rooms/shell.ts). У каждого кота есть глубина z∈[0,1]: вдали (z=1) он выше по
  * экрану, мельче и разброс по X уже; вблизи (z=0) — крупнее, ниже, шире. Ближние
  * коты рисуются поверх дальних (сортировка по экранному Y).
+ *
+ * Поведение — конечный автомат состояний (`ActorState`): большую часть времени
+ * коты отдыхают (сон/умывание/оглядывание), а не бесконечно бродят — так толпа
+ * читается спокойнее и реалистичнее. Тень — отдельный узел, не участвует в
+ * подскоке при ходьбе (только сам кот). Цели блуждания смещены в «зону» по полу
+ * (самцы слева, самки справа, котята в центре) мягко — без жёстких границ.
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
@@ -19,11 +25,15 @@ import type { FloorPlane } from './rooms/shell.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
+type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch';
+
 interface Actor {
   cat: Cat;
-  view: Container;
+  view: Container;         // якорь на полу (позиция = точка контакта с землёй)
+  body: Container;         // спрайт+ореол — только они «подпрыгивают» при ходьбе
   sprite: Sprite;
   glow: Sprite;              // светящийся ореол цвета редкости (под спрайтом)
+  shadow: Graphics;          // тень/кружок под котиком — остаётся на полу
   baseScale: number;
   busy: boolean;
   adult: boolean;            // вырос ли (для подписи и эффекта взросления)
@@ -33,15 +43,43 @@ interface Actor {
   targetZ: number;
   facing: 1 | -1;
   phase: number;
-  nextWander: number;
-  walking: boolean;
+  leapT: number;             // >0 — идёт редкий прыжок; счётчик оставшегося времени
+  leapVX: number;            // горизонтальная скорость прыжка (px/с, со знаком)
+  leapPending: boolean;      // в этом походе кот должен разок прыгнуть
+  turnT: number;             // >0 — доигрывается приседание при развороте
+  moodT: number;             // countdown до следующей проверки эмоции-пузырька
+  zoneU: number;             // предпочитаемая нормированная позиция по X (-1..1)
+  state: ActorState;
+  stateLeft: number;         // сколько ещё длится текущее состояние
+  stuckT: number;            // сколько подряд идущего кота толкают без продвижения — сдаётся и садится
+  pushed: number;            // накопленный за этот тик толчок от соседей (для детекта затора)
   infoIcon: Text | null; // значок ℹ️ над именем, пока изучаем инфо этого кота
 }
 
 interface GrowFx { view: Container; sparks: Text[]; ring: Graphics; life: number; ttl: number; }
+interface MoodFx { view: Text; life: number; ttl: number; vy: number; }
 
 const SPEED = 64;       // px/с по горизонтали (у ближнего края; вдали медленнее)
 const Z_SPEED = 0.18;   // доля глубины в секунду (медленный дрейф «вглубь/наружу»)
+const TURN_DUR = 0.14;  // с — длительность приседания при развороте
+const TURN_SQUASH_Y = 0.05; // лёгкое приседание при развороте — не «блин»
+const TURN_SQUASH_X = 0.09;
+const STRETCH_DUR = 1.0; // с — длительность потягивания после сна (вдвое медленнее)
+const STUCK_LIMIT = 0.8; // с — если идущего кота столько толкают и он не продвигается, он сдаётся и садится
+
+// Редкий прыжок: изредка (раз за поход) кот делает один быстрый скачок на пару
+// своих тел в сторону цели — с дугой в воздухе. Не серия, не «мячик».
+const LEAP_LEN = 2;      // длина прыжка, в высотах кота (catH)
+const LEAP_DUR = 0.34;   // с — длительность прыжка в воздухе
+const JUMP_CHANCE = 0.3; // доля походов, в которых кот делает один прыжок
+
+// Мягкие зоны пола: самцы тяготеют к левой трети, самки — к правой, котята — к
+// центру. ZONE_JITTER — разброс вокруг предпочитаемой точки (треугольное
+// распределение), ZONE_RANDOM_CHANCE — доля целей блуждания, выбираемых вовсе
+// без привязки к зоне (толпа слегка перемешивается, а не делится жёстко пополам).
+const ZONE_BIAS = 0.7;
+const ZONE_JITTER = 0.32; // +15% — зона шире тянется к центру, меньше пустоты между группами
+const ZONE_RANDOM_CHANCE = 0.2;
 
 // Память поз котов между пересборками комнат (ресайз окна пересоздаёт «живой
 // пол» целиком). Смещение по X храним нормированным (u = ox/maxOx ∈ [-1..1]),
@@ -59,6 +97,7 @@ export function createLivingFloor(
 ): { refresh(): void; tick(dt: number): void } {
   let actors: Actor[] = [];
   const effects: GrowFx[] = [];
+  const moodFx: MoodFx[] = [];
   const { centerX, yNear, yFar, nearHalfW, farHalfW, catH, farScale } = plane;
   layer.sortableChildren = true; // ближние коты (больший Y) рисуются поверх дальних
 
@@ -72,25 +111,69 @@ export function createLivingFloor(
     return Math.max(10, lerp(nearHalfW, farHalfW, z) - pad);
   };
 
+  function enterState(a: Actor, state: ActorState, dur: number): void {
+    a.state = state;
+    a.stateLeft = dur;
+  }
+
+  /** Новая цель блуждания: с вероятностью 80% — вокруг «своей» зоны (мягко,
+   * треугольный разброс), иначе — где угодно на полу (перемешивание толпы). */
+  function startWalk(a: Actor): void {
+    const nz = Math.random();
+    const m = maxOx(nz);
+    let u: number;
+    if (Math.random() < 1 - ZONE_RANDOM_CHANCE) {
+      u = a.zoneU + (Math.random() + Math.random() - 1) * ZONE_JITTER;
+      u = Math.max(-1, Math.min(1, u));
+    } else {
+      u = Math.random() * 2 - 1;
+    }
+    a.targetZ = nz;
+    a.targetOx = u * m;
+    a.leapT = 0;
+    a.leapPending = Math.random() < JUMP_CHANCE; // может, разок прыгнет по дороге
+    enterState(a, 'walk', 5 + Math.random() * 2); // страховка на случай недостижимой цели
+  }
+
+  /** После ходьбы коты в основном отдыхают (сон чаще всего), а не бродят без пауз. */
+  function pickNextState(a: Actor): void {
+    if (a.state === 'walk') {
+      const r = Math.random();
+      if (r < 0.5) {
+        enterState(a, 'sleep', 6 + Math.random() * 9);
+        spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * depthScale(a.z) * 0.9, 'Zz..'); // сразу как заснул
+      }
+      else if (r < 0.7) enterState(a, 'groom', 1.6 + Math.random() * 1.8);
+      else if (r < 0.88) enterState(a, 'lookaround', 1.3 + Math.random() * 1.5);
+      else enterState(a, 'idle', 0.7 + Math.random() * 1.1);
+    } else if (a.state === 'sleep') {
+      enterState(a, 'stretch', STRETCH_DUR); // потягивание перед тем, как встать
+    } else {
+      startWalk(a);
+    }
+  }
+
   function makeActor(cat: Cat, savedOx?: number, savedZ?: number, savedFacing?: 1 | -1, savedPhase?: number): Actor {
     const busy = isBusy(ctx.state, cat.id);
     const adult = isAdult(cat, ctx.now());
     const selected = ctx.selection.includes(cat.id);
     const view = new Container();
 
-    // тень/кружок под котиком (+ подсветка выбора для вязки)
-    const ring = new Graphics();
-    if (selected) ring.ellipse(0, -4, catH * 0.42, 12).fill({ color: COLORS.primary, alpha: 0.55 });
-    ring.ellipse(0, -2, catH * 0.34, 8).fill({ color: 0x000000, alpha: 0.12 });
-    view.addChild(ring);
+    // тень/кружок под котиком (+ подсветка выбора для вязки) — остаётся на полу,
+    // не подпрыгивает вместе с котом (см. body ниже)
+    const shadow = new Graphics();
+    if (selected) shadow.ellipse(0, -4, catH * 0.42, 12).fill({ color: COLORS.primary, alpha: 0.55 });
+    shadow.ellipse(0, -2, catH * 0.34, 8).fill({ color: 0x000000, alpha: 0.12 });
+    view.addChild(shadow);
 
+    const body = new Container();
     const sprite = aiSitSpriteFor(cat, catH) ?? catSprite(ctx.app, cat, catH);
     if (busy) sprite.alpha = 0.55;
     // ореол редкости — под спрайтом, чтобы наружу выходила лишь цветная кромка
     const glow = rarityGlow(sprite, cat.rarityTier, catH);
     if (busy) glow.alpha *= 0.5;
-    view.addChild(glow);
-    view.addChild(sprite);
+    body.addChild(glow, sprite);
+    view.addChild(body);
     const baseScale = sprite.scale.x;
 
     // подпись над котиком: имя (или порода по умолчанию, пока имя не задано) + значок пола,
@@ -142,11 +225,17 @@ export function createLivingFloor(
     view.eventMode = 'static';
     view.cursor = busy ? 'pointer' : 'grab';
 
+    // зона предпочтения по полу: самцы — левая треть, самки — правая, котята — центр
+    const zoneU = !adult ? 0 : (cat.genotype.sex === 'male' ? -ZONE_BIAS : ZONE_BIAS);
+
     const actor: Actor = {
-      cat, view, sprite, glow, baseScale, busy, adult,
+      cat, view, body, sprite, glow, shadow, baseScale, busy, adult,
       ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? mem?.facing ?? 1,
       phase: savedPhase ?? mem?.phase ?? Math.random() * 6,
-      nextWander: 0.5 + Math.random() * 2.5, walking: false, infoIcon: null,
+      leapT: 0, leapVX: 0, leapPending: false, turnT: 0, moodT: 2 + Math.random() * 6, zoneU,
+      state: 'idle', stateLeft: Math.random() * 3, // стартовая рассинхронизация, чтобы не все разом пошли бродить
+      stuckT: 0, pushed: 0,
+      infoIcon: null,
     };
 
     if (busy) {
@@ -197,6 +286,15 @@ export function createLivingFloor(
     effects.push({ view: c, sparks, ring, life: 0, ttl: 1.0 });
   }
 
+  /** Эмоция-пузырёк над котом: одиночный эмодзи всплывает и гаснет. */
+  function spawnMoodFx(x: number, y: number, emoji: string): void {
+    const t = label(emoji, 20, 0xffffff, '700', { color: 0x000000, width: 2 });
+    t.position.set(x, y);
+    t.zIndex = 1e6;
+    layer.addChild(t);
+    moodFx.push({ view: t, life: 0, ttl: 1.3, vy: -18 - Math.random() * 10 });
+  }
+
   function refresh(): void {
     const prev = new Map(actors.map((a) => [a.cat.id, a]));
     const cats = getCats();
@@ -213,6 +311,7 @@ export function createLivingFloor(
 
   function tick(dt: number): void {
     const now = ctx.now();
+    const focus = ctx.infoFocus();
     const matured: Actor[] = [];
     for (const a of actors) {
       a.phase += dt;
@@ -230,7 +329,6 @@ export function createLivingFloor(
 
       // значок ℹ️ над именем: изучаем инфо этого кота — держим значок, пока
       // меню открыто, и ещё 3 сек после закрытия, чтобы не потерять его в толпе
-      const focus = ctx.infoFocus();
       const focused = focus?.id === a.cat.id;
       const showIcon = focused && Date.now() < focus!.iconUntil;
       if (showIcon && !a.infoIcon) {
@@ -244,50 +342,167 @@ export function createLivingFloor(
       }
 
       if (a.busy || !a.view.visible || (focused && focus!.frozen)) continue;
-      a.nextWander -= dt;
-      if (a.nextWander <= 0) {
-        a.targetZ = Math.random();
-        a.targetOx = (Math.random() * 2 - 1) * maxOx(a.targetZ);
-        a.nextWander = 1.4 + Math.random() * 3;
-      }
-      // дрейф вглубь/наружу
-      const dz = a.targetZ - a.z;
-      const movingZ = Math.abs(dz) > 0.01;
-      if (movingZ) a.z += Math.sign(dz) * Math.min(Math.abs(dz), Z_SPEED * dt);
-      const dsz = depthScale(a.z);
-      // ход по горизонтали (скорость в пикселях падает с глубиной)
-      const dox = a.targetOx - a.ox;
-      const movingX = Math.abs(dox) > 3;
-      if (movingX) {
-        a.facing = (Math.sign(dox) || 1) as 1 | -1;
-        a.ox += a.facing * Math.min(Math.abs(dox), SPEED * dsz * dt);
-      }
-      const m = maxOx(a.z);
-      a.ox = Math.max(-m, Math.min(m, a.ox));
-      a.walking = movingX || movingZ;
 
-      a.view.x = centerX + a.ox;
-      const baseY = yAt(a.z);
-      const sp = a.sprite;
-      if (a.walking) {
-        // живой «подскок»: дуга вверх + сквош-стретч + наклон вперёд по ходу
-        const hop = Math.abs(Math.sin(a.phase * 10));
-        a.view.y = baseY - hop * catH * 0.07 * dsz;
-        const sy = 1 + (hop - 0.5) * 0.12;          // в воздухе тянется, на земле приплюснут
-        sp.scale.x = a.baseScale * a.facing * (1 / sy);
-        sp.scale.y = a.baseScale * sy;
-        sp.rotation += (a.facing * 0.06 - sp.rotation) * Math.min(1, dt * 8);
-      } else {
-        // покой: мягкое дыхание, выпрямляемся
-        a.view.y = baseY;
-        const breathe = 1 + Math.sin(a.phase * 2) * 0.02;
-        sp.scale.x = a.baseScale * a.facing;
-        sp.scale.y = a.baseScale * breathe;
-        sp.rotation += (0 - sp.rotation) * Math.min(1, dt * 8);
+      a.turnT = Math.max(0, a.turnT - dt);
+      a.moodT -= dt;
+      a.stateLeft -= dt;
+
+      // --- машина состояний: движение только в 'walk', иначе стоим на месте ---
+      let movingX = false, movingZ = false;
+      if (a.state === 'walk') {
+        const dz = a.targetZ - a.z;
+        movingZ = Math.abs(dz) > 0.01;
+        if (movingZ) a.z += Math.sign(dz) * Math.min(Math.abs(dz), Z_SPEED * dt);
+        const dsz = depthScale(a.z);
+        const dox = a.targetOx - a.ox;
+        movingX = Math.abs(dox) > 3;
+        if (a.leapT > 0) {
+          // идёт прыжок — летим по инерции скачка, обычный шаг не считаем
+          a.leapT -= dt;
+          a.ox += a.leapVX * dt;
+        } else if (movingX) {
+          const newFacing = (Math.sign(dox) || 1) as 1 | -1;
+          if (newFacing !== a.facing) { a.facing = newFacing; a.turnT = TURN_DUR; }
+          if (a.leapPending && Math.abs(dox) > LEAP_LEN * catH * dsz * 0.5) {
+            // старт редкого прыжка на пару тел в сторону цели
+            a.leapPending = false;
+            a.leapT = LEAP_DUR;
+            a.leapVX = a.facing * (LEAP_LEN * catH * dsz) / LEAP_DUR;
+            a.ox += a.leapVX * dt;
+          } else {
+            // обычный шаг — постоянная скорость, без разгона
+            a.ox += a.facing * Math.min(Math.abs(dox), SPEED * dsz * dt);
+          }
+        }
+        const m = maxOx(a.z);
+        a.ox = Math.max(-m, Math.min(m, a.ox));
+        if (a.leapT <= 0 && ((!movingX && !movingZ) || a.stateLeft <= 0)) pickNextState(a);
+      } else if (a.stateLeft <= 0) {
+        pickNextState(a);
       }
+
+      // --- поза по текущему состоянию ---
+      const turnDip = a.turnT > 0 ? Math.sin((1 - a.turnT / TURN_DUR) * Math.PI) : 0;
+      let sx = 1, sy = 1, rot = 0, bodyLift = 0, hop = 0;
+      switch (a.state) {
+        case 'walk': {
+          if (a.leapT > 0) {
+            // сам прыжок: дуга вверх-вниз + вытягивание тела в полёте
+            const p = 1 - Math.max(0, a.leapT) / LEAP_DUR; // 0 → 1
+            const arc = Math.sin(p * Math.PI);             // 0 → 1 → 0
+            hop = arc;
+            bodyLift = arc * catH * 0.2;
+            sy = (1 - arc * 0.08) * (1 - turnDip * TURN_SQUASH_Y);
+            sx = (1 + arc * 0.12) * (1 - turnDip * TURN_SQUASH_X);
+            rot = a.facing * 0.05 * arc;
+          } else {
+            // обычная ходьба: лёгкий постоянный подскок при движении, без разгона
+            const moving = movingX || movingZ;
+            hop = moving ? Math.abs(Math.sin(a.phase * 7)) : 0;
+            const squash = 1 + (hop - 0.5) * 0.1; // в воздухе тянется, на земле приплюснут
+            sy = squash * (1 - turnDip * TURN_SQUASH_Y);
+            sx = (1 / squash) * (1 - turnDip * TURN_SQUASH_X); // лёгкое приседание при развороте
+            rot = a.facing * 0.05 * (moving ? 1 : 0);
+            bodyLift = hop * catH * 0.07;
+          }
+          break;
+        }
+        case 'sleep': {
+          const breathe = 1 + Math.sin(a.phase * 0.8) * 0.015; // медленное дыхание во сне
+          sy = 0.96 * breathe; // едва осел, а не «блин»
+          sx = 1.02;
+          break;
+        }
+        case 'groom': {
+          sy = 1 + Math.sin(a.phase * 2) * 0.02;
+          rot = Math.sin(a.phase * 7) * 0.09; // быстрое умывание — покачивание
+          break;
+        }
+        case 'lookaround': {
+          const flipIdx = Math.floor(a.phase / 0.6);
+          const newFacing = (flipIdx % 2 === 0 ? 1 : -1) as 1 | -1;
+          if (newFacing !== a.facing) { a.facing = newFacing; a.turnT = TURN_DUR; }
+          sy = (1 + Math.sin(a.phase * 2) * 0.02) * (1 - turnDip * TURN_SQUASH_Y);
+          sx = 1 - turnDip * TURN_SQUASH_X;
+          break;
+        }
+        case 'stretch': {
+          const t = 1 - Math.max(0, Math.min(1, a.stateLeft / STRETCH_DUR));
+          const curve = Math.sin(t * Math.PI); // 0 → 1 → 0
+          sy = 1 + curve * 0.3;
+          sx = 1 - curve * 0.2;
+          break;
+        }
+        default: // 'idle' — просто дышим
+          sy = 1 + Math.sin(a.phase * 2) * 0.02;
+      }
+
+      const sp = a.sprite;
+      sp.scale.x = a.baseScale * a.facing * sx;
+      sp.scale.y = a.baseScale * sy;
+      sp.rotation += (rot - sp.rotation) * Math.min(1, dt * 8);
       // ореол повторяет позу кота (разворот/сквош/наклон)
       a.glow.scale.set(sp.scale.x * GLOW_OUT, sp.scale.y * GLOW_OUT);
       a.glow.rotation = sp.rotation;
+      // тень остаётся на полу — только «прижимается» при подскоке, не летает вместе с котом
+      a.shadow.scale.set(1 - hop * 0.15);
+      a.body.y = -bodyLift;
+
+      a.view.x = centerX + a.ox;
+      a.view.y = yAt(a.z);
+
+      // эмоция-пузырёк: редкая, чаще привязана к текущему занятию
+      if (a.moodT <= 0) {
+        a.moodT = 5 + Math.random() * 9;
+        let emoji: string | null = null;
+        if (a.state === 'sleep' && Math.random() < 0.5) emoji = 'Zz..';
+        else if (a.state === 'groom' && Math.random() < 0.5) emoji = '🧶';
+        else if (a.state === 'lookaround' && Math.random() < 0.5) emoji = '❓';
+        else if (a.state !== 'sleep' && Math.random() < 0.35) emoji = Math.random() < 0.5 ? '❤️' : '🐟';
+        if (emoji) spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * ds * 0.9, emoji);
+      }
+    }
+
+    // Расталкивание: толкается только ИДУЩИЙ кот — отдыхающий (сон/умывание/
+    // оглядывание/потягивание/стоит) остаётся неподвижным препятствием. Иначе
+    // сидячие коты «ползут» по сцене, а те, что уже устроились у стены, откуда
+    // толкать больше некуда, со временем выдавливаются к центру. Отдельным
+    // проходом — зоны задают лишь НАМЕРЕНИЕ цели блуждания, а не жёсткую позицию.
+    for (const a of actors) a.pushed = 0;
+    for (let i = 0; i < actors.length; i++) {
+      const a = actors[i]!;
+      if (a.busy || !a.view.visible || (focus?.id === a.cat.id && focus.frozen)) continue;
+      for (let j = i + 1; j < actors.length; j++) {
+        const b = actors[j]!;
+        if (b.busy || !b.view.visible || (focus?.id === b.cat.id && focus.frozen)) continue;
+        if (Math.abs(a.z - b.z) > 0.12) continue; // разная глубина — визуально не пересекаются
+        const aWalk = a.state === 'walk', bWalk = b.state === 'walk';
+        if (!aWalk && !bWalk) continue; // оба стоят/спят — не толкаемся
+        const dx = a.ox - b.ox;
+        const dist = Math.abs(dx);
+        const minDist = catH * 0.48 * depthScale((a.z + b.z) / 2);
+        if (dist >= minDist) continue;
+        const sign = dist > 0.001 ? Math.sign(dx) : (Math.random() < 0.5 ? 1 : -1);
+        const overlap = minDist - dist;
+        if (aWalk && bWalk) {
+          const push = overlap * 0.5 * sign;
+          a.ox += push; a.pushed += Math.abs(push);
+          b.ox -= push; b.pushed += Math.abs(push);
+        } else if (aWalk) {
+          a.ox += overlap * sign; a.pushed += overlap;
+        } else {
+          b.ox -= overlap * sign; b.pushed += overlap;
+        }
+      }
+    }
+    for (const a of actors) {
+      if (a.busy || !a.view.visible) continue;
+      const m = maxOx(a.z);
+      a.ox = Math.max(-m, Math.min(m, a.ox));
+      a.view.x = centerX + a.ox;
+      // застрял в толчее и не может пройти — не пихается бесконечно, сдаётся и садится
+      if (a.state === 'walk' && a.pushed > 1.5) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 2);
+      if (a.stuckT > STUCK_LIMIT) { a.stuckT = 0; pickNextState(a); }
     }
 
     // пересобираем повзрослевших — чтобы появилась подпись (имя/пол)
@@ -318,6 +533,17 @@ export function createLivingFloor(
         s.scale.set(0.6 + e * 0.7);
       });
       if (fx.life >= fx.ttl) { fx.view.destroy({ children: true }); effects.splice(k, 1); }
+    }
+
+    // всплывающие эмоции: дрейф вверх + затухание
+    for (let k = moodFx.length - 1; k >= 0; k--) {
+      const m = moodFx[k]!;
+      m.life += dt;
+      const t = Math.min(1, m.life / m.ttl);
+      m.view.y += m.vy * dt;
+      m.view.alpha = 1 - t;
+      m.view.scale.set(0.8 + t * 0.3);
+      if (m.life >= m.ttl) { m.view.destroy(); moodFx.splice(k, 1); }
     }
   }
 
