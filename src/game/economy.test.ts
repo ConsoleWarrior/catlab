@@ -3,12 +3,12 @@ import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, nurseryCapacity, shelterCapacity, incubationDuration,
   mutationRate, offlineCapMin, upgradeCost, upgradeMaxed, passiveRatePerMin,
-  adoptReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue,
+  adoptReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue, ORDER_TARGET,
 } from './index.js';
 import * as C from './config.js';
 
 describe('createInitialState', () => {
-  it('стартовые ресурсы, пара котов, 1 слот и 3 заказа', () => {
+  it('стартовые ресурсы, пара котов, 1 слот и полная доска заказов', () => {
     const s = createInitialState(makeRng(1), 0);
     expect(s.coins).toBe(100);
     expect(s.crystals).toBe(5);
@@ -18,7 +18,8 @@ describe('createInitialState', () => {
     expect(s.cats.some((c) => c.genotype.sex === 'female')).toBe(true);
     expect(s.cats.some((c) => c.genotype.sex === 'male')).toBe(true);
     expect(s.slots).toHaveLength(1);
-    expect(s.orders).toHaveLength(3);
+    expect(s.orders).toHaveLength(ORDER_TARGET); // доска заказов выдаётся сразу целиком
+    expect(s.orderBasket).toBeNull();
   });
 });
 

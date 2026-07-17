@@ -81,12 +81,19 @@ export interface OrderReward {
   reputation: number;
 }
 
+/**
+ * Заказ клиента. Заказы живут ровно сутки: доска — это ORDER_TARGET фиксированных
+ * слотов, которые целиком перевыпускаются в полночь по Москве (см. orders.rollDailyOrders).
+ * Внутри суток заказ никуда не девается: выполненный остаётся на доске помеченным
+ * (done), обновлённый рекламой заменяется на месте.
+ */
 export interface Order {
   id: string;
   req: OrderReq;
   reward: OrderReward;
   createdAt: number;
-  expiresAt: number;         // 0 — бессрочный
+  done: boolean;             // выполнен — до следующей смены суток слот занят
+  adRefreshed: boolean;      // 📺-замена этого слота уже использована сегодня
 }
 
 /** Полное игровое состояние. */
@@ -114,6 +121,10 @@ export interface GameState {
   cryo: Cat[];                      // замороженные коты в криокапсулах (крио-банк): не едят/не доход/не вязка
   unlockedRooms: RoomId[];
   orders: Order[];
+  ordersDay: number;                // номер московских суток, на которые выданы orders (см. orders.mskDay)
+  // Корзина заказов (зона в Приюте): кот, которым можно закрыть заказ. Выполнить
+  // заказ можно ТОЛЬКО котом из корзины — id, либо null, если корзина пуста.
+  orderBasket: string | null;
   champions: (string | null)[];     // id кота-чемпиона по индексу пьедестала (null — слот пуст)
   food: number;                     // запас корма в кормушке (ед.); мягкий голод при 0
   lastSeenAt: number;               // для офлайн/пассивного дохода

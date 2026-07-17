@@ -29,16 +29,17 @@
 ## 1. Стиль-блок (позитив, общий) — ПРЕПЕНДИТЬ В КАЖДЫЙ ПРОМТ
 
 ```
-(looking directly at the viewer:1.4), direct eye contact, both eyes facing forward,
-front view, game asset, masterpiece, best quality, single charming 3D cartoon adult
-cat, endearing sweet but with natural adult cat proportions, slightly slender adult
-body, normal muzzle, expressive eyes with bright catchlights, clean crisp details,
+(looking directly at the viewer:1.6), (direct eye contact:1.3), both eyes facing
+forward, front view, game asset, masterpiece, best quality, single charming 3D cartoon
+adult domestic cat, endearing sweet with natural adult cat proportions, normal rounded
+cat body, normal muzzle, expressive eyes with bright catchlights, clean crisp details,
 Pixar-style 3D cartoon look rendered as a clean flat 2D game sprite, soft volumetric
 shading, smooth gradient shading, subtle ambient occlusion, soft studio lighting, high
-detail, centered composition, full body in frame, symmetrical pose, sitting upright
-facing the viewer head-on, front paws together, clear visible neck with natural neck
-fur, {TAIL}, mobile game character art, sticker style, isolated on a uniform flat light
-grey background
+detail, centered composition, full body in frame, symmetrical pose, (sitting calmly on
+the ground facing the viewer head-on:1.3), hind legs folded down, front paws planted
+flat on the ground, clear visible neck with natural neck fur, {TAIL}, (face pointed
+straight at the camera:1.3), mobile game character art, sticker style, isolated on a
+uniform flat light grey background
 ```
 
 > ⚠️ **Взгляд в камеру** — ведущая фраза промта, с весом `1.4` (без неё много котов
@@ -72,15 +73,35 @@ multiple tails, split tail, extra tail, (kitten:1.4), (baby cat:1.4), (chibi:1.3
 oversized head, huge head, oversized huge eyes, ugly, creepy, scary,
 angry, photorealistic photo, sketch, monochrome, harsh shadows, dark, gloomy, busy
 background, scenery, furniture, gradient background, shadow on background, text, caption,
-watermark, signature, logo, multiple cats, two cats, cropped, out of frame, side view,
-profile view, turned away, looking away, looking to the side, side glance, averted eyes,
-eyes looking sideways, head turned away, three-quarter view, tilted head, rotated,
-standing, standing up on all fours, walking pose, jumping, motion blur, noise,
+watermark, signature, logo, multiple cats, two cats, cropped, out of frame, (side view:1.3),
+(profile view:1.3), turned away, (looking away:1.4), (looking to the side:1.4),
+(side glance:1.3), (averted eyes:1.3), (eyes looking sideways:1.4),
+(head turned away:1.3), (three-quarter view:1.3), (tilted head:1.2), rotated,
+(standing:1.3), (standing up on all fours:1.3), (walking pose:1.3), (jumping:1.2),
+(standing on hind legs:1.4), (bipedal:1.4), (meerkat pose:1.4), (begging pose:1.3),
+anthropomorphic, weasel, mongoose, squirrel, ferret, elongated body, motion blur, noise,
 oversaturated, neon colors, human, hands, toys, accessories
 ```
 
+> **P3.2 фикс (взгляд/поза/белая грудь):** вес взгляда поднят до `1.6` + добавлена
+> вторая фраза-подкрепление `(face pointed straight at the camera:1.3)` в хвосте
+> позитива; все термины «смотрит не туда»/«стоит» в негативе довешены до 1.3-1.4
+> (раньше часть шла без веса — слабее давила); поза `sitting` тоже взвешена `1.3`.
+> **Белая грудь не по породе:** SDXL по умолчанию тянет к «тюксидо»-пятну на груди —
+> добавлен негатив-довесок `(white chest patch:1.3), (white chest fur:1.3), (white
+> bib marking:1.2), (white belly patch:1.2), (tuxedo cat pattern:1.3), unwanted
+> bicolor white patches`, добавляется КО ВСЕМ породам КРОМЕ реально белых/бело-пятнистых
+> (turkish_angora, персидский белый и т.п. — им эту довеску пропускаем).
+
 > Поза «стоя» вылезает у пород с акцентом на лапы/рост (саванна, манчкин) — держим
 > сидячую позу через `standing, walking pose, jumping` в негативе + `sitting upright` в §1.
+> **P3.1 «меркат»-фикс:** у стройных/атлетичных пород (абиссинская и т.п.) слово
+> `slender` в стиль-блоке провоцировало стойку на задних лапах столбиком (как
+> суриката/мангуст) — убрано из §1 (`slender` → `normal rounded cat body`), поза
+> переформулирована явно через контакт с землёй (`sitting calmly on the ground,
+> hind legs folded down, front paws planted flat on the ground`), в негатив добавлены
+> `(standing on hind legs:1.4), (bipedal:1.4), (meerkat pose:1.4), (begging pose:1.3),
+> anthropomorphic, weasel, mongoose, squirrel, ferret, elongated body`.
 
 Добавлено (часть — из промта пользователя): **взвешенные ошейники**
 `(collar:1.3),(bell collar:1.3),(neck accessories:1.2),(necklace:1.2)` — главный брак

@@ -4,15 +4,24 @@
 Методичка — [ART_PROMPTS.md](ART_PROMPTS.md). Драйвер — `scratchpad/gen_breeds.sh`.
 
 ## Где файлы
-- **Кандидаты (прод):** `Z:/AI/out/gen/<key>_<m|f>_seed<seed>.png`
+- **Кандидаты (прод):** `Z:/AI/out/gen/<key>/<key>_<m|f>_seed<seed>.png` (с 2026-07-14 — папка на породу)
+- **Кандидаты (стиль промта пользователя):** `Z:/AI/out/gen2/<key>/<key>_<m|f>_seed<seed>.png` (простой `3D cute cartoon`, 5 сидов/пол; драйвер `scratchpad/gen_user.sh`)
 - **Пилот:** `Z:/AI/out/pilot/<key>_<m|f>_seed<seed>.png`
-- **Контакт-листы:** `Z:/AI/out/{gen,pilot}/contact_<key>.png`
 - **Финал в игру:** `src/assets/breeds/<key>__<male|female>.png` (после вырезки фона + нормализации)
+
+## Правила ревью (2026-07-14)
+Смотрит сам пользователь — я не разбираю картинки и не пишу вердикты по качеству,
+пока не попросит. Артефакт-галерею больше не делаю. Строго 4 породы за прогон,
+после — «готово, смотри» и стоп. Подробности — память `catlab-sprite-review-workflow`.
 
 ## Версии промта (чтобы понимать разброс стиля)
 - **P1 (пилот):** первый стиль-блок. `cute young adult`, взгляд без веса. Чуть реалистичнее, местами взгляд вбок.
 - **P2 (партия 2):** + фикс взгляда, collar-gotcha (убран `no collar` из позитива), вес ошейника 1.5. Стиль милее.
 - **P3 (партия 3):** взгляд ведущей фразой с весом 1.4; убрана «детскость» (`charming adult cat`, анти-котёнок весом); +bandana/scarf в негатив; манчкину усилены лапы.
+- **P3.1 (после партии 4):** фикс «меркат»-позы (стройные породы вставали столбиком) — убрано `slender` из стиль-блока, поза переформулирована через контакт с землёй, +anti-bipedal/meerkat/anthropomorphic в негатив. Применён к abyssinian regen.
+- **P3.2 (партия 5):** взгляд поднят до веса 1.6 + вторая фраза-подкрепление в конце позитива; все «смотрит не туда»/«стоит» термины в негативе довешены 1.3-1.4 (были без веса); +анти-«белая грудь» довесок в негатив ко всем породам кроме реально белых/бело-пятнистых (флаг `_ALLOWWHITE` в драйвере).
+- **U1 (партия 6, gen2):** промт ПОЛЬЗОВАТЕЛЯ из seeds.txt за основу — простой стиль `3D cute cartoon`, `sitting posture`, его негативы + мои довески (анти-стойка, анти-«белая грудь» кроме japanese_bobtail, гейт хвоста для manx=бесхвостый). Драйвер `scratchpad/gen_user.sh`, папка `gen2`, 5 сидов/пол.
+- **U2 (партия 7, gen2):** 7 лысых/сфинксовых пород, различаем признаками: загнутые уши (elf/dwelf/lykoi_elf), короткие ноги (bambino/minskin/dwelf), шерсть на точках (minskin), ориентальное тело+огромные уши (peterbald), роан-«оборотень» (lykoi/lykoi_elf). У полностью лысых — анти-мех негатив; у роановых — ALLOWWHITE, чтобы редкая шерсть осталась. Пер-породные негативы через `BR_<key>_NEG`.
 
 ## Статус пород
 
@@ -29,15 +38,35 @@
 | munchkin | 3 | P3 | 1000–1002 | ✅ лапы ок (♂1002 ошейник; сид. ♂1000/1001, ♀1000/1002) | — | — |
 | bengal | 3 | P2 | 1000–1002 | ✅ без брака | — | — |
 | cornish_rex | 3 | P3 | 1000–1002 | ⚠️ кудри слабоваты (можно перегенерить) | — | — |
-| kurilian_bobtail | 3 | P3 | 1000–1002 | ✅ помпон ок | — | — |
+| kurilian_bobtail | 3 | P3 / U1 | 1000–1002 / 1000–1004 | ⏳ есть 2 версии: gen (P3) и gen2 (U1) | — | — |
 | russian_blue | 2 | P3 | 1000–1002 | ✅ эталон, без брака | — | — |
 | savannah | 5 | P3 | 1000–1002 | ✅ (сид. ♂1001/1002, ♀1001/1002) | — | — |
+| domestic_shorthair | 1 | P3 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| domestic_longhair | 1 | P3 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| british_shorthair | 2 | P3 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| birman | 2 | P3 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| abyssinian | 2 | P3.1 | 1000–1002 | ⏳ перегенерено (фикс позы), ждёт ревью | — | — |
+| thai | 2 | P3.2 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| turkish_angora | 2 | P3.2 | 1000–1002 | ⏳ сгенерено (ALLOWWHITE — порода реально белая), ждёт ревью | — | — |
+| siberian | 3 | P3.2 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| neva_masquerade | 3 | P3.2 | 1000–1002 | ⏳ сгенерено, ждёт ревью | — | — |
+| manx | 3 | U1 | 1000–1004 | ⏳ gen2, бесхвостый, ждёт ревью | — | — |
+| norwegian_forest | 3 | U1 | 1000–1004 | ⏳ gen2, ждёт ревью | — | — |
+| ocicat | 3 | U1 | 1000–1004 | ⏳ gen2, ждёт ревью | — | — |
+| japanese_bobtail | 3 | U1 | 1000–1004 | ⏳ gen2, помпон + белый (ми-кэ ♀), ждёт ревью | — | — |
+| bambino | 4 | U2 | 1000–1004 | ⏳ gen2, лысый + короткие ноги, ждёт ревью | — | — |
+| elf | 4 | U2 | 1000–1004 | ⏳ gen2, лысый + загнутые уши, ждёт ревью | — | — |
+| minskin | 4 | U2 | 1000–1004 | ⏳ gen2, лысое тело + шерсть на точках + короткие ноги, ждёт ревью | — | — |
+| peterbald | 4 | U2 | 1000–1004 | ⏳ gen2, ориентальный тип, огромные уши, ждёт ревью | — | — |
+| lykoi | 4 | U2 | 1000–1004 | ⏳ gen2, роан-«оборотень», ждёт ревью | — | — |
+| dwelf | 5 | U2 | 1000–1004 | ⏳ gen2, лысый + короткие ноги + загнутые уши, ждёт ревью | — | — |
+| lykoi_elf | 5 | U2 | 1000–1004 | ⏳ gen2, роан-«оборотень» + загнутые уши, ждёт ревью | — | — |
 
-**Готово пород: 12 из 70.** Столбцы «Выбор» заполняем, когда назовёшь номера.
+**Готово пород: 32 из 70.** Столбцы «Выбор» заполняем, когда назовёшь номера.
 
 ## Осталось сгенерировать (по тирам)
-- **T1:** moggie(база), domestic_shorthair, domestic_longhair
-- **T2:** british_shorthair, thai, turkish_angora, siberian, neva_masquerade, american_shorthair, exotic_shorthair, abyssinian, birman, european_shorthair, russian_blue✅
-- **T3:** norwegian_forest, ragdoll, donskoy, devon_rex, japanese_bobtail, burmese, somali, ocicat, chartreux, oriental_shorthair, tonkinese, himalayan, manx, balinese, turkish_van
-- **T4:** american_curl, elf, bambino, skookum, minskin, lykoi, chausie, khao_manee, singapura, selkirk_rex, pixiebob, toyger, kinkalow, peterbald, egyptian_mau, laperm, american_wirehair, sokoke, burmilla, havana, ojos_azules
-- **T5:** caracat, ashera, dwelf, serengeti, cheetoh, safari, california_spangled, khao_manee_diamond, lykoi_elf
+- **T1:** moggie(база)
+- **T2:** american_shorthair, exotic_shorthair, european_shorthair
+- **T3:** ragdoll, donskoy, devon_rex, burmese, somali, chartreux, oriental_shorthair, tonkinese, himalayan, balinese, turkish_van
+- **T4:** american_curl, skookum, chausie, khao_manee, singapura, selkirk_rex, pixiebob, toyger, kinkalow, egyptian_mau, laperm, american_wirehair, sokoke, burmilla, havana, ojos_azules
+- **T5:** caracat, ashera, serengeti, cheetoh, safari, california_spangled, khao_manee_diamond

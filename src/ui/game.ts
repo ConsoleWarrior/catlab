@@ -19,7 +19,7 @@ import {
   moveCat, clearBreederSlot, keepKittenWithParents,
   nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
-  finishRecipeResearch,
+  finishRecipeResearch, rollDailyOrders,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -123,7 +123,6 @@ export class Game implements UiContext {
   private levelT!: Text;
   private levelBar!: Graphics;   // прогресс опыта до следующего уровня (под ⭐ Ур.)
   private shownLevel = 1;        // последний показанный уровень (для баннера повышения)
-  private ordersBtn!: Button;
   private dots: Graphics[] = [];
   private hudPad = 0;            // левый отступ ряда ресурсов
   private hudGap = 0;            // зазор между ресурсами в ряду
@@ -176,7 +175,7 @@ export class Game implements UiContext {
     await Promise.all(Object.entries(baseAssets).map(async ([path, url]) => {
       const name = path.split('/').pop()!.replace('.png', ''); // <sex>__<n>
       const sex: Sex = name.startsWith('female') ? 'female' : 'male';
-      try { addBaseTexture(sex, await Assets.load(url)); } catch { /* фолбэк */ }
+      try { addBaseTexture(sex, await Assets.load(url), name); } catch { /* фолбэк */ }
     }));
 
     // Готовые фоны комнат («комната-коробка» в нашей перспективе) — по имени файла
@@ -865,18 +864,14 @@ export class Game implements UiContext {
     help.position.set(w - pad - helpW / 2, ti / 2);
     help.onTap = () => this.openHelp();
 
-    const ordW = Math.round(Math.max(120, Math.min(180, w * 0.16)));
-    this.ordersBtn = new Button({ text: '📋 Заказы', w: ordW, h: bh, color: COLORS.warn, fontSize: fs });
-    this.ordersBtn.position.set(w - pad - helpW - 8 - ordW / 2, ti / 2);
-    this.ordersBtn.onTap = () => this.openOrders();
-    this.hud.addChild(help, this.ordersBtn);
+    this.hud.addChild(help);
 
     // ⚠️ ВРЕМЕННОЕ: кнопка режима разработчика (валюты/уровень). Только в dev-сборке
     // (в проде для Яндекса не появляется). Удалить вместе с buildDevMenu перед релизом.
     if (import.meta.env.DEV) {
       const devW = Math.round(ti * 0.92);
       const dev = new Button({ text: '🛠', w: devW, h: bh, color: COLORS.warn, textColor: COLORS.ink, fontSize: fs + 2 });
-      dev.position.set(w - pad - helpW - 8 - ordW - 8 - devW / 2, ti / 2);
+      dev.position.set(w - pad - helpW - 8 - devW / 2, ti / 2);
       dev.onTap = () => this.openDevMenu();
       this.hud.addChild(dev);
     }
@@ -891,7 +886,6 @@ export class Game implements UiContext {
     this.crystalsT.text = `💎 ${fmt(this.state.crystals)}`;
     this.dnaT.text = `🧬 ${fmt(this.state.dna)}`;
     this.levelT.text = `⭐ Ур. ${this.state.level}`;
-    this.ordersBtn.setText(`📋 Заказы (${this.state.orders.length})`);
 
     // ряд ресурсов слева: деньги и доход/мин стоят рядом, дальше кристаллы/ДНК/уровень.
     // Раскладка по реальной ширине текста — компактнее фиксированных слотов и без наезда.
@@ -1211,6 +1205,13 @@ export class Game implements UiContext {
         const base = born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾';
         this.toast(rep ? `${base} +${rep} ⭐` : base);
       } else if (dead) this.toast('Котёнок не выжил 😿');
+    }
+
+    // доска заказов живёт сутками: в московскую полночь все слоты перевыпускаются
+    // (внутри суток вызов — no-op, поэтому проверяем каждый кадр без опаски)
+    if (rollDailyOrders(this.state, this.rng, this.now())) {
+      this.commit();
+      this.toast('📋 Новые заказы на день! Загляни в Приют');
     }
 
     // стол исследований (Генолаб → Исследования): таймер дошёл → открываем

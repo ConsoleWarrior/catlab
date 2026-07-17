@@ -44,15 +44,16 @@ describe('catMarketValue', () => {
 });
 
 describe('корм и мягкий голод', () => {
-  it('расход корма 0 до лимита котов, растёт сверх лимита (механика открыта)', () => {
+  it('едят все коты без бесплатного лимита, аппетит — по тиру', () => {
     const s = createInitialState(makeRng(4), 0);
     s.level = 3; // кормушка открывается уровнем лаборатории
     s.cats = [];
-    for (let i = 0; i < C.FEED_FREE_CATS; i++) addCat(s, 'moggie');
-    expect(foodRatePerMin(s)).toBe(0);
-    addCat(s, 'moggie');
-    addCat(s, 'moggie');
-    expect(foodRatePerMin(s)).toBeCloseTo(2 * C.FOOD_PER_CAT_PER_MIN);
+    expect(foodRatePerMin(s)).toBe(0); // котов нет — есть некому
+    addCat(s, 'moggie');               // T1: первый же кот ест (бесплатных нет)
+    expect(foodRatePerMin(s)).toBeCloseTo(C.FOOD_PER_MIN_BY_TIER.common);
+    addCat(s, 'british_shorthair');    // T2
+    addCat(s, 'maine_coon');           // T3
+    expect(foodRatePerMin(s)).toBeCloseTo(0.1 + 0.2 + 0.3);
   });
 
   it('ниже гейта кормушки (искусственный ур.0) корм не расходуется и голода нет', () => {

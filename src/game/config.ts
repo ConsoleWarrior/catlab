@@ -6,7 +6,10 @@
 import type { RarityTier, BreedBoosts, KinshipLevel } from '../genetics/index.js';
 import type { Currency } from './types.js';
 
-export const SAVE_VERSION = 6; // v6: многоуровневое дерево исследований (state.research: id→уровень) — старые сейвы сбрасываются
+// v7: суточная доска заказов — Order сменил expiresAt на done/adRefreshed, добавлены
+// state.ordersDay и state.orderBasket. v6: многоуровневое дерево исследований
+// (state.research: id→уровень). Старые сейвы сбрасываются загрузчиком по этой версии.
+export const SAVE_VERSION = 7;
 
 /** Ценность кота по тиру редкости: образец (🧬), пассив питомника (💰/мин, легаси). */
 export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; incomePerMin: number }> = {
@@ -46,14 +49,18 @@ export const LAB_DNA_RATE = 0.08;             // 🧬 = round(catMarketValue × 
 export const LAB_COIN_RATE = 0.05;            // немного 💰 сверху
 
 // --- Корм (контейнер + мягкий голод, этап B) ---
-// У кормушки есть запас `state.food`, который расходуется, пока в приюте/питомнике
-// живут коты сверх бесплатного лимита. Кончился корм → пассивный доход стоит и
-// новые вязки не стартуют (коты «грустят»), но сердца НЕ сгорают и казна в минус не
+// У кормушки есть запас `state.food`, который расходуется, пока живы коты: едят ВСЕ
+// коллекции (питомник, приют, слоты вязки, пьедесталы выставки) — кроме замороженных
+// в крио-банке (они физически не в state.cats). Кончился корм → пассивный доход стоит
+// и новые вязки не стартуют (коты «грустят»), но сердца НЕ сгорают и казна в минус не
 // уходит (мягкий голод). Механика открывается уровнем лаборатории (LAB_UNLOCKS.food).
 export const FOOD_CAP_BASE = 200;             // ёмкость кормушки (ед.); расширение — узлом исследований (этап C)
-export const FOOD_PER_CAT_PER_MIN = 0.2;      // расход корма на кота сверх лимита в минуту
-export const FEED_FREE_CATS = 3;              // первые N котов не едят (стартовый комфорт)
-export const FOOD_PACK_UNITS = 50;            // размер пакета корма (кнопка «Купить»)
+// Аппетит по тиру: чем породистее кот, тем дороже его содержать (0.1 → 0.5 ед./мин).
+// Это делает «свалку» дворовых дешёвой, а коллекцию легендарных — статьёй расходов.
+export const FOOD_PER_MIN_BY_TIER: Record<RarityTier, number> = {
+  common: 0.1, uncommon: 0.2, rare: 0.3, epic: 0.4, legendary: 0.5,
+};
+export const FOOD_PACK_UNITS = 50;            // размер пакета корма (кнопка «＋50»)
 export const FOOD_PACK_COST = 25;             // 💰 за пакет (цена «до полного» — пропорциональна)
 
 // --- Выставка / чемпионы ---
@@ -71,8 +78,14 @@ export const SPEEDUP_CRYSTAL_MIN = 1;         // но минимум 1 💎
 export const AD_SKIP_MS = 5 * 60_000;         // −5 мин за просмотр рекламы (первый прикид, тюнится)
 
 // --- Заказы (продажа котов клиентам) ---
-export const ORDER_TTL_MS = 20 * 60_000;      // 20 мин жизни заказа (ротация); 0 — бессрочно
-export const ORDER_TARGET = 4;                // сколько заказов держать в списке
+// Доска заказов = ORDER_TARGET фиксированных слотов, перевыпуск раз в сутки в
+// полночь по Москве. Внутри суток доска не ротируется: выполненный заказ остаётся
+// помеченным, а каждый невыполненный слот игрок может один раз заменить за 📺.
+export const DAY_MS = 24 * 60 * 60_000;
+// MSK = UTC+3 круглый год (с 2014 в России нет перехода на летнее время), поэтому
+// фиксированный сдвиг корректен и не зависит от таймзоны устройства игрока.
+export const MSK_OFFSET_MS = 3 * 60 * 60_000;
+export const ORDER_TARGET = 4;                // сколько слотов на доске заказов
 export const ORDER_COIN_MULT = 1.0;           // заказ платит ≈ полную рыночную цену
 export const ORDER_DNA_MULT = 0.03;           // 🧬-бонус за заказ (доля ценности)
 export const ORDER_REP_MULT = 0.15;           // ⭐ опыт за заказ ∝ ценности (главный источник)
@@ -336,7 +349,7 @@ export const RESEARCH: readonly ResearchDef[] = [
       { cost: 1800, value: 0.30, minLevel: 6 },
       { cost: 5000, value: 0.40, minLevel: 9 },
     ] },
-  { id: 'r_collection', glyph: '📖', title: 'Коллекционер', desc: '+0.25 💰/мин за каждую открытую породу за уровень',
+  { id: 'r_collection', glyph: '📖', title: 'Коллекционер', desc: '+0.25 💰/мин за каждую ВЫВЕДЕННУЮ породу за уровень',
     currency: 'coins', effectKind: 'collectionIncome', requires: ['r_show'], col: 1, row: 1, levels: [
       { cost: 900, value: 0.25, minLevel: 5 },
       { cost: 2600, value: 0.25, minLevel: 7 },

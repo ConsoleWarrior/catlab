@@ -180,12 +180,14 @@ function showMult(state: GameState): number {
  * Пассивный доход выставки (💰/мин, ДО вычета корма). Приносят ТОЛЬКО коты-чемпионы
  * (выставленные на пьедесталы), доход каждого ∝ его рыночной ценности; сумма
  * умножается на «Выставку» и исследования дохода. Нет чемпионов → дохода нет
- * (кроме бонуса «Коллекционер» за открытые породы).
+ * (кроме бонуса «Коллекционер» за выведенные породы).
  */
 export function passiveRatePerMin(state: GameState): number {
   let rate = 0;
   for (const c of championCats(state)) rate += catMarketValue(c) * C.CHAMPION_INCOME_RATE;
-  // «Коллекционер»: +доход за каждую открытую породу
+  // «Коллекционер»: +доход за каждую ВЫВЕДЕННУЮ породу. discoveredBreeds наполняет только
+  // makeCatInstance (реально полученный кот); рецепт, открытый исследованием в Генолабе,
+  // лежит в knownRecipes и дохода не даёт.
   rate += state.discoveredBreeds.length * researchBonus(state, 'collectionIncome');
   return rate * showMult(state);
 }
@@ -218,15 +220,29 @@ export function feedEfficiency(state: GameState): number {
   return Math.min(0.9, researchBonus(state, 'feedEff'));
 }
 
+/** Аппетит одного кота (ед./мин) до скидок — зависит от тира: 0.1 (дворовый) … 0.5 (легендарный). */
+export function catFoodPerMin(cat: Cat): number {
+  return C.FOOD_PER_MIN_BY_TIER[cat.rarityTier];
+}
+
 /**
- * Расход корма (ед./мин): коты сверх бесплатного лимита, со скидкой «Экономного
+ * Сколько ртов на довольствии: едят ВСЕ коты коллекции (питомник, приют, слоты вязки,
+ * пьедесталы), кроме замороженных в крио-банке — те лежат в state.cryo, а не в cats.
+ */
+export function feedingCatCount(state: GameState): number {
+  return state.cats.length;
+}
+
+/**
+ * Расход корма (ед./мин): сумма аппетитов всех котов (по тиру), со скидкой «Экономного
  * рациона». 0, пока механика не открыта уровнем лаборатории (тогда голода нет и
  * доход считается по-старому — только пассив).
  */
 export function foodRatePerMin(state: GameState): number {
   if (!foodEnabled(state)) return 0;
-  const billable = Math.max(0, state.cats.length - C.FEED_FREE_CATS);
-  return billable * C.FOOD_PER_CAT_PER_MIN * (1 - feedEfficiency(state));
+  let sum = 0;
+  for (const cat of state.cats) sum += catFoodPerMin(cat);
+  return sum * (1 - feedEfficiency(state));
 }
 
 /** Голодают ли коты: корм открыт, есть расход и запас на нуле. */
@@ -259,6 +275,21 @@ export function consumeFood(state: GameState, elapsedMin: number): number {
 /** Чистый доход в минуту: пассив выставки; при голоде — 0 (коты не работают). */
 export function netIncomePerMin(state: GameState): number {
   return isStarving(state) ? 0 : passiveRatePerMin(state);
+}
+
+/**
+ * Сколько корма добавит покупка и почём: пакет (FOOD_PACK_UNITS) или «до полного».
+ * Цена всегда пропорциональна добавленным единицам — единая формула для кнопок UI и
+ * самой покупки (buyFood), чтобы подпись цены не разъезжалась с списанием.
+ */
+export function foodBuyQuote(state: GameState, mode: 'pack' | 'full'): { units: number; cost: number } {
+  const room = Math.max(0, foodCap(state) - foodLevel(state));
+  // Меньше единицы места — считаем кормушку полной: иначе «＋50» продавал бы остаток
+  // 0.3 ед. по цене, округлённой вверх до 1 💰 (запас всегда дробный из-за расхода по кадрам).
+  if (room < 1) return { units: 0, cost: 0 };
+  const units = mode === 'full' ? room : Math.min(C.FOOD_PACK_UNITS, Math.floor(room));
+  const perUnit = C.FOOD_PACK_COST / C.FOOD_PACK_UNITS;
+  return { units, cost: Math.max(1, Math.round(units * perUnit)) };
 }
 
 /** Включена ли «Автокормушка» (исследование r_autofeed + механика корма открыта). */
@@ -503,6 +534,23 @@ export function championAt(state: GameState, slotIndex: number): Cat | null {
 /** Выставлен ли кот чемпионом (на любом пьедестале). */
 export function isChampion(state: GameState, catId: string): boolean {
   return (state.champions ?? []).includes(catId);
+}
+
+// --- Корзина заказов (зона в Приюте) ---
+
+/**
+ * Кот, стоящий в корзине заказов (null — корзина пуста). Ссылка проверяется по
+ * живой коллекции: кот мог уехать по заказу/в лабораторию или попасть в крио.
+ */
+export function basketCat(state: GameState): Cat | null {
+  const id = state.orderBasket;
+  if (!id) return null;
+  return state.cats.find((c) => c.id === id) ?? null;
+}
+
+/** Кот сидит в корзине заказов (на полу его не рисуем — он «в переноске»). */
+export function isInBasket(state: GameState, catId: string): boolean {
+  return state.orderBasket === catId;
 }
 
 /** Стоимость мгновенного завершения таймера (💎) по остатку времени. */

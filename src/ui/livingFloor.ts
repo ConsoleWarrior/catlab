@@ -23,6 +23,7 @@ import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import type { FloorPlane } from './rooms/shell.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
+import { attachBlink, type Blinker } from './eyeBlink.js'; // [BLINK-TEST]
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
 type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch';
@@ -48,6 +49,7 @@ interface Actor {
   leapPending: boolean;      // в этом походе кот должен разок прыгнуть
   turnT: number;             // >0 — доигрывается приседание при развороте
   moodT: number;             // countdown до следующей проверки эмоции-пузырька
+  blink: Blinker | null;     // [BLINK-TEST] процедурное моргание (только дворовые)
   zoneU: number;             // предпочитаемая нормированная позиция по X (-1..1)
   state: ActorState;
   stateLeft: number;         // сколько ещё длится текущее состояние
@@ -167,7 +169,8 @@ export function createLivingFloor(
     view.addChild(shadow);
 
     const body = new Container();
-    const sprite = aiSitSpriteFor(cat, catH) ?? catSprite(ctx.app, cat, catH);
+    const aiSprite = aiSitSpriteFor(cat, catH);
+    const sprite = aiSprite ?? catSprite(ctx.app, cat, catH);
     if (busy) sprite.alpha = 0.55;
     // ореол редкости — под спрайтом, чтобы наружу выходила лишь цветная кромка
     const glow = rarityGlow(sprite, cat.rarityTier, catH);
@@ -175,6 +178,12 @@ export function createLivingFloor(
     body.addChild(glow, sprite);
     view.addChild(body);
     const baseScale = sprite.scale.x;
+
+    // [BLINK-TEST] тестовое процедурное моргание — только дворовые (moggie) с готовым
+    // артом; глаза ищутся автодетектом по пикселям. Убрать: удалить eyeBlink.ts и
+    // строки, помеченные [BLINK-TEST].
+    const blink = (aiSprite && (cat.breed || 'moggie') === 'moggie')
+      ? attachBlink(ctx.app, sprite) : null;
 
     // подпись над котиком: имя (или порода по умолчанию, пока имя не задано) + значок пола,
     // цветом редкости с белой обводкой. Имя крупнее (1.5×), значок пола — крупнее (2×),
@@ -232,7 +241,7 @@ export function createLivingFloor(
       cat, view, body, sprite, glow, shadow, baseScale, busy, adult,
       ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? mem?.facing ?? 1,
       phase: savedPhase ?? mem?.phase ?? Math.random() * 6,
-      leapT: 0, leapVX: 0, leapPending: false, turnT: 0, moodT: 2 + Math.random() * 6, zoneU,
+      leapT: 0, leapVX: 0, leapPending: false, turnT: 0, moodT: 2 + Math.random() * 6, blink, zoneU,
       state: 'idle', stateLeft: Math.random() * 3, // стартовая рассинхронизация, чтобы не все разом пошли бродить
       stuckT: 0, pushed: 0,
       infoIcon: null,
@@ -315,6 +324,7 @@ export function createLivingFloor(
     const matured: Actor[] = [];
     for (const a of actors) {
       a.phase += dt;
+      a.blink?.update(dt); // [BLINK-TEST]
       const ds = depthScale(a.z);
       a.view.scale.set(growthScale(a.cat, now) * ds); // котята подрастают + перспектива
       a.view.zIndex = Math.round(yAt(a.z));

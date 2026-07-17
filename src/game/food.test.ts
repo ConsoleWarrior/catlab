@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { makeRng, makeCat } from '../genetics/index.js';
 import {
   createInitialState, serialize, deserialize, makeCatInstance,
-  foodRatePerMin, isStarving, foodMinutesLeft, consumeFood, foodLevel,
+  foodRatePerMin, isStarving, foodMinutesLeft, consumeFood, foodLevel, feedingCatCount, foodBuyQuote,
   buyFood, collectIncome, passiveRatePerMin, offlineCapMin, setChampion, startBreeding,
 } from './index.js';
 import * as C from './config.js';
@@ -25,7 +25,7 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(1), 0);
     s.level = 3;
     s.cats = [];
-    for (let i = 0; i < 8; i++) addCat(s, 'moggie'); // billable 5 → rate 1.0/мин
+    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // 10 × 0.1 → rate 1.0/мин
     expect(foodRatePerMin(s)).toBeCloseTo(1.0);
     s.food = 10;
     expect(consumeFood(s, 4)).toBeCloseTo(4);  // хватило → 4 сытые минуты
@@ -55,12 +55,33 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(3), 0);
     s.level = 3;
     s.cats = [];
-    for (let i = 0; i < 8; i++) addCat(s, 'moggie'); // rate 1.0
+    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // rate 1.0
     s.food = 50;
     expect(foodMinutesLeft(s)).toBeCloseTo(50);
-    s.cats = s.cats.slice(0, 3); // ≤ бесплатного лимита → расхода нет
+    s.cats = []; // ртов не осталось → расхода нет
     expect(foodMinutesLeft(s)).toBe(Infinity);
     expect(isStarving(s)).toBe(false);
+  });
+
+  it('замороженные в крио-банке корм не едят', () => {
+    const s = createInitialState(makeRng(4), 0);
+    s.level = 3;
+    s.cats = [];
+    for (let i = 0; i < 5; i++) addCat(s, 'moggie');
+    const before = foodRatePerMin(s);
+    s.cryo = [s.cats.pop()!]; // кот уехал в капсулу — из state.cats он выбыл
+    expect(feedingCatCount(s)).toBe(4);
+    expect(foodRatePerMin(s)).toBeCloseTo(before - C.FOOD_PER_MIN_BY_TIER.common);
+  });
+
+  it('чемпионы и коты в слотах вязки тоже едят', () => {
+    const s = createInitialState(makeRng(5), 0);
+    s.level = 3;
+    s.cats = [];
+    const champ = addCat(s, 'maine_coon'); // T3 → 0.3
+    setChampion(s, champ.id, 0, 0);
+    expect(feedingCatCount(s)).toBe(1);
+    expect(foodRatePerMin(s)).toBeCloseTo(0.3); // на пьедестале, но с довольствия не снят
   });
 });
 
@@ -69,30 +90,32 @@ describe('collectIncome с кормом', () => {
     const s = createInitialState(makeRng(10), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'savannah');
-    for (let i = 0; i < 7; i++) addCat(s, 'moggie'); // всего 8 → rate 1.0/мин
+    const champ = addCat(s, 'savannah');             // T5 → 0.5/мин
+    for (let i = 0; i < 7; i++) addCat(s, 'moggie'); // 7 × 0.1 → всего 1.2/мин
     setChampion(s, champ.id, 0, 0);
-    s.food = 3;          // хватит на 3 минуты
+    const rate = foodRatePerMin(s);
+    expect(rate).toBeCloseTo(1.2);
+    s.food = 3;          // хватит на 2.5 минуты
     s.lastSeenAt = 0;
     const passive = passiveRatePerMin(s);
     const r = collectIncome(s, 10 * 60_000); // отсутствовали 10 минут
     expect(s.food).toBe(0);
-    expect(r.coins).toBe(Math.floor(passive * 3)); // доход за 3 сытые минуты
+    expect(r.coins).toBe(Math.floor(passive * (3 / rate))); // доход за сытые минуты
   });
 
-  it('без расхода корма доход упирается в офлайн-потолок', () => {
+  it('когда корма хватило, доход упирается в офлайн-потолок', () => {
     const s = createInitialState(makeRng(11), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'savannah'); // 1 кот — в пределах бесплатного лимита, расхода нет
+    const champ = addCat(s, 'savannah'); // 0.5/мин — корма (200) хватит на 400 мин
     setChampion(s, champ.id, 0, 0);
     s.food = C.FOOD_CAP_BASE;
     s.lastSeenAt = 0;
-    const cap = offlineCapMin(s);
+    const cap = offlineCapMin(s);            // 120 мин
     const passive = passiveRatePerMin(s);
-    const r = collectIncome(s, cap * 60_000 * 5); // далеко за потолком
+    const r = collectIncome(s, 300 * 60_000); // 300 мин: корма хватило, потолок — нет
     expect(r.coins).toBe(Math.floor(passive * cap));
-    expect(s.food).toBe(C.FOOD_CAP_BASE); // расхода не было
+    expect(s.food).toBeCloseTo(C.FOOD_CAP_BASE - 0.5 * 300); // корм съеден за всё отсутствие
   });
 });
 
@@ -116,6 +139,23 @@ describe('buyFood', () => {
     const r = buyFood(s, 'full');
     expect(r.ok).toBe(true);
     expect(s.food).toBe(C.FOOD_CAP_BASE);
+  });
+
+  it('почти полная кормушка (место < 1 ед.) — отказ, а не продажа остатка за 1💰', () => {
+    const s = createInitialState(makeRng(24), 0);
+    s.coins = 1000;
+    s.food = C.FOOD_CAP_BASE - 0.3; // дробный запас — обычное дело при расходе по кадрам
+    expect(foodBuyQuote(s, 'pack')).toMatchObject({ units: 0, cost: 0 });
+    expect(buyFood(s, 'pack')).toMatchObject({ ok: false, reason: 'кормушка полна' });
+    expect(s.coins).toBe(1000); // монеты не списаны
+  });
+
+  it('пакет не превышает свободного места и не даёт дробных единиц', () => {
+    const s = createInitialState(makeRng(25), 0);
+    s.coins = 1000;
+    s.food = C.FOOD_CAP_BASE - 20.6;     // места 20.6 → пакет даёт целые 20
+    expect(foodBuyQuote(s, 'pack')).toMatchObject({ units: 20, cost: 10 });
+    expect(foodBuyQuote(s, 'full').units).toBeCloseTo(20.6); // «до полного» — ровно доверху
   });
 
   it('полная кормушка и нехватка монет — отказ', () => {

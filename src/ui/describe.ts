@@ -7,7 +7,7 @@ import { breedName, breedTraits, sortTraits, traitTag, lookOf, lookTags } from '
 import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, OrderReq } from '../game/index.js';
 import { KINSHIP_RU } from '../game/index.js';
-import { TIER_RU } from './theme.js';
+import { TIER_RU, TIER_RU_GEN } from './theme.js';
 
 const PATTERN_RU: Record<string, string> = {
   ticked: 'тикированный', spotted: 'пятнистый', mackerel: 'тигровый',
@@ -89,7 +89,7 @@ export function describeRecipe(r: Recipe): { pair: string; conds: string[] } {
 export function describeReq(req: OrderReq): string {
   const parts: string[] = [];
   if (req.breed) parts.push(breedName(req.breed));
-  if (req.minRarity) parts.push(`от «${TIER_RU[req.minRarity]}»`);
+  if (req.minRarity) parts.push(`любой кот от ${TIER_RU_GEN[req.minRarity]}`);
   if (req.baseColor) parts.push(colorRu(req.baseColor));
   if (req.pattern) parts.push(PATTERN_RU[req.pattern] ?? req.pattern);
   return parts.length ? parts.join(', ') : 'любой котик';

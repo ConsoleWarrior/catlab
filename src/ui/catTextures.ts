@@ -69,6 +69,11 @@ const breedTex = new Map<string, Texture>();
 const baseFemale: Texture[] = [];
 const baseMale: Texture[] = [];
 
+// [BLINK-TEST] текстура → имя файла спрайта (для разметки глаз eyes.json)
+const texKey = new Map<number, string>();
+/** Имя файла спрайта по его текстуре (`<breed>__<sex>` / `<sex>__<n>`), либо undefined. */
+export function textureKeyOf(t: Texture): string | undefined { return texKey.get(t.uid); }
+
 function baseList(sex: Sex): Texture[] {
   return sex === 'female' ? baseFemale : baseMale;
 }
@@ -76,11 +81,13 @@ function baseList(sex: Sex): Texture[] {
 /** Зарегистрировать текстуру породы (ключ = `<breed>__<sex>`). */
 export function setAiBreedTexture(key: string, t: Texture): void {
   breedTex.set(key, t);
+  texKey.set(t.uid, key); // [BLINK-TEST]
 }
 
-/** Добавить вариант базового («Дворового») кота для пола. */
-export function addBaseTexture(sex: Sex, t: Texture): void {
+/** Добавить вариант базового («Дворового») кота для пола (key = `<sex>__<n>`). */
+export function addBaseTexture(sex: Sex, t: Texture, key: string): void {
   baseList(sex).push(t);
+  texKey.set(t.uid, key); // [BLINK-TEST]
 }
 
 /** Текстура-миниатюра породы для Котодекса (любой доступный пол), null → нет арта. */

@@ -40,6 +40,11 @@ export const TIER_RU: Record<RarityTier, string> = {
   common: 'обычный', uncommon: 'необычный', rare: 'редкий',
   epic: 'эпический', legendary: 'легендарный',
 };
+/** Тир в родительном падеже — для подписей вида «любой кот от необычного». */
+export const TIER_RU_GEN: Record<RarityTier, string> = {
+  common: 'обычного', uncommon: 'необычного', rare: 'редкого',
+  epic: 'эпического', legendary: 'легендарного',
+};
 export const TIER_COLOR: Record<RarityTier, number> = {
   common: 0xb9a99c, uncommon: 0x7bbf86, rare: 0x5aa9e6,
   epic: 0xb07be0, legendary: 0xf2a93b,

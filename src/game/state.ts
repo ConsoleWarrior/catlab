@@ -8,7 +8,7 @@ import type { GameState } from './types.js';
 import { BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, levelForReputation } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
 import { attachHiddenPedigree, revealPedigree } from './pedigree.js';
-import { refillOrders } from './orders.js';
+import { rollDailyOrders } from './orders.js';
 
 /** Новое состояние новой игры: стартовая пара котов, 1 слот, базовые гены, заказы. */
 export function createInitialState(rng: Rng, now: number): GameState {
@@ -31,6 +31,8 @@ export function createInitialState(rng: Rng, now: number): GameState {
     cryo: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
+    ordersDay: -1,       // «суток ещё не было» → rollDailyOrders выдаст стартовую доску
+    orderBasket: null,
     champions: [],
     food: FOOD_CAP_BASE, // кормушка стартует полной
     lastSeenAt: now,
@@ -45,7 +47,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     attachHiddenPedigree(state, cat, rng);
     state.cats.push(cat);
   }
-  refillOrders(state, rng, now, 3);
+  rollDailyOrders(state, rng, now); // стартовая доска на текущие московские сутки
   return state;
 }
 

@@ -32,3 +32,4 @@ export type {
   TraitId, TraitGroup, TraitDef, ColorId, PatternId, EyeId, Sex, Look,
 } from './traits.js';
 export { breedValueMult, VALUE_MULT_MIN, VALUE_MULT_MAX } from './breedValue.js';
+export { breedLevel, breedsAtLevel, BREED_LEVELS } from './breedLevel.js';

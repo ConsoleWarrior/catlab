@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Тэггер глаз — Котолаборатория</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; background: #2b2b30; color: #eee; height: 100vh; display: flex; overflow: hidden; }
+    #list { width: 240px; flex: 0 0 240px; background: #232327; border-right: 1px solid #000; overflow-y: auto; }
+    #list .row { padding: 6px 10px; cursor: pointer; font-size: 13px; display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+    #list .row:hover { background: #34343a; }
+    #list .row.active { background: #3d5a80; }
+    #list .st { width: 14px; text-align: center; }
+    #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+    #bar { padding: 10px 14px; background: #1f1f23; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+    #bar button { background: #3d5a80; color: #fff; border: none; border-radius: 6px; padding: 7px 12px; cursor: pointer; font-size: 13px; }
+    #bar button:hover { background: #4a6c98; }
+    #bar button.warn { background: #7a3b3b; }
+    #bar label { display: flex; gap: 6px; align-items: center; }
+    #stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+    #cv { image-rendering: auto; cursor: crosshair; box-shadow: 0 0 0 1px #000; }
+    #hint { position: absolute; top: 10px; left: 12px; font-size: 12px; opacity: .7; pointer-events: none; }
+    #title { font-weight: 700; }
+    #prog { opacity: .7; }
+    kbd { background: #444; border-radius: 4px; padding: 1px 5px; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div id="list"></div>
+  <div id="main">
+    <div id="bar">
+      <span id="title">—</span>
+      <span id="prog"></span>
+      <label>радиус <input id="rad" type="range" min="2" max="14" step="0.5" value="6"></label>
+      <button id="auto" title="A">Автодетект</button>
+      <button id="clear" title="C">Очистить</button>
+      <button id="skip" class="warn" title="S">Без моргания</button>
+      <button id="preview" title="P">▶ Превью</button>
+      <button id="prev" title="←">← Пред</button>
+      <button id="next" title="→">След →</button>
+    </div>
+    <div id="stage">
+      <canvas id="cv"></canvas>
+      <div id="hint">
+        Клик — поставить глаз (2 шт). Тащи точку — двигать. Колесо — радиус.<br>
+        <kbd>←</kbd>/<kbd>→</kbd> листать · <kbd>A</kbd> автодетект · <kbd>C</kbd> очистить · <kbd>S</kbd> без моргания · <kbd>P</kbd> превью
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/tools/eyeTagger.ts"></script>
+</body>
+</html>

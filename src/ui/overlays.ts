@@ -8,6 +8,7 @@ import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
   isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
+  basketCat, refreshOrderByAd, msUntilOrdersReset,
   isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
   roomCount, nurseryCapacity, shelterCapacity,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
@@ -1504,42 +1505,100 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
   return root;
 }
 
-/** Панель заказов: список с требованиями, наградой и кнопкой «Выполнить». */
+/**
+ * Доска заказов (кнопка 📋 в Приюте). Заказы держатся сутки и меняются в московскую
+ * полночь — сверху виден остаток до смены. Выполнить заказ можно ТОЛЬКО котом из
+ * корзины: кнопка «Выполнить» активна лишь у тех строк, под которые он подходит,
+ * иначе строка объясняет, чего не хватает. Каждый невыполненный заказ можно один
+ * раз за сутки заменить за 📺.
+ */
 export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
-  const W = 560;
+  const W = 620;
   const root = new Container();
 
   const title = label('📋 Заказы клиентов', 20, COLORS.ink, '800');
-  title.position.set(W / 2, 28);
+  title.position.set(W / 2, 26);
 
-  const rowH = 78;
+  const left = msUntilOrdersReset(ctx.now());
+  const hh = Math.floor(left / 3_600_000);
+  const mm = Math.floor((left % 3_600_000) / 60_000);
+  const timer = label(`Смена заказов через ${hh} ч ${mm} мин (в полночь по Москве)`, 12.5, COLORS.inkSoft, '700');
+  timer.anchor.set(0.5, 0);
+  timer.position.set(W / 2, 42);
+
+  const cat = basketCat(ctx.state);
+  const basket = label(
+    cat ? `🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}` : '🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Приюте',
+    13, cat ? COLORS.ink : COLORS.inkSoft, '800',
+  );
+  basket.anchor.set(0.5, 0);
+  basket.position.set(W / 2, 60);
+
+  const adHelp = label('📺 Заменить — посмотреть рекламу и получить вместо заказа другой (по одной замене на заказ в сутки)',
+    11.5, COLORS.inkSoft, '600');
+  adHelp.anchor.set(0.5, 0);
+  adHelp.position.set(W / 2, 78);
+
+  const rowH = 96;
   const orders = ctx.state.orders;
-  let y = 56;
+  let y = 102;
   const rows = new Container();
 
   for (const order of orders) {
     const row = new Container();
-    row.addChild(panel(W - 32, rowH - 12, COLORS.card, 12));
+    const fits = !!cat && !order.done && matchesOrder(order, cat);
+    const busy = !!cat && isBusy(ctx.state, cat.id);
+    row.addChild(panel(W - 32, rowH - 12, order.done ? COLORS.cardEdge : COLORS.card, 12));
+
     const req = label(`«${describeReq(order.req)}»`, 16, COLORS.ink, '800');
     req.anchor.set(0, 0.5);
     req.position.set(16, 22);
+    req.alpha = order.done ? 0.55 : 1;
     row.addChild(req);
-    const rew = label('Награда: ' + rewardText(order.reward), 13, COLORS.inkSoft, '700');
+
+    const rew = label(
+      order.done ? 'Выполнен ✅ — новый заказ придёт в полночь' : 'Награда: ' + rewardText(order.reward),
+      13, COLORS.inkSoft, '700',
+    );
     rew.anchor.set(0, 0.5);
     rew.position.set(16, 46);
     row.addChild(rew);
 
-    const match = ctx.state.cats.find((c) => !isBusy(ctx.state, c.id) && matchesOrder(order, c));
+    // 📺-замена: по одной на слот за сутки, выполненный слот не меняем
+    if (!order.done) {
+      const adBtn = new Button({
+        text: order.adRefreshed ? '📺 уже меняли' : '📺 Заменить',
+        w: 128, h: 36, color: COLORS.secondary, textColor: 0xffffff, fontSize: 12,
+      });
+      adBtn.enabled = !order.adRefreshed;
+      adBtn.position.set(W - 32 - 232, (rowH - 12) / 2 - 9);
+      adBtn.onTap = () => {
+        const r = refreshOrderByAd(ctx.state, order.id, ctx.rng, ctx.now());
+        if (!r.ok) { ctx.toast(r.reason); return; }
+        ctx.commit();
+        ctx.toast('Заказ заменён 📺 — этот слот сегодня больше не обновить');
+        close(); ctx.openOrders();
+      };
+      row.addChild(adBtn);
+      const adHint = label(
+        order.adRefreshed ? 'следующая замена — завтра' : 'реклама → другой заказ',
+        10.5, COLORS.inkSoft, '600',
+      );
+      adHint.anchor.set(0.5, 0.5);
+      adHint.position.set(W - 32 - 232, (rowH - 12) / 2 + 18);
+      row.addChild(adHint);
+    }
+
+    const btnText = order.done ? 'выполнен' : !cat ? 'нужен кот' : busy ? 'кот занят' : fits ? 'Выполнить' : 'не подходит';
     const btn = new Button({
-      text: match ? 'Выполнить' : 'нет кота', w: 140, h: 44,
-      color: match ? COLORS.primary : COLORS.cardEdge,
-      textColor: match ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+      text: btnText, w: 140, h: 44,
+      color: fits && !busy ? COLORS.primary : COLORS.cardEdge,
+      textColor: fits && !busy ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
-    btn.enabled = !!match;
+    btn.enabled = fits && !busy;
     btn.position.set(W - 32 - 78, (rowH - 12) / 2);
     btn.onTap = () => {
-      if (!match) return;
-      const r = claimOrder(ctx.state, order.id, match.id, ctx.now());
+      const r = claimOrder(ctx.state, order.id, ctx.now());
       if (r.ok) { ctx.commit(); ctx.toast('Заказ выполнен! ' + rewardText(r.reward)); close(); ctx.openOrders(); }
       else ctx.toast(r.reason);
     };
@@ -1550,20 +1609,13 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     y += rowH;
   }
 
-  if (orders.length === 0) {
-    const empty = label('новых заказов пока нет', 15, COLORS.inkSoft, '600');
-    empty.position.set(W / 2, y + 10);
-    rows.addChild(empty);
-    y += 40;
-  }
-
   const closeBtn = new Button({ text: 'Закрыть', w: 160, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
   closeBtn.position.set(W / 2, y + 26);
   closeBtn.onTap = close;
 
   const H = y + 56;
   root.addChild(panel(W, H, COLORS.hud, 18));
-  root.addChild(title, rows, closeBtn);
+  root.addChild(title, timer, basket, adHelp, rows, closeBtn);
   return root;
 }
 

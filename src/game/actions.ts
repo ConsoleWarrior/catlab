@@ -19,7 +19,10 @@ function findCat(state: GameState, id: string): Cat | undefined {
   return state.cats.find((c) => c.id === id);
 }
 
-/** Убирает кота из коллекции и снимает его с выставки (продажа/пристройство/лаборатория). */
+/**
+ * Убирает кота из коллекции, снимая его с выставки и с корзины заказов
+ * (продажа/пристройство/лаборатория) — иначе на него осталась бы висячая ссылка.
+ */
 function removeCat(state: GameState, catId: string): void {
   state.cats = state.cats.filter((c) => c.id !== catId);
   // обнуляем именно его пьедестал (не .filter!), чтобы не сдвинуть соседних чемпионов
@@ -27,6 +30,7 @@ function removeCat(state: GameState, catId: string): void {
     const idx = state.champions.indexOf(catId);
     if (idx >= 0) state.champions[idx] = null;
   }
+  if (state.orderBasket === catId) state.orderBasket = null;
 }
 
 function canAfford(state: GameState, currency: Currency, amount: number): boolean {
@@ -75,11 +79,8 @@ export function collectIncome(state: GameState, now: number): { coins: number } 
  * пропорциональна добавленным единицам. Полная кормушка / нехватка монет — отказ.
  */
 export function buyFood(state: GameState, mode: 'pack' | 'full' = 'pack'): Result<{ added: number; spent: number }> {
-  const room = Math.max(0, E.foodCap(state) - E.foodLevel(state));
-  if (room <= 0) return { ok: false, reason: 'кормушка полна' };
-  const units = mode === 'full' ? room : Math.min(C.FOOD_PACK_UNITS, room);
-  const perUnit = C.FOOD_PACK_COST / C.FOOD_PACK_UNITS;
-  const cost = Math.max(1, Math.round(units * perUnit));
+  const { units, cost } = E.foodBuyQuote(state, mode);
+  if (units <= 0) return { ok: false, reason: 'кормушка полна' };
   if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
   state.food = E.foodLevel(state) + units;
   return { ok: true, added: units, spent: cost };
@@ -769,20 +770,26 @@ export function unlockResearch(state: GameState, id: string): Result {
 
 // --- Заказы ---
 
-/** Выполнить заказ подходящим котом: награда + репутация, кот уезжает к клиенту. */
+/**
+ * Выполнить заказ котом ИЗ КОРЗИНЫ: награда + репутация, кот уезжает к клиенту.
+ * Кот берётся только из корзины (зона в Приюте) — предъявить клиенту кота, которого
+ * не положили в корзину, нельзя. Выполненный заказ не исчезает: слот помечается
+ * `done` и до следующей московской полуночи занят (см. orders.rollDailyOrders).
+ */
 export function claimOrder(
   state: GameState,
   orderId: string,
-  catId: string,
-  now: number,
+  _now: number,
 ): Result<{ reward: import('./types.js').OrderReward }> {
   const order = state.orders.find((o) => o.id === orderId);
   if (!order) return { ok: false, reason: 'заказ не найден' };
-  if (order.expiresAt > 0 && now > order.expiresAt) return { ok: false, reason: 'заказ просрочен' };
+  if (order.done) return { ok: false, reason: 'заказ уже выполнен' };
+  const catId = state.orderBasket;
+  if (!catId) return { ok: false, reason: 'положите кота в корзину заказов' };
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
-  if (!matchesOrder(order, cat)) return { ok: false, reason: 'кот не подходит под заказ' };
+  if (!matchesOrder(order, cat)) return { ok: false, reason: 'кот в корзине не подходит под заказ' };
 
   // Исследование «Клиенты-заводчики» (orderDna) добавляет 🧬 к награде заказа.
   const dnaGain = Math.round(order.reward.dna * (1 + E.researchBonus(state, 'orderDna')));
@@ -790,7 +797,29 @@ export function claimOrder(
   state.crystals += order.reward.crystals;
   state.dna += dnaGain;
   addReputation(state, order.reward.reputation); // ⭐ опыт + пересчёт уровня лаборатории
-  state.orders = state.orders.filter((o) => o.id !== orderId);
-  removeCat(state, catId);
+  order.done = true;
+  removeCat(state, catId); // сам снимет кота с корзины и с пьедестала
   return { ok: true, reward: { ...order.reward, dna: dnaGain } };
+}
+
+// --- Корзина заказов (зона в Приюте) ---
+
+/**
+ * Положить кота в корзину заказов: только им можно закрыть заказ. Кот остаётся
+ * в приюте и занимает место, но на полу не гуляет — он «в переноске» у стойки.
+ * Прежний обитатель корзины просто вытесняется обратно на пол.
+ */
+export function putCatInBasket(state: GameState, catId: string): Result {
+  const cat = findCat(state, catId);
+  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
+  if (E.isInSlot(state, catId)) return { ok: false, reason: 'кот в слоте вязки' };
+  if (E.isChampion(state, catId)) return { ok: false, reason: 'кот выставлен чемпионом' };
+  state.orderBasket = catId;
+  return { ok: true };
+}
+
+/** Вынуть кота из корзины (вернуть на пол приюта). */
+export function clearOrderBasket(state: GameState): void {
+  state.orderBasket = null;
 }

@@ -16,8 +16,9 @@ import {
   setChampion, upgradeCost, upgradeMaxed, buyUpgrade,
   maxChampionsForLevel, nextPedestalUnlockLevel, isUnlocked,
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
+  foodRatePerMin, feedingCatCount, foodBuyQuote,
   cryoUnlocked,
-  FOOD_PACK_COST, CHAMPION_SLOTS_BASE, UPGRADES,
+  FOOD_PACK_UNITS, CHAMPION_SLOTS_BASE, UPGRADES,
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
@@ -32,8 +33,17 @@ function pedCountFor(_ctx: UiContext): number {
   return CHAMPION_SLOTS_BASE + UPGRADES.championSlots!.max;
 }
 
+// Правая колонка шапки: кормушка + кнопка «Купить котика» (одна ширина на обе).
+// Ряд пьедесталов считает её как занятую зону и под неё не заезжает.
+const COL_W = 256;
+const COL_PAD = 18; // отступ оболочки комнаты (shell PAD) — от него живёт body
+
 export function createNursery(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'nursery', '🏆 Питомник');
+  // живые цифры кормушки: обновляем раз в FEEDER_UPDATE_S, а не каждый кадр
+  const FEEDER_UPDATE_S = 0.5;
+  let feederUpdate: (() => void) | null = null;
+  let feederAcc = 0;
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
   // слой пьедесталов выставки — поверх пола (пьедесталы стоят у задней стены)
@@ -227,10 +237,16 @@ export function createNursery(ctx: UiContext): Room {
     const pedCount = pedCountFor(ctx); // всегда 5 (открытые + запертые с замком)
     const w = ctx.roomW, h = ctx.roomH;
     const usable = h - ctx.topInset;
-    const pedW = Math.min(122, (w * 0.84) / pedCount);
     const gap = Math.min(22, w * 0.03);
+    // Полоса, доступная ряду: от левого поля до правой колонки (кормушка + покупка).
+    // Ряд стоит по центру комнаты, но при нехватке ширины (узкий экран, 4:3)
+    // сначала съезжает влево и лишь потом ужимает тумбы — иначе колонка накрывает
+    // 5-й пьедестал (его замок/кнопку «Открыть»).
+    const bandL = COL_PAD;
+    const bandR = w - COL_PAD - COL_W - 12;
+    const pedW = Math.min(122, (w * 0.84) / pedCount, (bandR - bandL - gap * (pedCount - 1)) / pedCount);
     const totalW = pedW * pedCount + gap * (pedCount - 1);
-    const startX = (w - totalW) / 2;
+    const startX = Math.max(bandL, Math.min((w - totalW) / 2, bandR - totalW));
     const catSize = Math.min(90, pedW * 0.82);
     const standY = ctx.topInset + Math.round(usable * 0.32); // линия «ног» чемпиона на тумбе
 
@@ -295,66 +311,96 @@ export function createNursery(ctx: UiContext): Room {
   }
 
   /**
-   * Виджет-кормушка (левый верх шапки): полоса запаса корма + «~N мин» + кнопка
-   * докупки пакета. До открытия механики уровнем (LAB_UNLOCKS.food) — замок.
-   * При голоде полоса краснеет. Расход корма — в economy/game.ts, тут только показ.
+   * Виджет-кормушка (правый верх, над кнопкой покупки кота): полоса запаса корма,
+   * справка «сколько ртов и сколько съедают в минуту» + две кнопки докупки
+   * (пакет / до полного). До открытия механики уровнем (LAB_UNLOCKS.food) — замок.
+   * При голоде полоса краснеет. Расход корма считает economy/game.ts, тут только показ.
+   * Раскладка вертикальная (полоса → справка → кнопки): карточка стоит в узкой
+   * правой колонке шириной FEEDER_W, в один ряд с кнопками уже не помещается.
    */
-  function buildFeeder(): Container {
+  function buildFeeder(fw: number): { view: Container; height: number; update: () => void } {
     const c = new Container();
-    const fw = Math.min(260, ctx.roomW * 0.42);
-    const fh = 40;
+    const fh = foodEnabled(ctx.state) ? 110 : 38;
     const bg = new Graphics();
     bg.roundRect(0, 0, fw, fh, 12).fill({ color: COLORS.card, alpha: 0.92 }).stroke({ width: 2, color: COLORS.cardEdge });
     c.addChild(bg);
 
     if (!foodEnabled(ctx.state)) {
-      const lock = label(`🍽 Кормушка — с ур. ${unlockLevelOf('food')} 🔒`, 12.5, COLORS.inkSoft, '700');
+      const lock = label(`🍽 Запас корма — с ур. ${unlockLevelOf('food')} 🔒`, 12.5, COLORS.inkSoft, '700');
       lock.anchor.set(0, 0.5);
       lock.position.set(12, fh / 2);
       c.addChild(lock);
-      return c;
+      return { view: c, height: fh, update: () => { /* замок статичен */ } };
     }
 
-    const cap = foodCap(ctx.state);
-    const food = foodLevel(ctx.state);
-    const frac = Math.max(0, Math.min(1, food / cap));
-    const starving = isStarving(ctx.state);
+    const PAD_X = 12;
+    // ряд 1: заголовок карточки — по центру блока
+    const title = label('🍽 Запас корма', 13, COLORS.ink, '800');
+    title.anchor.set(0.5);
+    title.position.set(fw / 2, 17);
+    c.addChild(title);
 
-    const icon = label('🍽', 18, COLORS.ink, '700');
-    icon.anchor.set(0.5);
-    icon.position.set(18, fh / 2);
-    c.addChild(icon);
-
-    const barX = 32, barW = fw - 132, barY = fh / 2 - 7, barH = 14;
+    // ряд 2: полоса запаса с числом «корм/ёмкость» — во всю ширину карточки
+    const barX = PAD_X, barW = fw - PAD_X * 2, barY = 30, barH = 15;
     const barBg = new Graphics();
     barBg.roundRect(barX, barY, barW, barH, 7).fill({ color: 0x000000, alpha: 0.15 });
-    const col = starving ? 0xd9534f : frac < 0.25 ? 0xe0a13a : 0x6cc07a;
     const barFill = new Graphics();
-    barFill.roundRect(barX, barY, Math.max(3, barW * frac), barH, 7).fill({ color: col });
     c.addChild(barBg, barFill);
 
-    const mins = foodMinutesLeft(ctx.state);
-    const amt = label(mins === Infinity ? `${Math.round(food)}/${cap}` : `~${Math.round(mins)} мин`, 11, COLORS.ink, '700');
+    const amt = label('', 11, COLORS.ink, '700');
     amt.anchor.set(0.5);
-    amt.position.set(barX + barW / 2, fh / 2);
+    amt.position.set(barX + barW / 2, barY + barH / 2);
     c.addChild(amt);
 
-    const full = food >= cap;
-    const afford = ctx.state.coins >= FOOD_PACK_COST;
-    const btn = new Button({
-      text: full ? 'полно' : `＋${FOOD_PACK_COST}💰`,
-      w: 86, h: 30, color: full ? COLORS.cardEdge : COLORS.good,
-      textColor: full || !afford ? COLORS.inkSoft : 0xffffff, fontSize: 13,
-    });
-    btn.enabled = !full && afford;
-    btn.position.set(fw - 48, fh / 2);
-    btn.onTap = () => {
-      const r = buyFood(ctx.state, 'pack');
-      if (r.ok) { ctx.commit(); ctx.toast(`Корм +${r.added} 🍽`); }
-      else ctx.toast(r.reason);
+    // ряд 3: сколько ртов, сколько едят в минуту и на сколько хватит запаса
+    const info = label('', 10.5, COLORS.inkSoft, '700');
+    info.anchor.set(0, 0.5);
+    info.position.set(PAD_X, 59);
+    c.addChild(info);
+
+    // ряд 4: кнопки докупки — во всю ширину карточки, поровну
+    const btnGap = 8;
+    const btnW = (fw - PAD_X * 2 - btnGap) / 2;
+    const mkBuy = (mode: 'pack' | 'full', text: string, x: number): (() => void) => {
+      const btn = new Button({ text: '', w: btnW, h: 28, color: COLORS.good, fontSize: 11.5 });
+      btn.position.set(x + btnW / 2, 86);
+      btn.onTap = () => {
+        const r = buyFood(ctx.state, mode);
+        if (r.ok) { ctx.commit(); ctx.toast(`Корм +${Math.round(r.added)} 🍽`); }
+        else ctx.toast(r.reason);
+      };
+      c.addChild(btn);
+      return () => {
+        const quote = foodBuyQuote(ctx.state, mode);
+        const full = quote.units <= 0;
+        btn.setText(full ? 'полно' : `${text} · ${quote.cost}💰`);
+        btn.enabled = !full && ctx.state.coins >= quote.cost;
+      };
     };
-    c.addChild(btn);
-    return c;
+    const buyUpdates = [
+      mkBuy('pack', `＋${FOOD_PACK_UNITS}`, PAD_X),
+      mkBuy('full', 'Полная', PAD_X + btnW + btnGap),
+    ];
+
+    // Корм тает каждый кадр, поэтому цифры перерисовываем по таймеру комнаты, а не
+    // только на commit — иначе полоса и «хватит на ~N мин» врут до первого действия.
+    const update = (): void => {
+      const cap = foodCap(ctx.state);
+      const food = foodLevel(ctx.state);
+      const frac = Math.max(0, Math.min(1, food / cap));
+      const starving = isStarving(ctx.state);
+      const col = starving ? 0xd9534f : frac < 0.25 ? 0xe0a13a : 0x6cc07a;
+      barFill.clear().roundRect(barX, barY, Math.max(3, barW * frac), barH, 7).fill({ color: col });
+      amt.text = `${Math.round(food)}/${cap}`;
+
+      const mins = foodMinutesLeft(ctx.state);
+      const left = starving ? 'голод!' : mins === Infinity ? 'расхода нет' : `хватит на ~${Math.round(mins)} мин`;
+      info.text = `🐱 ${feedingCatCount(ctx.state)} · ${foodRatePerMin(ctx.state).toFixed(1)} 🍽/мин · ${left}`;
+      info.style.fill = starving ? 0xd9534f : COLORS.inkSoft;
+      for (const u of buyUpdates) u();
+    };
+    update();
+    return { view: c, height: fh, update };
   }
 
   function refresh(): void {
@@ -365,24 +411,33 @@ export function createNursery(ctx: UiContext): Room {
     // вместимость комнаты — счётчиком справа в плашке названия
     shell.setTitleBadge(`🐱 ${count}/${cap}`);
 
+    // Правая колонка в правом верхнем углу: кормушка сверху, кнопка покупки кота
+    // под ней. Обе прижаты правым краем к contentW и выровнены по общей ширине
+    // COL_W — колонка читается как единый блок (refreshChampions её обходит).
+    // Верх колонки поднят на уровень плашки названия комнаты: body начинается ПОД
+    // плашкой, поэтому отсчитываем вверх на её высоту с зазором (отрицательный y) —
+    // так занимается пустое место под топ-баром, а не поле над пьедесталами.
+    const colX = shell.contentW - COL_W;
+    const colY = -(shell.titleH + 12);
+
+    const feeder = buildFeeder(COL_W);
+    feeder.view.position.set(colX, colY);
+    shell.body.addChild(feeder.view);
+    feederUpdate = feeder.update;
+
     const cost = buyCatCost(ctx.state);
     const buy = new Button({
       text: cost === 0 ? '🛒 Котик (бесплатно)' : `🛒 Купить котика (${cost} 💰)`,
-      w: 220, h: 40, color: COLORS.good, fontSize: 14,
+      w: COL_W, h: 40, color: COLORS.good, fontSize: 14,
     });
     buy.enabled = count < cap && ctx.state.coins >= cost;
-    buy.position.set(shell.contentW - 114, 16);
+    buy.position.set(colX + COL_W / 2, colY + feeder.height + 10 + 20);
     buy.onTap = () => {
       const r = buyCat(ctx.state, ctx.rng, ctx.now());
       if (r.ok) { ctx.commit(); ctx.toast('Новый котик в питомнике 🐱'); }
       else ctx.toast(r.reason);
     };
     shell.body.addChild(buy);
-
-    // кормушка — слева в шапке (напротив кнопки покупки кота)
-    const feeder = buildFeeder();
-    feeder.position.set(0, 16);
-    shell.body.addChild(feeder);
 
     refreshChampions();
     refreshClinic(); // замок станции снимается, когда уровень дорастает
@@ -392,6 +447,11 @@ export function createNursery(ctx: UiContext): Room {
 
   return {
     id: 'nursery', title: '🏆 Питомник', container: shell.container,
-    refresh, tick: (dt) => floor.tick(dt), tryDropCat,
+    refresh,
+    tick: (dt) => {
+      floor.tick(dt);
+      feederAcc += dt;
+      if (feederAcc >= FEEDER_UPDATE_S) { feederAcc = 0; feederUpdate?.(); }
+    }, tryDropCat,
   };
 }
