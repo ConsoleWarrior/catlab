@@ -8,6 +8,14 @@ import type { RarityTier } from '../genetics/index.js';
 
 export const FONT = 'system-ui, "Segoe UI", sans-serif';
 
+// Тач-устройства: лёгкий глобальный множитель размера ТЕКСТА. На телефоне надписи
+// и кнопки читаются мельче, чем на ПК; применяется в label() — а значит и к тексту
+// кнопок (Button строит подпись через label), звёзд и пиллов. Геометрию (ширины
+// панелей/кнопок) НЕ трогаем — поэтому множитель мал: слишком длинная надпись
+// фикс-ширины иначе начала бы вылезать за край.
+const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+export const UI_SCALE = IS_TOUCH ? 1.2 : 1;
+
 /** Палитра «тёплая лаборатория». */
 export const COLORS = {
   bg: 0xfdf3e7,
@@ -77,7 +85,7 @@ export function label(
   const t = new Text({
     text,
     style: {
-      fontFamily: FONT, fontSize: size, fontWeight: weight, fill: color, align: 'center',
+      fontFamily: FONT, fontSize: size * UI_SCALE, fontWeight: weight, fill: color, align: 'center',
       ...(stroke ? { stroke: { color: stroke.color, width: stroke.width, join: 'round' as const } } : {}),
     },
   });

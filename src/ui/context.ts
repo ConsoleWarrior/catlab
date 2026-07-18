@@ -105,6 +105,8 @@ export interface UiContext {
   openBirthCard(events: BirthEvent[]): void;
   /** Всплывающее меню усилителя вязки (Генная инженерия у названия Инкубатора). */
   openBoostMenu(boostId: string): void;
+  /** Подтверждение покупки узла дерева «Улучшения» (Генолаб) — защита от случайного тапа. */
+  openResearchConfirm(defId: string): void;
   openOrders(): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;

@@ -14,7 +14,7 @@
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { Cat, BoostDef } from '../../game/index.js';
 import {
-  startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, growthScale,
+  startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, activeBoostId, growthScale,
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
   buyUpgrade, upgradeCost, upgradeMaxed,
   maxSlotsForLevel, nextSlotUnlockLevel, isUnlocked, unlockLevelOf,
@@ -99,13 +99,15 @@ export function createIncubator(ctx: UiContext): Room {
   // Чип усилителя — кнопка с ИИ-текстурой (boost_<id>.webp) и читаемым названием.
   const CHIP_W = 118, CHIP_H = 38;
 
-  function boostChip(def: BoostDef): Container {
+  function boostChip(def: BoostDef, activeId?: string): Container {
     const c = new Container();
-    const charges = boostCharges(ctx.state, def.id);
-    const active = charges > 0;
+    const charges = boostCharges(ctx.state, def.id); // склад зарядов (можно копить любых)
+    const active = activeId === def.id;              // активен ИМЕННО этот (сработает в вязке)
+    const stocked = charges > 0;                     // есть заряды на складе
     const accent = BOOST_ACCENT[def.id] ?? COLORS.dna;
     const w = CHIP_W, h = CHIP_H;
 
+    // Ореол «горит» — только у активного усилителя.
     if (active) {
       const halo = new Graphics();
       halo.roundRect(-w / 2 - 5, -h / 2 - 5, w + 10, h + 10, 14)
@@ -116,24 +118,24 @@ export function createIncubator(ctx: UiContext): Room {
 
     const tex = decorTexture(`boost_${def.id}`);
     if (tex) {
-      // текстурная подложка: cover-вписывание + скруглённая маска.
-      // Незаряженный чип «потушен» (серый тинт), заряженный горит в полный цвет.
+      // текстурная подложка: cover-вписывание + скруглённая маска. Пустой (без зарядов)
+      // чип «потушен» (серый тинт); есть заряды — в полный цвет; активный ещё и в ободке.
       const sp = new Sprite(tex);
       sp.anchor.set(0.5);
       sp.scale.set(Math.max(w / tex.width, h / tex.height));
       const m = new Graphics();
       m.roundRect(-w / 2, -h / 2, w, h, 11).fill(0xffffff);
       sp.mask = m;
-      if (!active) { sp.tint = 0x8f8f8f; sp.alpha = 0.9; }
+      if (!stocked) { sp.tint = 0x8f8f8f; sp.alpha = 0.85; }
       const edge = new Graphics();
       edge.roundRect(-w / 2, -h / 2, w, h, 11)
-        .stroke({ width: 2, color: active ? 0xffffff : COLORS.cardEdge, alpha: active ? 0.95 : 0.9 });
+        .stroke({ width: active ? 2.5 : 2, color: active ? 0xffffff : stocked ? accent : COLORS.cardEdge, alpha: active ? 0.98 : stocked ? 0.85 : 0.8 });
       c.addChild(sp, m, edge);
     } else {
       const bg = new Graphics();
       bg.roundRect(-w / 2, -h / 2, w, h, 11)
-        .fill({ color: active ? COLORS.dna : COLORS.card, alpha: active ? 1 : 0.92 })
-        .stroke({ width: 2, color: active ? 0xffffff : COLORS.cardEdge, alpha: active ? 0.95 : 0.8 });
+        .fill({ color: COLORS.card, alpha: stocked ? 1 : 0.9 })
+        .stroke({ width: active ? 2.5 : 2, color: active ? 0xffffff : stocked ? accent : COLORS.cardEdge, alpha: active ? 0.98 : stocked ? 0.85 : 0.8 });
       c.addChild(bg);
     }
 
@@ -147,18 +149,27 @@ export function createIncubator(ctx: UiContext): Room {
     });
     name.anchor.set(0.5);
     name.position.set(0, 0);
+    if (!stocked && !active) name.alpha = 0.75;
     c.addChild(name);
 
-    if (charges > 1) {
+    // Счётчик склада (справа сверху) — сколько зарядов накоплено.
+    if (stocked) {
       const badge = new Graphics();
-      badge.circle(w / 2 - 3, -h / 2 + 3, 8).fill({ color: COLORS.good });
+      badge.circle(w / 2 - 3, -h / 2 + 3, 8).fill({ color: active ? COLORS.good : accent });
       const cnt = label(String(charges), 11, 0xffffff, '800');
       cnt.position.set(w / 2 - 3, -h / 2 + 3);
       c.addChild(badge, cnt);
     }
+    // Метка активности (слева сверху) — сразу видно, какой усилитель сейчас работает.
+    if (active) {
+      const on = label('⚡', 12, 0xffffff, '800');
+      on.position.set(-w / 2 + 9, -h / 2 + 9);
+      c.addChild(on);
+    }
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
+    // Тап открывает меню усилителя: заряд (склад) + переключатель активности.
     c.on('pointertap', () => ctx.openBoostMenu(def.id));
     return c;
   }
@@ -178,8 +189,9 @@ export function createIncubator(ctx: UiContext): Room {
       boostBar.addChild(hint);
       return;
     }
+    const activeId = activeBoostId(ctx.state); // единовременно активен только один усилитель
     BOOSTS.forEach((def, i) => {
-      const chip = boostChip(def);
+      const chip = boostChip(def, activeId);
       chip.position.set(firstCx + i * (CHIP_W + gap), shell.titleH / 2);
       boostBar.addChild(chip);
     });
@@ -296,9 +308,11 @@ export function createIncubator(ctx: UiContext): Room {
     // плашки, чтобы надписи «Отец/Мать» читались на любом ИИ-фоне бокса.
     const roleY = cy + 16;
     const dadRole = label('Отец ♂', 11, COLORS.ink, '700');
-    dadRole.position.set(dadHomeX, roleY);
     const momRole = label('Мать ♀', 11, COLORS.ink, '700');
-    momRole.position.set(momHomeX, roleY);
+    // опускаем подписи ниже на 2/3 их ширины — чтобы не липли к верхнему краю бокса
+    const roleDrop = Math.round(Math.max(dadRole.width, momRole.width) * 2 / 3);
+    dadRole.position.set(dadHomeX, roleY + roleDrop);
+    momRole.position.set(momHomeX, roleY + roleDrop);
     const rolePlate = new Graphics();
     for (const r of [dadRole, momRole]) {
       rolePlate.roundRect(r.x - r.width / 2 - 7, r.y - r.height / 2 - 2, r.width + 14, r.height + 4, 8)

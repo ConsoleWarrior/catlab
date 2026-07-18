@@ -25,7 +25,7 @@ import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
-import { catTexture, setAiBreedTexture, addBaseTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
+import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture, decorZone } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
@@ -38,7 +38,7 @@ import {
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
   buildHealConfirm, buildCryoMenu,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
-  buildDevMenu,
+  buildDevMenu, buildResearchConfirm,
 } from './overlays.js';
 
 const SAVE_KEY = 'catlab:save:v1';
@@ -51,14 +51,19 @@ const SAVE_KEY = 'catlab:save:v1';
 // касается краёв окна хотя бы по одной оси (п. 1.6.2.1), остаток — леттербокс
 // цвета фона. Весь UI продолжает считать раскладку от roomW×roomH — но теперь
 // это стабильные виртуальные размеры, а не пиксели окна.
-const DESIGN_H = 720;
+// На тач-устройствах виртуальная высота меньше: каждый виртуальный пиксель
+// физически крупнее, весь UI (текст, кнопки, коты) растёт на ~16% — на
+// телефоне 720 было нечитаемо мелко. Вёрстка не ломается: раскладка везде
+// считается от roomW×roomH.
+const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+const DESIGN_H = IS_TOUCH ? 580 : 720;
 // уже 4:3 не сжимаемся (полосы сверху/снизу) — напр. портрет на мобиле, где
 // платформа при одной поддерживаемой ориентации сама показывает заглушку
 const MIN_ASPECT = 4 / 3;
 // на десктопе длинная сторона поля не более чем вдвое больше короткой
 // (п. 1.6.2.2); на телефонах лимита нет (п. 1.6.1 — полный экран), поэтому на
 // тач-устройствах заполняем экран целиком (современные телефоны ≤ ~2.4:1)
-const MAX_ASPECT = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 2.5 : 2;
+const MAX_ASPECT = IS_TOUCH ? 2.5 : 2;
 
 export class Game implements UiContext {
   readonly app = new Application();
@@ -158,24 +163,16 @@ export class Game implements UiContext {
     this.shownLevel = this.state.level; // база для баннера повышения уровня
     this.wasStarving = isStarving(this.state); // не спамить тостом «корм закончился» на первом кадре
 
-    // Готовый арт коллекции: породы `<breed>__<sex>.png` и базовые `<sex>__N.png`.
-    // Грузим до сборки комнат; вис делаем из той же текстуры. Если ассет не
-    // подгрузился — кот рисуется процедурно (фолбэк).
+    // Готовый арт коллекции: варианты всех пород `<breed>__<n>.png` (включая
+    // базовые T1: moggie и домашних), без привязки к полу. Грузим до сборки комнат;
+    // вис делаем из той же текстуры. Нет ассета → кот рисуется процедурно (фолбэк).
     const breedAssets = import.meta.glob('../assets/breeds/*.png', {
-      eager: true, query: '?url', import: 'default',
-    }) as Record<string, string>;
-    const baseAssets = import.meta.glob('../assets/base/*.png', {
       eager: true, query: '?url', import: 'default',
     }) as Record<string, string>;
 
     await Promise.all(Object.entries(breedAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.png', ''); // <breed>__<sex>
+      const name = path.split('/').pop()!.replace('.png', ''); // <breed>__<n>
       try { setAiBreedTexture(name, await Assets.load(url)); } catch { /* фолбэк */ }
-    }));
-    await Promise.all(Object.entries(baseAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.png', ''); // <sex>__<n>
-      const sex: Sex = name.startsWith('female') ? 'female' : 'male';
-      try { addBaseTexture(sex, await Assets.load(url), name); } catch { /* фолбэк */ }
     }));
 
     // Готовые фоны комнат («комната-коробка» в нашей перспективе) — по имени файла
@@ -574,6 +571,11 @@ export class Game implements UiContext {
     this.showOverlay(buildBoostMenu(this, boostId, close));
   }
 
+  openResearchConfirm(defId: string): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildResearchConfirm(this, defId, close));
+  }
+
   openOrders(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildOrdersPanel(this, close));
@@ -719,6 +721,11 @@ export class Game implements UiContext {
 
   /** Подгоняем рендерер под реально видимую область (см. onResize выше). */
   private resize(): void {
+    // Пока в фокусе HTML-поле ввода (переименование кота), мобильная клавиатура
+    // ужимает visualViewport — НЕ пересчитываем сцену, иначе игра «схлопывается»
+    // под остаток экрана над клавиатурой. При закрытии поля вьюпорт вернётся и
+    // придёт финальный resize, который всё восстановит.
+    if (document.activeElement instanceof HTMLInputElement) return;
     const vv = window.visualViewport;
     const w = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
     const h = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
@@ -946,19 +953,20 @@ export class Game implements UiContext {
     this.dots = [];
     const n = this.rooms.length;
     // точки разведены шире (легче попасть пальцем) и прижаты к самому низу.
-    const gap = 40;
+    const gap = 48;
     const y = this.roomH - 12;
     const totalW = gap * (n - 1);
     const startX = this.roomW / 2 - totalW / 2;
     for (let i = 0; i < n; i++) {
       const d = new Graphics();
-      d.circle(0, 0, 7).fill(COLORS.cardEdge);
+      d.circle(0, 0, 8.5).fill(COLORS.cardEdge);
       d.position.set(startX + i * gap, y);
       d.eventMode = 'static';
       d.cursor = 'pointer';
       // зона тапа крупнее самой точки (точка маленькая — пальцем не попасть);
-      // вверх не вылезает за низ контента, чтобы не перехватывать тапы по нему.
-      d.hitArea = new Rectangle(-20, -14, 40, 26);
+      // вверх не вылезает за низ контента (верх зоны = -14, как раньше), рост зоны
+      // идёт вширь и вниз в леттербокс — чтобы не перехватывать тапы по контенту.
+      d.hitArea = new Rectangle(-24, -14, 48, 30);
       d.on('pointertap', () => this.goRoom(i));
       this.nav.addChild(d);
       this.dots.push(d);
@@ -969,13 +977,13 @@ export class Game implements UiContext {
     // выше world), и перехватывали тапы по контенту у левого/правого края
     // (напр. по крайним узлам Исследований). Теперь вся навигация — в нижней
     // зарезервированной полосе, контент её не касается.
-    const aw = 34, ah = 24;
+    const aw = 41, ah = 28;
     const leftX = Math.max(aw / 2 + 4, startX - gap - aw / 2);
     const rightX = Math.min(this.roomW - aw / 2 - 4, startX + totalW + gap + aw / 2);
-    const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 21 });
+    const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     left.position.set(leftX, y);
     left.onTap = () => this.goRoom(this.currentRoom - 1);
-    const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 21 });
+    const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     right.position.set(rightX, y);
     right.onTap = () => this.goRoom(this.currentRoom + 1);
     this.nav.addChild(left, right);
@@ -985,7 +993,7 @@ export class Game implements UiContext {
     this.dots.forEach((d, i) => {
       d.clear();
       const active = i === this.currentRoom;
-      d.circle(0, 0, active ? 9 : 7).fill(active ? COLORS.primary : COLORS.cardEdge);
+      d.circle(0, 0, active ? 11 : 8.5).fill(active ? COLORS.primary : COLORS.cardEdge);
     });
   }
 

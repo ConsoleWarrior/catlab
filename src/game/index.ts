@@ -26,7 +26,7 @@ export {
   catFoodPerMin, feedingCatCount, foodBuyQuote,
   feedEfficiency, autoFeedEnabled, autoFeed, breedChanceMult, kinshipSafety, extraHearts, applyExtraHearts,
   makeCatInstance, buyCatCost, growthScale, growthProgress, growthRemainingMs, isAdult,
-  boostCharges, activeBoosts, consumeBoosts, researchBonus,
+  boostCharges, activeBoostId, activeBoosts, consumeBoosts, researchBonus,
   researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
   catMarketValue, pedigreeValueMult, healthValueMult, labReward, shelterTotals,
   cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
@@ -58,7 +58,7 @@ export {
   keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
   speedUpBreeding, adSkipBreeding, speedUpGrowth, adSkipGrowth,
   putCatInBasket, clearOrderBasket,
-  buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, unlockResearch,
+  buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
   startRecipeResearch, finishRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
 } from './actions.js';

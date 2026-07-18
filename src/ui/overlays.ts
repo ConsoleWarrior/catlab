@@ -9,9 +9,9 @@ import {
   isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
   basketCat, refreshOrderByAd, msUntilOrdersReset,
-  isAdult, growthScale, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
+  isAdult, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
   roomCount, nurseryCapacity, shelterCapacity,
-  catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, boostCharges,
+  catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, toggleBoost, boostCharges, activeBoostId,
   adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
   sendToLab, labReward, shelterTotals, adoptAll, sendAllToLab,
   healCat, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
@@ -20,11 +20,12 @@ import {
   analyzeCat, ANALYZE_COIN_COST, ANALYZE_AD_COOLDOWN_MS, KINSHIP_RU,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
+  RESEARCH, unlockResearch, researchLevel, researchNext,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, dormantTraits, traitTag } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR } from './theme.js';
+import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
 
@@ -287,7 +288,10 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
 
   const render = (): void => {
     root.removeChildren();
-    const charges = boostCharges(ctx.state, def.id);
+    const charges = boostCharges(ctx.state, def.id);       // склад зарядов этого усилителя
+    const activeId = activeBoostId(ctx.state);             // какой усилитель активен (или нет)
+    const active = activeId === def.id;                    // активен именно этот
+    const activeDef = activeId ? BOOSTS.find((b) => b.id === activeId) : undefined;
     const items: Container[] = [];
 
     const title = label(`${def.glyph} ${def.label}`, 19, COLORS.ink, '800');
@@ -306,34 +310,74 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     items.push(desc);
     let y = 48 + desc.height + 14;
 
+    // Склад зарядов (не зависит от активности — заряды копятся, тратятся в вязке).
+    const stock = label(
+      charges > 0 ? `📦 В запасе: ×${charges}` : '📦 В запасе: нет зарядов',
+      13, charges > 0 ? COLORS.ink : COLORS.inkSoft, '800',
+    );
+    stock.position.set(W / 2, y);
+    items.push(stock);
+    y += 22;
+
+    // Статус активности: активен сейчас / заряжён, но не активен / другой активен.
     const status = label(
-      charges > 0
-        ? `⚡ заряжено${charges > 1 ? ` ×${charges}` : ''} · сработает на следующей вязке`
-        : 'не заряжено · активируй усилитель',
-      12, charges > 0 ? COLORS.good : COLORS.inkSoft, '700',
+      active
+        ? '⚡ активен · сработает на следующей вязке'
+        : charges > 0
+          ? (activeDef ? `не активен · сейчас активен ${activeDef.glyph} ${activeDef.label}` : 'не активен · включи, чтобы работал')
+          : 'нет зарядов · сначала заряди',
+      12, active ? COLORS.good : COLORS.inkSoft, '700',
     );
     status.position.set(W / 2, y);
     items.push(status);
-    y += 26;
+    y += 20;
+
+    // Правило: одновременно активен только один усилитель.
+    const rule = label('⚖️ Активен только один усилитель за раз', 11, COLORS.inkSoft, '600');
+    rule.position.set(W / 2, y);
+    items.push(rule);
+    y += 22;
 
     const buyWith = (currency: 'dna' | 'crystals'): void => {
       const r = buyBoost(ctx.state, def.id, currency);
-      if (r.ok) { ctx.commit(); ctx.toast(`${def.glyph} ${def.label} заряжен`); render(); }
+      if (r.ok) { ctx.commit(); ctx.toast(`${def.glyph} ${def.label}: +1 заряд`); render(); }
       else ctx.toast(r.reason);
     };
 
     const pad = 24, gap = 12;
+    // Зарядка (любых типов, помногу) — доступна всегда.
     const bw = (W - pad * 2 - gap) / 2;
-    const geneBtn = new Button({ text: `Гены\n🧬 ${def.dna}`, w: bw, h: 54, color: COLORS.dna, fontSize: 14 });
+    const geneBtn = new Button({ text: `Заряд\n🧬 ${def.dna}`, w: bw, h: 54, color: COLORS.dna, fontSize: 14 });
     geneBtn.enabled = ctx.state.dna >= def.dna;
     geneBtn.onTap = () => buyWith('dna');
     geneBtn.position.set(pad + bw / 2, y + 27);
-    const crysBtn = new Button({ text: `Кристаллы\n💎 ${def.crystals}`, w: bw, h: 54, color: COLORS.crystals, fontSize: 14 });
+    const crysBtn = new Button({ text: `Заряд\n💎 ${def.crystals}`, w: bw, h: 54, color: COLORS.crystals, fontSize: 14 });
     crysBtn.enabled = ctx.state.crystals >= def.crystals;
     crysBtn.onTap = () => buyWith('crystals');
     crysBtn.position.set(pad + bw + gap + bw / 2, y + 27);
     items.push(geneBtn, crysBtn);
     y += 66;
+
+    // Переключатель активности (заряды НЕ тратит). Активировать можно только при
+    // наличии зарядов; активный — выключить. Включение снимает активность с другого.
+    const toggleBtn = new Button({
+      text: active ? '🟢 Активен · выключить' : charges > 0 ? '⚡ Сделать активным' : 'Заряди, чтобы активировать',
+      w: W - pad * 2, h: 42,
+      color: active ? COLORS.good : charges > 0 ? COLORS.primary : COLORS.cardEdge,
+      textColor: active || charges > 0 ? 0xffffff : COLORS.inkSoft, fontSize: 14.5,
+    });
+    toggleBtn.enabled = active || charges > 0;
+    toggleBtn.position.set(W / 2, y + 21);
+    toggleBtn.onTap = () => {
+      const wasActive = active;
+      const r = toggleBoost(ctx.state, def.id);
+      if (!r.ok) { ctx.toast(r.reason === 'нет зарядов' ? 'Нет зарядов — сначала заряди' : r.reason); return; }
+      ctx.commit();
+      ctx.toast(wasActive ? `${def.glyph} ${def.label} выключен` : `${def.glyph} ${def.label} активен ⚡`);
+      render();
+    };
+    items.push(toggleBtn);
+    y += 52;
 
     const closeBtn = new Button({ text: 'Закрыть', w: W - pad * 2, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
     closeBtn.position.set(W / 2, y + 20);
@@ -345,6 +389,83 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
   };
 
   render();
+  return root;
+}
+
+/**
+ * Подтверждение покупки улучшения (узел дерева «Улучшения» в Генолабе). Открывается
+ * тапом по доступному узлу — чтобы случайный тап не тратил валюту. Показывает эффект
+ * уровня, цену и баланс; «Купить» активна только при достатке средств.
+ */
+export function buildResearchConfirm(ctx: UiContext, defId: string, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const def = RESEARCH.find((r) => r.id === defId);
+  if (!def) { root.addChild(panel(W, 80, COLORS.hud, 18)); return root; }
+
+  const owned = researchLevel(ctx.state, def.id);
+  const total = def.levels.length;
+  const next = researchNext(ctx.state, def);
+  const curColor = def.currency === 'dna' ? COLORS.dna : COLORS.coins;
+  const curGlyph = def.currency === 'dna' ? '🧬' : '💰';
+  const balance = def.currency === 'dna' ? ctx.state.dna : ctx.state.coins;
+  const cost = next?.cost ?? 0;
+  const afford = !!next && balance >= cost;
+  const items: Container[] = [];
+
+  let y = 24;
+  const title = label(`${def.glyph} ${def.title}`, 20, COLORS.ink, '800');
+  title.position.set(W / 2, y); items.push(title); y += 26;
+
+  if (total > 1) {
+    const lvl = label(`Уровень ${owned + 1} из ${total}`, 13, COLORS.inkSoft, '700');
+    lvl.position.set(W / 2, y); items.push(lvl); y += 24;
+  }
+
+  const desc = new Text({
+    text: def.desc,
+    style: {
+      fontFamily: FONT, fontSize: 15, fontWeight: '600', fill: COLORS.ink,
+      align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 20,
+    },
+  });
+  desc.anchor.set(0.5, 0);
+  desc.position.set(W / 2, y); items.push(desc);
+  y += desc.height + 16;
+
+  const price = label(`Цена: ${curGlyph} ${cost}`, 17, afford ? curColor : COLORS.warn, '800');
+  price.position.set(W / 2, y); items.push(price); y += 24;
+  const bal = label(`У вас: ${curGlyph} ${fmt(balance)}`, 13, COLORS.inkSoft, '700');
+  bal.position.set(W / 2, y); items.push(bal); y += 30;
+
+  const pad = 24, gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  const noBtn = new Button({ text: 'Отмена', w: bw, h: 50, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  noBtn.onTap = close;
+  noBtn.position.set(pad + bw / 2, y + 25);
+  const buyBtn = new Button({ text: afford ? 'Купить' : 'Не хватает', w: bw, h: 50, color: curColor, fontSize: 16 });
+  buyBtn.enabled = afford;
+  buyBtn.onTap = () => {
+    const r = unlockResearch(ctx.state, def.id);
+    if (!r.ok) {
+      ctx.toast(
+        r.reason === 'locked' ? 'Улучшения ещё заперты 🔒'
+          : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
+            : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason,
+      );
+      return;
+    }
+    ctx.commit();
+    const lvlNow = researchLevel(ctx.state, def.id);
+    ctx.toast(total > 1 ? `${def.glyph} ${def.title} · ур. ${lvlNow}/${total} ✅`
+      : `${def.glyph} ${def.title} изучено ✅`);
+    close();
+  };
+  buyBtn.position.set(pad + bw + gap + bw / 2, y + 25);
+  items.push(noBtn, buyBtn);
+  y += 60;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), ...items);
   return root;
 }
 
@@ -384,15 +505,7 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   title.anchor.set(0.5, 0);
   title.position.set(W / 2, 16);
 
-  const boxY = 16 + title.height + 10, boxH = 130;
-  const cradle = new Graphics();
-  cradle.roundRect(W / 2 - 78, boxY, 156, boxH, 18)
-    .fill({ color: COLORS.card })
-    .stroke({ width: 3, color: tierCol, alpha: 0.85 });
-  const sp = catSprite(ctx.app, cat, boxH * 0.7 * growthScale(cat, ctx.now()));
-  sp.position.set(W / 2, boxY + boxH - 12);
-
-  let y = boxY + boxH + 22;
+  let y = 16 + title.height + 16;
   const st = stars(cat.rarityTier, 15);
   st.position.set(W / 2, y); y += 22;
   const tierT = label(`🍼 котёнок · ${TIER_RU[cat.rarityTier]}`, 13, tierCol, '800');
@@ -446,7 +559,7 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   closeBtn.onTap = close;
   y += 50;
 
-  root.addChild(panel(W, y, COLORS.hud, 18), title, cradle, sp, st, tierT, hint, barBg, bar, timeT, ...controls, closeBtn);
+  root.addChild(panel(W, y, COLORS.hud, 18), title, st, tierT, hint, barBg, bar, timeT, ...controls, closeBtn);
 
   const mmss = (ms: number): string => {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -484,10 +597,14 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   const subject: Ancestor = { id: cat.id, breed: cat.breed, known: true, mother: ped.mother, father: ped.father };
   const maxDepth = PEDIGREE_DEPTH; // 0=кот, 1=родители, 2=деды, 3=прадеды
 
-  // геометрия ячеек/колонок
-  const cellW = 108, cellH = 42, colGap = 16, rowGap = 9;
+  // геометрия ячеек/колонок; на таче (k=1.2) весь чертёж крупнее — ячейки И текст
+  // растут вместе, чтобы длинные названия пород не вылезали. На ПК k=1 (без изменений).
+  // Панель всё равно вписывается в экран (fitOverlay), так что полное 4-поколенное
+  // дерево на узком экране ужмётся как раньше, а короткие деревья станут читаемее.
+  const k = UI_SCALE;
+  const cellW = 108 * k, cellH = 42 * k, colGap = 16 * k, rowGap = 9 * k;
   const slotH = cellH + rowGap;
-  const padX = 16, padTop = 64, headerY = 46;
+  const padX = 16 * k, padTop = 64 * k, headerY = 46 * k;
   const colX = (d: number): number => padX + d * (cellW + colGap) + cellW / 2;
 
   type Placed = { node: Ancestor; depth: number; x: number; y: number; isRoot: boolean };
@@ -541,18 +658,18 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
     g.roundRect(-cellW / 2, -cellH / 2, cellW, cellH, 9)
       .fill({ color: p.isRoot ? COLORS.card : COLORS.hud, alpha: hidden ? 0.7 : 1 })
       .stroke({ width: p.isRoot ? 3 : 2, color: col, alpha: hidden ? 0.8 : 0.95 });
-    g.circle(-cellW / 2 + 11, 0, 4).fill({ color: col });
+    g.circle(-cellW / 2 + 11 * k, 0, 4 * k).fill({ color: col });
     const name = hidden ? '🔒 ???'
       : p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
     const t = new Text({
       text: name,
       style: {
-        fontFamily: FONT, fontSize: 11, fontWeight: '700', fill: hidden ? COLORS.inkSoft : COLORS.ink,
-        wordWrap: true, breakWords: true, wordWrapWidth: cellW - 26, lineHeight: 12, align: 'center',
+        fontFamily: FONT, fontSize: 11 * k, fontWeight: '700', fill: hidden ? COLORS.inkSoft : COLORS.ink,
+        wordWrap: true, breakWords: true, wordWrapWidth: cellW - 26 * k, lineHeight: 12 * k, align: 'center',
       },
     });
     t.anchor.set(0.5);
-    t.position.set(5, 0);
+    t.position.set(5 * k, 0);
     c.addChild(g, t);
     c.position.set(p.x, p.y);
     return c;
@@ -568,7 +685,7 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   }
 
   const title = label('🌳 Родословная', 18, COLORS.ink, '800');
-  title.position.set(W / 2, 26);
+  title.position.set(W / 2, 26 * k);
 
   let y = treeBottom + 8;
   const footer: Container[] = [];
@@ -576,8 +693,8 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
     const t = new Text({
       text,
       style: {
-        fontFamily: FONT, fontSize: 11, fontWeight: '600', fill: color,
-        align: 'center', wordWrap: true, wordWrapWidth: W - 28, lineHeight: 15,
+        fontFamily: FONT, fontSize: 11 * k, fontWeight: '600', fill: color,
+        align: 'center', wordWrap: true, wordWrapWidth: W - 28 * k, lineHeight: 15 * k,
       },
     });
     t.anchor.set(0.5, 0);

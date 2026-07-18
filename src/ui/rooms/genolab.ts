@@ -19,7 +19,7 @@ import type { FederatedWheelEvent } from 'pixi.js';
 import { BREEDS, BREEDS_BY_TIER, breedName, tierOfBreed, RECIPES, recipeKey } from '../../genetics/index.js';
 import type { RarityTier, Recipe } from '../../genetics/index.js';
 import {
-  RESEARCH, unlockResearch, isUnlocked, unlockLevelOf,
+  RESEARCH, isUnlocked, unlockLevelOf,
   researchLevel, researchOwned, researchMaxed, researchNext,
   breedDiscovered, breedStudied, researchableRecipes,
   startRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
@@ -110,11 +110,11 @@ export function createGenolab(ctx: UiContext): Room {
     defs.forEach((d, i) => {
       const active = d.id === section;
       const b = new Button({
-        text: d.text, w: bw, h: 38,
+        text: d.text, w: bw, h: 42,
         color: active ? COLORS.primary : COLORS.card,
-        textColor: active ? 0xffffff : COLORS.ink, fontSize: 12.5,
+        textColor: active ? 0xffffff : COLORS.ink, fontSize: 15.5,
       });
-      b.position.set(bw / 2 + i * (bw + gap), 19);
+      b.position.set(bw / 2 + i * (bw + gap), 21);
       b.onTap = () => { section = d.id; remembered.section = d.id; refresh(); };
       c.addChild(b);
     });
@@ -289,12 +289,12 @@ export function createGenolab(ctx: UiContext): Room {
       });
     c.addChild(bg);
 
-    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(12.5, nh * 0.145), COLORS.ink, '800', nw - 12);
+    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(15.5, nh * 0.155), COLORS.ink, '800', nw - 12);
     title.position.set(0, -nh / 2 + nh * 0.19);
     c.addChild(title);
 
-    const desc = wrapped(def.desc, Math.min(9.5, nh * 0.105), COLORS.inkSoft, '600', nw - 12);
-    desc.position.set(0, -nh / 2 + nh * 0.48);
+    const desc = wrapped(def.desc, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600', nw - 14);
+    desc.position.set(0, -nh / 2 + nh * 0.47);
     c.addChild(desc);
 
     // пипсы уровней (только у многоуровневых узлов)
@@ -305,12 +305,12 @@ export function createGenolab(ctx: UiContext): Room {
     }
 
     const status = maxed
-      ? label('✓ макс', Math.min(12, nh * 0.13), COLORS.good, '800')
+      ? label('✓ макс', Math.min(14, nh * 0.14), COLORS.good, '800')
       : !reqMet
-        ? label('🔒', Math.min(14, nh * 0.15), COLORS.inkSoft, '800')
+        ? label('🔒', Math.min(16, nh * 0.16), COLORS.inkSoft, '800')
         : levelLocked
-          ? label(`🔒 ур. ${next!.minLevel}`, Math.min(11.5, nh * 0.125), COLORS.inkSoft, '800')
-          : label(`${curGlyph} ${next!.cost}`, Math.min(13, nh * 0.14), affordable ? curColor : COLORS.inkSoft, '800');
+          ? label(`🔒 ур. ${next!.minLevel}`, Math.min(13.5, nh * 0.135), COLORS.inkSoft, '800')
+          : label(`${curGlyph} ${next!.cost}`, Math.min(15, nh * 0.15), affordable ? curColor : COLORS.inkSoft, '800');
     status.position.set(0, nh / 2 - nh * 0.13);
     c.addChild(status);
 
@@ -321,17 +321,8 @@ export function createGenolab(ctx: UiContext): Room {
       if (maxed) { ctx.toast(`${def.title}: прокачано полностью ✅`); return; }
       if (!reqMet) { ctx.toast('Сначала изучи предыдущий узел 🔒'); return; }
       if (levelLocked) { ctx.toast(`Уровень откроется на ур. ${next!.minLevel} 🔒`); return; }
-      const r = unlockResearch(ctx.state, def.id);
-      if (r.ok) {
-        ctx.commit();
-        const lvlNow = researchLevel(ctx.state, def.id);
-        ctx.toast(total > 1 ? `${def.glyph} ${def.title} · ур. ${lvlNow}/${total} ✅`
-          : `${def.glyph} ${def.title} изучено ✅`);
-      } else ctx.toast(
-        r.reason === 'locked' ? 'Улучшения ещё заперты 🔒'
-          : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
-            : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason,
-      );
+      // сама покупка — в подтверждающем окне (чтобы не купить случайным тапом)
+      ctx.openResearchConfirm(def.id);
     });
     return c;
   }
@@ -439,7 +430,7 @@ export function createGenolab(ctx: UiContext): Room {
     const rowGap = 16;
     const labelH = 22;
     const nodeW = (viewW - colGap * (maxCols - 1)) / maxCols;
-    const nodeH = Math.max(94, Math.min(120, viewH * 0.24));
+    const nodeH = Math.max(104, Math.min(140, viewH * 0.27));
     const cxOf = (col: number): number => col * (nodeW + colGap) + nodeW / 2;
 
     let y = 4;

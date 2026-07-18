@@ -4,7 +4,7 @@ import {
   createInitialState, startBreeding, assignBreeder, clearBreederSlot, isInSlot,
   collectReady, adoptCat, moveCat, keepKittenWithParents,
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
-  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, unlockResearch,
+  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, toggleBoost, activeBoostId, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
   revealPedigree, pedigreeHasFog,
 } from './index.js';
@@ -305,6 +305,43 @@ describe('генная инженерия', () => {
     expect(s.dna).toBe(0);      // гены не тронуты
   });
 
+  it('заряды копятся любых типов; авто-активируется первый купленный', () => {
+    const s = createInitialState(makeRng(40), 0);
+    s.level = 10; // Генная инженерия открыта уровнем
+    s.dna = 300; s.crystals = 20;
+    expect(buyBoost(s, 'noDown').ok).toBe(true);
+    expect(s.activeBoost).toBe('noDown'); // ничего не было активно → авто-активация
+    // другой тип тоже заряжается (склад копится), но активность не меняется
+    expect(buyBoost(s, 'tierUp').ok).toBe(true);
+    expect(buyBoost(s, 'noDown').ok).toBe(true); // стек своего типа
+    expect(s.boosts.noDown).toBe(2);
+    expect(s.boosts.tierUp).toBe(1);
+    expect(s.activeBoost).toBe('noDown'); // всё ещё первый
+    expect(activeBoostId(s)).toBe('noDown');
+  });
+
+  it('toggleBoost переключает активность без траты зарядов; активен только один', () => {
+    const s = createInitialState(makeRng(40), 0);
+    s.level = 10; // Генная инженерия открыта уровнем
+    s.dna = 300;
+    buyBoost(s, 'noDown'); // active = noDown
+    buyBoost(s, 'tierUp'); // на складе, не активен
+    // включаем другой — прежний слетает, заряды целы
+    expect(toggleBoost(s, 'tierUp').ok).toBe(true);
+    expect(s.activeBoost).toBe('tierUp');
+    expect(s.boosts.noDown).toBe(1);
+    expect(s.boosts.tierUp).toBe(1);
+    // выключаем активный — активного нет, заряды целы
+    expect(toggleBoost(s, 'tierUp').ok).toBe(true);
+    expect(s.activeBoost).toBe(null);
+    expect(activeBoostId(s)).toBeUndefined();
+    expect(s.boosts.tierUp).toBe(1);
+    // активировать усилитель без зарядов нельзя
+    const r = toggleBoost(s, 'luckyUp');
+    expect(r.ok).toBe(false);
+    expect(r.ok ? undefined : r.reason).toBe('нет зарядов');
+  });
+
   it('🔼 Форсаж в инкубаторе поднимает тир котёнка и тратит заряд', () => {
     const rng = makeRng(41);
     const s = createInitialState(rng, 0);
@@ -316,6 +353,7 @@ describe('генная инженерия', () => {
     const ev = collectReady(s, incubationDuration(s), rng);
     expect(ev[0]!.kitten!.rarityTier).not.toBe('common'); // поднялся минимум на 1 тир
     expect(s.boosts.tierUp).toBe(0); // заряд списан
+    expect(s.activeBoost).toBe(null); // заряды кончились → активность снята автоматически
   });
 
   it('заряд Форсажа не тратится впустую на легендарной паре', () => {

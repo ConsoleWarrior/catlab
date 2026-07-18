@@ -109,7 +109,8 @@ export interface GameState {
   upgrades: Record<string, number>; // id апгрейда → уровень
   unlockedGenes: string[];          // открытые гены/фичи (Генолаб, легаси)
   discoveredBreeds: string[];       // когда-либо полученные породы (Котодекс)
-  boosts: Record<string, number>;   // заряды генной инженерии (применяются при рождении)
+  boosts: Record<string, number>;   // склад зарядов усилителей (id → сколько куплено), любых типов
+  activeBoost: string | null;       // какой усилитель СЕЙЧАС активен (сработает в вязке); единовременно только один
   research: Record<string, number>; // id узла дерева «Улучшений» → купленный уровень (0/нет — не начат)
   // Система знаний: рецепты, открытые ИССЛЕДОВАНИЕМ (ключи recipeKey; выведенные
   // породы отдельно — discoveredBreeds). Порода «изучена» = выведена ИЛИ рецепт открыт.

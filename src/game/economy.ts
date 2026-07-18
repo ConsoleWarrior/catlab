@@ -358,23 +358,41 @@ export function growthRemainingMs(cat: Cat, now: number): number {
 
 // --- Генная инженерия ---
 
-/** Сколько зарядов усилителя заряжено. */
+/** Сколько зарядов усилителя на складе (куплено). Не зависит от активности. */
 export function boostCharges(state: GameState, id: C.BoostId): number {
   return state.boosts[id] ?? 0;
 }
 
-/** Активные усилители (есть хотя бы один заряд) — для передачи в breedKitten. */
+/**
+ * Какой усилитель сейчас АКТИВЕН (сработает в вязке). Единовременно только один —
+ * это `state.activeBoost`, но лишь пока у него есть заряды на складе (иначе гореть
+ * нечему → считаем неактивным).
+ */
+export function activeBoostId(state: GameState): C.BoostId | undefined {
+  const id = state.activeBoost as C.BoostId | null;
+  return id && boostCharges(state, id) > 0 ? id : undefined;
+}
+
+/** Активный усилитель как флаги для breedKitten (не более одного). */
 export function activeBoosts(state: GameState): BreedBoosts {
   const out: BreedBoosts = {};
-  for (const def of C.BOOSTS) if (boostCharges(state, def.id) > 0) out[def.id] = true;
+  const id = activeBoostId(state);
+  if (id) out[id] = true;
   return out;
 }
 
-/** Списать по одному заряду усилителей, которые реально сработали (флаги из breedKitten). */
+/**
+ * Списать по одному заряду усилителей, которые реально сработали (флаги из
+ * breedKitten — активным может быть лишь один). Если у активного заряды кончились —
+ * снимаем активность (гореть больше нечему).
+ */
 export function consumeBoosts(state: GameState, used: BreedBoosts): void {
   for (const def of C.BOOSTS) {
     const n = boostCharges(state, def.id);
     if (used[def.id] && n > 0) state.boosts[def.id] = n - 1;
+  }
+  if (state.activeBoost && boostCharges(state, state.activeBoost as C.BoostId) <= 0) {
+    state.activeBoost = null;
   }
 }
 

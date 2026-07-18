@@ -40,7 +40,8 @@ export function catVisibleTraits(cat: Cat): string[] {
 /** Детальные строки облика кота (для меню). Редкость показывают цветные звёзды. */
 export function catTraits(cat: Cat): string[] {
   const sex = cat.genotype.sex === 'female' ? 'пол: самка ♀' : 'пол: самец ♂';
-  const lines = [sex, `порода: ${breedName(cat.breed)}`];
+  // порода не дублируется — она уже в заголовке меню кота (единственный потребитель)
+  const lines = [sex];
   const vis = catVisibleTraits(cat);
   if (vis.length) lines.push(`признаки: ${vis.join(' · ')}`);
   if (cat.motherBreed && cat.fatherBreed) {

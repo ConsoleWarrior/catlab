@@ -25,6 +25,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     unlockedGenes: [...BASE_GENES],
     discoveredBreeds: [],
     boosts: {},
+    activeBoost: null,
     research: {},
     knownRecipes: [],
     recipeResearch: { startedAt: 0, readyAt: 0 },
@@ -65,6 +66,12 @@ export function deserialize(json: string): GameState {
   // мягкие дефолты для полей, добавленных в новых версиях
   if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
   if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
+  // Активный усилитель — поле добавлено позже (склад зарядов отделён от активности).
+  // У старых сейвов его нет → активируем первый усилитель, у которого есть заряды,
+  // чтобы поведение «заряжен → сработает» сохранилось.
+  if (typeof data.activeBoost === 'undefined') {
+    data.activeBoost = Object.keys(data.boosts).find((k) => (data.boosts[k] ?? 0) > 0) ?? null;
+  }
   // research с v6 — карта id→уровень; старый формат (массив id) больше не совместим,
   // но сейвы прежних версий и так сбрасываются загрузчиком по SAVE_VERSION.
   if (!data.research || typeof data.research !== 'object' || Array.isArray(data.research)) {

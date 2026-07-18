@@ -1,10 +1,11 @@
 /**
  * Спрайты котов из готовой арт-коллекции.
  *
- * Каждый кот = порода (cat.breed) + пол (genotype.sex). Текстуры — финальные
- * PNG с прозрачным фоном, грузятся в game.start() и кладутся сюда по ключу
- * `<breed>__<sex>`. Базовый «Дворовый» (moggie) имеет несколько вариантов окраса
- * на пол — выбираем детерминированно по id кота (стабильно между перерисовками).
+ * Порода (cat.breed) имеет несколько вариантов-спрайтов БЕЗ привязки к полу —
+ * выбираем один детерминированно по id кота (стабильно между перерисовками).
+ * Текстуры — финальные PNG с прозрачным фоном, грузятся в game.start() из файлов
+ * `<breed>__<n>.png`. Базовый «Дворовый» (moggie) хранит варианты отдельно, по
+ * полу (папка assets/base, ключ `<sex>__<n>`) — исторический набор, оставлен как есть.
  *
  * ПЕРЕКРАСКА ОТКЛЮЧЕНА: арт показывается как есть (тинт 0xffffff). Прежний
  * gradient-map по окрасу убран — он смазывал реализм спрайтов. Если текстуры нет
@@ -14,7 +15,7 @@
 import { BlurFilter, ColorMatrixFilter, Sprite } from 'pixi.js';
 import type { Application, Texture } from 'pixi.js';
 import { expressPhenotype } from '../genetics/index.js';
-import type { Sex, RarityTier } from '../genetics/index.js';
+import type { RarityTier } from '../genetics/index.js';
 import type { Cat } from '../game/index.js';
 import { buildCat } from '../render/catSprite.js';
 import { TIER_COLOR } from './theme.js';
@@ -64,36 +65,29 @@ export function rarityGlow(src: Sprite, tier: RarityTier, displayH: number): Spr
 
 const cache = new Map<string, Texture>();
 
-// Текстуры пород по ключу `<breed>__<sex>` и варианты базового кота по полу.
-const breedTex = new Map<string, Texture>();
-const baseFemale: Texture[] = [];
-const baseMale: Texture[] = [];
+// Варианты-текстуры пород по ключу породы (включая базовые T1: moggie и домашних).
+const breedTex = new Map<string, Texture[]>();
 
 // [BLINK-TEST] текстура → имя файла спрайта (для разметки глаз eyes.json)
 const texKey = new Map<number, string>();
-/** Имя файла спрайта по его текстуре (`<breed>__<sex>` / `<sex>__<n>`), либо undefined. */
+/** Имя файла спрайта по его текстуре (`<breed>__<n>`), либо undefined. */
 export function textureKeyOf(t: Texture): string | undefined { return texKey.get(t.uid); }
 
-function baseList(sex: Sex): Texture[] {
-  return sex === 'female' ? baseFemale : baseMale;
+/**
+ * Зарегистрировать вариант-текстуру породы. Имя файла `<breed>__<n>`: порода —
+ * всё до `__`, дальше номер варианта. Пол в имени не участвует.
+ */
+export function setAiBreedTexture(fileKey: string, t: Texture): void {
+  const breed = fileKey.split('__')[0]!;
+  const list = breedTex.get(breed) ?? [];
+  list.push(t);
+  breedTex.set(breed, list);
+  texKey.set(t.uid, fileKey); // [BLINK-TEST]
 }
 
-/** Зарегистрировать текстуру породы (ключ = `<breed>__<sex>`). */
-export function setAiBreedTexture(key: string, t: Texture): void {
-  breedTex.set(key, t);
-  texKey.set(t.uid, key); // [BLINK-TEST]
-}
-
-/** Добавить вариант базового («Дворового») кота для пола (key = `<sex>__<n>`). */
-export function addBaseTexture(sex: Sex, t: Texture, key: string): void {
-  baseList(sex).push(t);
-  texKey.set(t.uid, key); // [BLINK-TEST]
-}
-
-/** Текстура-миниатюра породы для Котодекса (любой доступный пол), null → нет арта. */
+/** Текстура-миниатюра породы для Котодекса (первый вариант), null → нет арта. */
 export function breedThumbTexture(breedKey: string): Texture | null {
-  if (breedKey === 'moggie') return baseFemale[0] ?? baseMale[0] ?? null;
-  return breedTex.get(`${breedKey}__female`) ?? breedTex.get(`${breedKey}__male`) ?? null;
+  return breedTex.get(breedKey)?.[0] ?? null;
 }
 
 /** Стабильный хеш id → неотрицательное число (для выбора варианта базы). */
@@ -108,21 +102,13 @@ function pickVariant(list: Texture[], id: string): Texture | null {
   return list.length > 0 ? list[idHash(id) % list.length]! : null;
 }
 
-/** Текстура породы для кота (или базовый вариант), null → процедурный фолбэк. */
+/** Текстура породы для кота (вариант по id), null → процедурный фолбэк. */
 function breedTexFor(cat: Cat): Texture | null {
-  const sex = cat.genotype.sex;
   const breed = cat.breed || 'moggie';
-  if (breed !== 'moggie') {
-    return breedTex.get(`${breed}__${sex}`)
-      ?? breedTex.get(`${breed}__female`)
-      ?? breedTex.get(`${breed}__male`)
-      ?? null;
-  }
-  // базовый кот: вариант по полу, иначе вариант другого пола. Сид — artId (клон
-  // наследует его от оригинала, чтобы окрас совпал), иначе собственный id.
+  // Сид выбора варианта — artId (клон наследует его от оригинала, чтобы облик
+  // совпал), иначе собственный id. Стабилен между перерисовками.
   const seed = cat.artId ?? cat.id;
-  return pickVariant(baseList(sex), seed)
-    ?? pickVariant(baseList(sex === 'female' ? 'male' : 'female'), seed);
+  return pickVariant(breedTex.get(breed) ?? [], seed);
 }
 
 /** Сидячий спрайт кота из коллекции (если арт загружен), иначе null → процедурный. */

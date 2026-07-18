@@ -730,8 +730,11 @@ export function adSkipRecipeResearch(state: GameState, now: number): Result {
 }
 
 /**
- * Зарядить усилитель «Генной инженерии» (+1 заряд). Оплата за 🧬 гены (по
- * умолчанию) или 💎 кристаллы. Заряд тратится при рождении из инкубатора.
+ * Купить заряд усилителя «Генной инженерии» (+1 на склад). Оплата за 🧬 гены (по
+ * умолчанию) или 💎 кристаллы. Заряды можно копить любых типов и помногу — они не
+ * тратятся, пока усилитель не активен и не сработает в вязке. Если сейчас НИЧЕГО не
+ * активно — первый купленный заряд заодно делаем активным (чтобы «заряжен → работает»
+ * без лишнего действия); активность всегда можно переключить (см. toggleBoost).
  */
 export function buyBoost(state: GameState, id: string, currency: Currency = 'dna'): Result {
   if (!E.isUnlocked(state, 'engineering')) return { ok: false, reason: 'locked' };
@@ -742,6 +745,23 @@ export function buyBoost(state: GameState, id: string, currency: Currency = 'dna
     return { ok: false, reason: currency === 'crystals' ? 'не хватает кристаллов' : 'не хватает ДНК' };
   }
   state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
+  if (!E.activeBoostId(state)) state.activeBoost = def.id; // ничего не активно → активируем этот
+  return { ok: true };
+}
+
+/**
+ * Переключить активность усилителя (в любой момент, заряды при этом НЕ тратятся):
+ * — если он уже активен → снять активность (усилитель не сработает в вязке);
+ * — иначе → сделать активным ЕГО (единовременно активен только один, прежний слетает).
+ * Активировать можно только усилитель, у которого есть заряды на складе.
+ */
+export function toggleBoost(state: GameState, id: string): Result {
+  if (!E.isUnlocked(state, 'engineering')) return { ok: false, reason: 'locked' };
+  const def = C.BOOSTS.find((b) => b.id === id);
+  if (!def) return { ok: false, reason: 'нет такого усилителя' };
+  if (state.activeBoost === def.id) { state.activeBoost = null; return { ok: true }; }
+  if (E.boostCharges(state, def.id) <= 0) return { ok: false, reason: 'нет зарядов' };
+  state.activeBoost = def.id;
   return { ok: true };
 }
 
