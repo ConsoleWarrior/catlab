@@ -1,19 +1,14 @@
 /**
- * [ТЕСТ] Процедурное моргание глаз на статичных спрайтах.
+ * Процедурное моргание глаз на статичных спрайтах.
  *
  * Идея: спрайт остаётся статичным, а поверх области глаз рисуется маленькое
  * «веко» цвета шерсти, которое быстро съезжает сверху вниз и обратно (~0.2 с).
  *
  * Позиция глаз берётся из ДВУХ источников (в порядке приоритета):
  *   1. ручная разметка `src/assets/eyes.json` — расставляется дев-тэггером
- *      (`eyes.html` → `src/tools/eyeTagger.ts`), ключ = имя файла спрайта
- *      (`<breed>__<sex>` или базовый `<sex>__<n>`);
+ *      (`eyes.html` → `src/tools/eyeTagger.ts`), ключ = имя файла спрайта `<breed>__<n>`;
  *   2. если для спрайта разметки нет — АВТОДЕТЕКТ по пикселям (`eyeDetect.ts`).
  * Пустой список глаз в разметке (`"eyes": []`) = «этот спрайт не моргает».
- *
- * Убрать фичу: удалить `eyeBlink.ts`, `eyeDetect.ts`, `src/tools/eyeTagger.ts`,
- * `eyes.html`, `src/assets/eyes.json`, dev-эндпоинт `/__eyes` в `vite.config.ts`
- * и строки, помеченные `[BLINK-TEST]` в `livingFloor.ts`/`catTextures.ts`/`game.ts`.
  *
  * Веко — Container-дети самого спрайта кота, поэтому оно наследует масштаб/
  * разворот/сквош из анимации «живого пола» и остаётся на месте.
@@ -27,7 +22,22 @@ import eyesJson from '../assets/eyes.json';
 
 /** Точка глаза: [x, y, r] — все нормированы (x,r к ширине текстуры, y к высоте). */
 type EyeMark = [number, number, number];
-const EYES = eyesJson as unknown as Record<string, { eyes: EyeMark[] } | undefined>;
+type EyeData = Record<string, { eyes: EyeMark[] } | undefined>;
+
+// В прод-сборке разметка бандлится из eyes.json (свежая на момент сборки). В DEV
+// бандленный импорт «застывает»: тэггер пишет файл в обход watcher (см. watch.ignored
+// в vite.config), поэтому там перед сборкой комнат подтягиваем актуальную версию
+// через loadEyeData(). Без этого игра видит старый eyes.json и всё падает в автодетект.
+let EYES = eyesJson as unknown as EyeData;
+
+/** DEV: подтянуть свежую разметку глаз из эндпоинта тэггера. */
+export async function loadEyeData(): Promise<void> {
+  if (!import.meta.env.DEV) return;
+  try {
+    EYES = (await (await fetch('/__eyes', { cache: 'no-store' })).json()) as EyeData;
+    eyeCache.clear(); // сбросить кэш, если что-то успело разрешиться до подгрузки
+  } catch { /* оставим бандленную версию */ }
+}
 
 /** true → глаза не моргают, но найденные позиции обводятся рамкой (отладка детекта). */
 const DEBUG = false;

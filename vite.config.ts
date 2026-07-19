@@ -2,9 +2,8 @@ import { defineConfig, type Plugin } from 'vite';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// [BLINK-TEST] dev-эндпоинт для тэггера точек глаз: GET/POST /__eyes читает и
-// пишет src/assets/eyes.json. Работает только в dev (vite serve), в прод-сборку
-// не попадает. Убрать вместе с фичей моргания.
+// Dev-эндпоинт для тэггера точек глаз (eyes.html): GET/POST /__eyes читает и пишет
+// src/assets/eyes.json. Только в dev (vite serve), в прод-сборку не попадает.
 const EYES_FILE = fileURLToPath(new URL('./src/assets/eyes.json', import.meta.url));
 function eyesTagger(): Plugin {
   return {
@@ -40,11 +39,11 @@ function eyesTagger(): Plugin {
 
 export default defineConfig({
   base: './', // относительные пути — нужно для запаковки под Яндекс Игры
-  plugins: [eyesTagger()], // [BLINK-TEST]
+  plugins: [eyesTagger()],
   server: {
-    // [BLINK-TEST] запись разметки глаз не должна дёргать HMR/full-reload — иначе
-    // тэггер на /eyes.html перезагружается на каждый клик и список прыгает в начало.
-    // Игра подхватит новую разметку при ручной перезагрузке вкладки.
+    // Запись разметки глаз не должна дёргать HMR/full-reload — иначе тэггер на
+    // /eyes.html перезагружается на каждый клик и список прыгает в начало. Игра
+    // перечитывает разметку через /__eyes при перезагрузке вкладки (см. loadEyeData).
     watch: { ignored: ['**/src/assets/eyes.json'] },
   },
   build: {

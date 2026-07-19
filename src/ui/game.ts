@@ -26,6 +26,7 @@ import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
+import { loadEyeData } from './eyeBlink.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture, decorZone } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
@@ -174,6 +175,7 @@ export class Game implements UiContext {
       const name = path.split('/').pop()!.replace('.png', ''); // <breed>__<n>
       try { setAiBreedTexture(name, await Assets.load(url)); } catch { /* фолбэк */ }
     }));
+    await loadEyeData(); // свежая разметка глаз (DEV) до сборки комнат
 
     // Готовые фоны комнат («комната-коробка» в нашей перспективе) — по имени файла
     // = id комнаты. Нет фона → процедурная коробка (фолбэк в roomShell).

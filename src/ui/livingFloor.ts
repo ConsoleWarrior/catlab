@@ -23,7 +23,7 @@ import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import type { FloorPlane } from './rooms/shell.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
-import { attachBlink, type Blinker } from './eyeBlink.js'; // [BLINK-TEST]
+import { attachBlink, type Blinker } from './eyeBlink.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
 type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch';
@@ -49,7 +49,7 @@ interface Actor {
   leapPending: boolean;      // в этом походе кот должен разок прыгнуть
   turnT: number;             // >0 — доигрывается приседание при развороте
   moodT: number;             // countdown до следующей проверки эмоции-пузырька
-  blink: Blinker | null;     // [BLINK-TEST] процедурное моргание (только дворовые)
+  blink: Blinker | null;     // процедурное моргание глаз (eyeBlink.ts)
   zoneU: number;             // предпочитаемая нормированная позиция по X (-1..1)
   state: ActorState;
   stateLeft: number;         // сколько ещё длится текущее состояние
@@ -162,10 +162,13 @@ export function createLivingFloor(
     const view = new Container();
 
     // тень/кружок под котиком (+ подсветка выбора для вязки) — остаётся на полу,
-    // не подпрыгивает вместе с котом (см. body ниже)
+    // не подпрыгивает вместе с котом (см. body ниже). Приподнята на 2/3 своей
+    // толщины (полная высота главной тени = 2×8=16 → ≈10.7px), чтобы лежать ПОД
+    // котом, а не «перед» ним (иначе кажется оторванной у лап).
+    const shUp = (2 * 8) * (2 / 3);
     const shadow = new Graphics();
-    if (selected) shadow.ellipse(0, -4, catH * 0.42, 12).fill({ color: COLORS.primary, alpha: 0.55 });
-    shadow.ellipse(0, -2, catH * 0.34, 8).fill({ color: 0x000000, alpha: 0.12 });
+    if (selected) shadow.ellipse(0, -4 - shUp, catH * 0.42, 12).fill({ color: COLORS.primary, alpha: 0.55 });
+    shadow.ellipse(0, -2 - shUp, catH * 0.34, 8).fill({ color: 0x000000, alpha: 0.12 });
     view.addChild(shadow);
 
     const body = new Container();
@@ -179,11 +182,9 @@ export function createLivingFloor(
     view.addChild(body);
     const baseScale = sprite.scale.x;
 
-    // [BLINK-TEST] тестовое процедурное моргание — только дворовые (moggie) с готовым
-    // артом; глаза ищутся автодетектом по пикселям. Убрать: удалить eyeBlink.ts и
-    // строки, помеченные [BLINK-TEST].
-    const blink = (aiSprite && (cat.breed || 'moggie') === 'moggie')
-      ? attachBlink(ctx.app, sprite) : null;
+    // процедурное моргание для всех пород с готовым артом: глаза берутся из ручной
+    // разметки eyes.json по ключу спрайта, иначе автодетект по пикселям (eyeBlink.ts).
+    const blink = aiSprite ? attachBlink(ctx.app, sprite) : null;
 
     // подпись над котиком: имя (или порода по умолчанию, пока имя не задано) + значок пола,
     // цветом редкости с белой обводкой. Имя крупнее (1.5×), значок пола — крупнее (2×),
@@ -324,7 +325,7 @@ export function createLivingFloor(
     const matured: Actor[] = [];
     for (const a of actors) {
       a.phase += dt;
-      a.blink?.update(dt); // [BLINK-TEST]
+      a.blink?.update(dt); // моргание глаз
       const ds = depthScale(a.z);
       a.view.scale.set(growthScale(a.cat, now) * ds); // котята подрастают + перспектива
       a.view.zIndex = Math.round(yAt(a.z));

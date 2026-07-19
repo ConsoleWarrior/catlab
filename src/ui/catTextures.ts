@@ -68,7 +68,7 @@ const cache = new Map<string, Texture>();
 // Варианты-текстуры пород по ключу породы (включая базовые T1: moggie и домашних).
 const breedTex = new Map<string, Texture[]>();
 
-// [BLINK-TEST] текстура → имя файла спрайта (для разметки глаз eyes.json)
+// текстура → имя файла спрайта `<breed>__<n>` (для разметки глаз eyes.json / моргания)
 const texKey = new Map<number, string>();
 /** Имя файла спрайта по его текстуре (`<breed>__<n>`), либо undefined. */
 export function textureKeyOf(t: Texture): string | undefined { return texKey.get(t.uid); }
@@ -82,7 +82,7 @@ export function setAiBreedTexture(fileKey: string, t: Texture): void {
   const list = breedTex.get(breed) ?? [];
   list.push(t);
   breedTex.set(breed, list);
-  texKey.set(t.uid, fileKey); // [BLINK-TEST]
+  texKey.set(t.uid, fileKey);
 }
 
 /** Текстура-миниатюра породы для Котодекса (первый вариант), null → нет арта. */
@@ -109,6 +109,11 @@ function breedTexFor(cat: Cat): Texture | null {
   // совпал), иначе собственный id. Стабилен между перерисовками.
   const seed = cat.artId ?? cat.id;
   return pickVariant(breedTex.get(breed) ?? [], seed);
+}
+
+/** Арт-текстура варианта кота из коллекции (тот же вариант, что на полу), либо null. */
+export function catArtTexture(cat: Cat): Texture | null {
+  return breedTexFor(cat);
 }
 
 /** Сидячий спрайт кота из коллекции (если арт загружен), иначе null → процедурный. */
