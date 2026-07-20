@@ -82,18 +82,17 @@ export interface OrderReward {
 }
 
 /**
- * Заказ клиента. Заказы живут ровно сутки: доска — это ORDER_TARGET фиксированных
- * слотов, которые целиком перевыпускаются в полночь по Москве (см. orders.rollDailyOrders).
- * Внутри суток заказ никуда не девается: выполненный остаётся на доске помеченным
- * (done), обновлённый рекламой заменяется на месте.
+ * Заказ клиента = один слот доски. Слот ВСЕГДА держит активный заказ. У заказа свой
+ * таймер жизни: expiresAt = createdAt + ORDER_REFRESH_MS (6 ч). Не выполнил за это время
+ * — заказ сам сменяется новым (orders.refreshExpiredOrders). Выполнил — слот сразу
+ * получает свежий (claimOrder). Раз в час один заказ можно обновить за 📺 (adRefreshOrder).
  */
 export interface Order {
   id: string;
   req: OrderReq;
   reward: OrderReward;
   createdAt: number;
-  done: boolean;             // выполнен — до следующей смены суток слот занят
-  adRefreshed: boolean;      // 📺-замена этого слота уже использована сегодня
+  expiresAt: number;         // момент авто-смены заказа (createdAt + ORDER_REFRESH_MS)
 }
 
 /** Полное игровое состояние. */
@@ -117,19 +116,21 @@ export interface GameState {
   knownRecipes: string[];
   // Стол исследования рецептов (вкладка «Исследования» Генолаба): 1 слот-таймер.
   // readyAt === 0 — стол свободен. По завершении finishRecipeResearch выдаёт
-  // случайный рецепт из достижимого пула (researchableRecipes).
-  recipeResearch: { startedAt: number; readyAt: number };
+  // случайный рецепт из достижимого пула (researchableRecipes). paidCoins/paidDna —
+  // фактически уплаченная цена запуска (зависит от уровня лабы); нужна для точного
+  // возврата, если пул опустеет за время исследования (уровень мог вырасти).
+  recipeResearch: { startedAt: number; readyAt: number; paidCoins: number; paidDna: number };
   cryo: Cat[];                      // замороженные коты в криокапсулах (крио-банк): не едят/не доход/не вязка
   unlockedRooms: RoomId[];
-  orders: Order[];
-  ordersDay: number;                // номер московских суток, на которые выданы orders (см. orders.mskDay)
+  orders: Order[];                  // ORDER_TARGET слотов, каждый с активным заказом (см. orders.ts)
+  orderAdRefreshAt: number;         // глобальный кулдаун 📺-обновления заказа (0 — доступно)
   // Корзина заказов (зона в Приюте): кот, которым можно закрыть заказ. Выполнить
   // заказ можно ТОЛЬКО котом из корзины — id, либо null, если корзина пуста.
   orderBasket: string | null;
   champions: (string | null)[];     // id кота-чемпиона по индексу пьедестала (null — слот пуст)
   food: number;                     // запас корма в кормушке (ед.); мягкий голод при 0
   lastSeenAt: number;               // для офлайн/пассивного дохода
-  lastHealAdAt: number;             // глобальный кулдаун 📺-лечения в клинике (этап D)
+  lastHealAdAt: number;             // факт последнего 📺-лечения в клинике (кулдауна нет)
   lastAnalyzeAdAt: number;          // глобальный кулдаун 📺-варианта Генетического анализа
   lastFreezeAdAt: number;           // глобальный кулдаун 📺-варианта заморозки в крио-банке
   nextId: number;                   // счётчик уникальных id

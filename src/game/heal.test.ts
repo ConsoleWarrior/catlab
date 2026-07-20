@@ -7,18 +7,19 @@ import {
 import * as C from './config.js';
 import type { GameState } from './index.js';
 
-/** Питомник ур. 5 (клиника открыта) + кот с потраченными вязками. */
+/** Питомник ур. 5 + куплен узел «Ветеринар» (клиника открыта) + кот с потраченными вязками. */
 function setup(seed = 1, spent = 2) {
   const s = createInitialState(makeRng(seed), 0);
   s.level = 5;
+  s.research.r_lab_vet = 1; // клиника теперь открывается покупкой узла «Лаборатории»
   const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
   cat.breedCount = spent;
   s.cats.push(cat);
   return { s, cat };
 }
 
-describe('клиника: 📺 реклама (+1 ❤, кулдаун)', () => {
-  it('снимает HEAL_AD_HEARTS с breedCount и ставит кулдаун; maxHearts не трогает', () => {
+describe('клиника: 📺 реклама (+1 ❤, без кулдауна)', () => {
+  it('снимает HEAL_AD_HEARTS с breedCount и фиксирует факт просмотра; maxHearts не трогает', () => {
     const { s, cat } = setup(1, 2);
     const heartsBefore = heartsOf(cat);
     const r = healCat(s, cat.id, 'ad', 1000);
@@ -28,24 +29,22 @@ describe('клиника: 📺 реклама (+1 ❤, кулдаун)', () => {
     expect(s.lastHealAdAt).toBe(1000);
   });
 
-  it('второй просмотр внутри кулдауна — отказ; после кулдауна — снова работает', () => {
+  it('повторный просмотр сразу же снова работает (кулдауна нет)', () => {
     const { s, cat } = setup(2, 3);
-    const t0 = 1_000_000; // «реальное» время (0 зарезервирован под «не смотрели»)
+    const t0 = 1_000_000;
     expect(healCat(s, cat.id, 'ad', t0).ok).toBe(true);
-    expect(healCat(s, cat.id, 'ad', t0 + C.HEAL_AD_COOLDOWN_MS - 1))
-      .toMatchObject({ ok: false, reason: 'реклама лечения ещё недоступна' });
-    expect(cat.breedCount).toBe(2); // неудачная попытка ничего не сняла
-    expect(healCat(s, cat.id, 'ad', t0 + C.HEAL_AD_COOLDOWN_MS).ok).toBe(true);
+    expect(cat.breedCount).toBe(2);
+    expect(healCat(s, cat.id, 'ad', t0 + 1).ok).toBe(true);
     expect(cat.breedCount).toBe(1);
   });
 
-  it('кулдаун глобальный: реклама на одном коте блокирует её и на другом', () => {
+  it('реклама на одном коте не блокирует лечение другого', () => {
     const { s, cat } = setup(3, 1);
     const other = makeCatInstance(s, makeCat('male'), 0, 'nursery', 'siamese');
     other.breedCount = 2;
     s.cats.push(other);
     expect(healCat(s, cat.id, 'ad', 0).ok).toBe(true);
-    expect(healCat(s, other.id, 'ad', 1000)).toMatchObject({ ok: false });
+    expect(healCat(s, other.id, 'ad', 1000).ok).toBe(true);
   });
 });
 
@@ -101,9 +100,9 @@ describe('клиника: отказы', () => {
     expect(healCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'кот в слоте вязки' });
   });
 
-  it('под замком уровня (< 5) — reason locked', () => {
+  it('без узла «Ветеринар» — reason locked (клиника заперта)', () => {
     const { s, cat } = setup(10, 2);
-    s.level = 4;
+    s.research.r_lab_vet = 0; // узел клиники не куплен → лечение заперто
     expect(healCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'locked' });
     expect(healCat(s, cat.id, 'crystals', 0)).toMatchObject({ ok: false, reason: 'locked' });
   });

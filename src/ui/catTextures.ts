@@ -14,7 +14,7 @@
 
 import { BlurFilter, ColorMatrixFilter, Sprite } from 'pixi.js';
 import type { Application, Texture } from 'pixi.js';
-import { expressPhenotype } from '../genetics/index.js';
+import { expressPhenotype, breedTraits } from '../genetics/index.js';
 import type { RarityTier } from '../genetics/index.js';
 import type { Cat } from '../game/index.js';
 import { buildCat } from '../render/catSprite.js';
@@ -23,6 +23,19 @@ import { TIER_COLOR } from './theme.js';
 /** Насколько ореол выходит за силуэт кота (множитель масштаба). Тот же
  * коэффициент использует «живой пол» в анимации — чтобы ореол повторял позу. */
 export const GLOW_OUT = 1.06;
+
+/** Насколько крупнее обычного отображаются коты с геном «крупный» (🐘). */
+export const BIG_SIZE_MULT = 1.1;
+
+/** Видимо ли кот «крупный» — ген big в визитке его породы (не дремлющий у предка). */
+export function isBigCat(cat: Cat): boolean {
+  return breedTraits(cat.breed).includes('big');
+}
+
+/** Множитель размера спрайта кота: крупные породы ×1.1, остальные ×1. */
+export function catSizeFactor(cat: Cat): number {
+  return isBigCat(cat) ? BIG_SIZE_MULT : 1;
+}
 
 /**
  * Заливка силуэта сплошным цветом: ColorMatrixFilter ставит RGB = `color`
@@ -122,7 +135,7 @@ export function aiSitSpriteFor(cat: Cat, targetH: number): Sprite | null {
   if (!tex) return null;
   const sp = new Sprite(tex);
   sp.anchor.set(0.5, 1);
-  sp.scale.set(targetH / tex.height);
+  sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // крупные породы на 10% больше
   return sp;
 }
 
@@ -135,7 +148,7 @@ export function aiHeldSpriteFor(cat: Cat, displayH: number): Sprite | null {
   if (!tex) return null;
   const sp = new Sprite(tex);
   sp.anchor.set(0.5, 0.42);                       // палец у загривка
-  sp.scale.set((displayH / tex.height) * 1.12);   // в руках — чуть крупнее
+  sp.scale.set((displayH / tex.height) * 1.12 * catSizeFactor(cat)); // в руках — чуть крупнее; крупные породы +10%
   return sp;
 }
 
@@ -163,6 +176,6 @@ export function catSprite(app: Application, cat: Cat, targetH: number): Sprite {
   const tex = catTexture(app, cat);
   const sp = new Sprite(tex);
   sp.anchor.set(0.5, 1);
-  sp.scale.set(targetH / tex.height);
+  sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // крупные породы на 10% больше
   return sp;
 }

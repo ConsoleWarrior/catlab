@@ -6,10 +6,11 @@
 import type { RarityTier, BreedBoosts, KinshipLevel } from '../genetics/index.js';
 import type { Currency } from './types.js';
 
-// v7: суточная доска заказов — Order сменил expiresAt на done/adRefreshed, добавлены
-// state.ordersDay и state.orderBasket. v6: многоуровневое дерево исследований
-// (state.research: id→уровень). Старые сейвы сбрасываются загрузчиком по этой версии.
-export const SAVE_VERSION = 7;
+// v9: заказы — у каждого свой таймер жизни (Order.refillAt → expiresAt, добавлено
+// state.orderAdRefreshAt); слот всегда держит активный заказ, не выполнил за 6 ч → сам
+// сменится. v8: per-slot кулдаун. v7: суточная доска. v6: многоуровневое дерево
+// исследований (state.research: id→уровень). Старые сейвы сбрасываются загрузчиком по этой версии.
+export const SAVE_VERSION = 9;
 
 /** Ценность кота по тиру редкости: образец (🧬), пассив питомника (💰/мин, легаси). */
 export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; incomePerMin: number }> = {
@@ -40,7 +41,9 @@ export const PEDIGREE_VALUE_MAX = 1.8;        // потолок множител
 export const HEALTH_VALUE_FLOOR = 0.6;
 
 // «В добрые руки»: доля рыночной цены (в разы меньше продажи по заказу) + немного 🧬.
-export const ADOPT_COIN_FRACTION = 0.25;
+// Доход урезан вдвое (0.25→0.125), чтобы массовая раздача перестала быть главным
+// краном 💰 и ⭐ (см. REP_ADOPT_MULT) — цель растянуть прогресс на 1-2 месяца.
+export const ADOPT_COIN_FRACTION = 0.125;
 export const ADOPT_DNA_FRACTION = 0.5;
 
 // --- Лаборатория (кот → 🧬 гены) ---
@@ -58,7 +61,7 @@ export const FOOD_CAP_BASE = 200;             // ёмкость кормушки
 // Аппетит по тиру: чем породистее кот, тем дороже его содержать (0.1 → 0.5 ед./мин).
 // Это делает «свалку» дворовых дешёвой, а коллекцию легендарных — статьёй расходов.
 export const FOOD_PER_MIN_BY_TIER: Record<RarityTier, number> = {
-  common: 0.1, uncommon: 0.2, rare: 0.3, epic: 0.4, legendary: 0.5,
+  common: 0.05, uncommon: 0.1, rare: 0.15, epic: 0.2, legendary: 0.25,
 };
 export const FOOD_PACK_UNITS = 50;            // размер пакета корма (кнопка «＋50»)
 export const FOOD_PACK_COST = 25;             // 💰 за пакет (цена «до полного» — пропорциональна)
@@ -75,19 +78,18 @@ export const CHAMPION_INCOME_RATE = 0.002;    // 💰/мин = catMarketValue ×
 // остаток на фикс. величину AD_SKIP_MS (бесплатно, можно смотреть повторно).
 export const SPEEDUP_CRYSTAL_PER_MIN = 1;     // 💎 за каждую начатую минуту остатка
 export const SPEEDUP_CRYSTAL_MIN = 1;         // но минимум 1 💎
-export const AD_SKIP_MS = 5 * 60_000;         // −5 мин за просмотр рекламы (первый прикид, тюнится)
+export const AD_SKIP_MS = 5 * 60_000;         // −5 мин за просмотр рекламы (вязка/стол рецептов)
 
 // --- Заказы (продажа котов клиентам) ---
-// Доска заказов = ORDER_TARGET фиксированных слотов, перевыпуск раз в сутки в
-// полночь по Москве. Внутри суток доска не ротируется: выполненный заказ остаётся
-// помеченным, а каждый невыполненный слот игрок может один раз заменить за 📺.
-export const DAY_MS = 24 * 60 * 60_000;
-// MSK = UTC+3 круглый год (с 2014 в России нет перехода на летнее время), поэтому
-// фиксированный сдвиг корректен и не зависит от таймзоны устройства игрока.
-export const MSK_OFFSET_MS = 3 * 60 * 60_000;
-export const ORDER_TARGET = 4;                // сколько слотов на доске заказов
+// Доска = ORDER_TARGET независимых слотов, каждый ВСЕГДА держит активный заказ. У
+// каждого заказа свой таймер жизни ORDER_REFRESH_MS: не выполнил за это время — заказ
+// сам сменяется новым (refreshExpiredOrders). Выполнил — слот сразу получает свежий
+// заказ. Плюс раз в ORDER_AD_REFRESH_COOLDOWN_MS игрок может обновить ОДИН заказ за 📺.
+export const ORDER_TARGET = 4;                         // сколько слотов на доске заказов
+export const ORDER_REFRESH_MS = 6 * 60 * 60_000;       // 6 ч жизни заказа: не выполнил → сменится новым
+export const ORDER_AD_REFRESH_COOLDOWN_MS = 60 * 60_000; // 📺 раз в час можно обновить один заказ
 export const ORDER_COIN_MULT = 1.0;           // заказ платит ≈ полную рыночную цену
-export const ORDER_DNA_MULT = 0.03;           // 🧬-бонус за заказ (доля ценности)
+export const ORDER_DNA_MULT = 0.06;           // 🧬-бонус за заказ (доля ценности)
 export const ORDER_REP_MULT = 0.15;           // ⭐ опыт за заказ ∝ ценности (главный источник)
 
 // --- Опыт (репутация) за важные действия ---
@@ -98,7 +100,7 @@ export const REP_BIRTH_BY_TIER: Record<RarityTier, number> = {
   common: 2, uncommon: 5, rare: 12, epic: 30, legendary: 70,
 };
 export const REP_NEW_BREED_MULT = 5;          // ×к опыту за рождение, если порода открыта впервые
-export const REP_ADOPT_MULT = 0.05;           // ⭐ за пристройство «в добрые руки» = доля ценности
+export const REP_ADOPT_MULT = 0.025;          // ⭐ за пристройство = доля ценности (урезан вдвое 0.05→0.025)
 export const REP_LAB_MULT = 0.05;             // ⭐ за сдачу кота в лабораторию = доля ценности
 
 // --- Уровень лаборатории: гейт прогрессии (10 уровней) ---
@@ -106,8 +108,10 @@ export const REP_LAB_MULT = 0.05;             // ⭐ за сдачу кота в
 // поздние действия дают много опыта, иначе верхние уровни проскакивали бы пачкой).
 // Уровень сам ничего не даёт, но СНИМАЕТ ЗАМКИ: право купить слот/пьедестал, доступ к
 // станциям/исследованиям/инженерии/клинике. См. economy.isUnlocked / maxSlotsForLevel.
+// Растянуто ×4 относительно версии «на 1-2 недели»: целевой темп — 1 час/день онлайн,
+// полное прохождение за 1-2 месяца (L10 ≈ 20000 опыта, было 5000). См. [[catlab-target-session]].
 export const LEVEL_REP_THRESHOLDS: readonly number[] = [
-  0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200,
+  0, 480, 1200, 2200, 3600, 5600, 8200, 11600, 15600, 20000,
 ]; // индекс i → минимальный опыт для уровня (i+1)
 export const MAX_LEVEL = LEVEL_REP_THRESHOLDS.length; // 10
 
@@ -131,15 +135,24 @@ export type LabFeature =
 // Дерево исследований открывается целиком на LAB_UNLOCKS.research; дальнейший гейт —
 // на уровне ОТДЕЛЬНЫХ уровней узлов (ResearchLevel.minLevel), а не блоком колонок.
 export const LAB_UNLOCKS: Record<LabFeature, number> = {
-  labStation: 2,
+  labStation: 2,        // теперь гейт — ПОКУПКА узла (FEATURE_RESEARCH); здесь лишь мин. уровень покупки
   food: 1,              // коты хотят есть сразу — кормушка/голод с 1-го уровня
-  research: 2,          // дерево открывается рано, чтобы игрок его сразу видел
-  engineering: 5,
-  clinic: 5,
-  recipeLab: 3,         // стол рецептов — чуть позже дерева, когда есть первые породы
+  research: 1,          // дерево «Улучшений» открыто с 1-го уровня лаборатории (всегда доступно)
+  recipeLab: 2,         // стол «Исследований» — тоже со 2-го уровня (открываются вместе с деревом)
+  clinic: 3,            // ветеринар: тоже ПОКУПКА узла (FEATURE_RESEARCH); здесь лишь мин. уровень покупки
+  engineering: 4,       // усилители вязки (Генная инженерия) — с 4-го уровня
+};
+
+// Фичи, которые открываются ПОКУПКОЙ узла ветки «🔬 Лаборатория» (Генолаб → Улучшения),
+// а НЕ уровнем лаборатории (по образцу крио-банка → r_sel_cryo). economy.isUnlocked для
+// них проверяет владение узлом; LAB_UNLOCKS[feature] задаёт минимальный уровень покупки.
+export const FEATURE_RESEARCH: Partial<Record<LabFeature, string>> = {
+  labStation: 'r_lab_station',
+  clinic: 'r_lab_vet',
 };
 export const ORDER_DEMAND_SPREAD = 0.5;       // случайный спрос ×(1.0 .. 1.5)
-export const ORDER_CRYSTAL_MIN_VALUE = 1500;  // от какой ценности заказ даёт 💎
+export const ORDER_CRYSTAL_MIN_VALUE = 500;   // от какой ценности заказ даёт 💎
+export const ORDER_SELL_SLOT_CHANCE = 0.5;    // доля слотов «сбыт из выведенных пород» (остальное — «цель»)
 
 // --- Инкубатор / здоровье ---
 // Здоровье кота = сердца: одно сердце — одна вязка. Базовый запас MAX_HEARTS;
@@ -150,8 +163,7 @@ export const MAX_HEARTS = 5;
 // --- Клиника (шприц лечения, этап D) ---
 // Лечит ПОТРАЧЕННЫЕ вязки (breedCount), НЕ maxHearts: генетический потолок от
 // инбридинга неизлечим, «Бесплодных» (0 ❤) не лечит. Гейт — LAB_UNLOCKS.clinic.
-export const HEAL_AD_HEARTS = 1;                  // 📺 реклама восстанавливает 1 ❤
-export const HEAL_AD_COOLDOWN_MS = 10 * 60_000;   // глобальный кулдаун рекламы лечения
+export const HEAL_AD_HEARTS = 1;                  // 📺 реклама восстанавливает 1 ❤ (без кулдауна)
 export const HEAL_CRYSTAL_PER_HEART = 2;          // 💎 полное лечение: цена за каждое потраченное ❤
 
 // Глубина сохраняемой родословной кота: 3 = родители → деды → прадеды.
@@ -192,9 +204,10 @@ export const KINSHIP_HEALTH: Record<KinshipLevel, ReadonlyArray<{ p: number; hea
   critical: [{ p: 0.10, hearts: 0 }, { p: 0.50, hearts: 1 }],
 };
 
-// ТЕСТ: время вязки 10 c для плейтестов. Вернуть после тестов: BASE = 5 * 60_000, MIN = 2 * 60_000.
-export const INCUBATION_BASE_MS = 10_000;
-export const INCUBATION_MIN_MS = 10_000;
+// Продакшн-тайминг: вязка 5 мин (MIN — нижний предел под будущие ускорители, сейчас
+// incubationDuration его не трогает, так что действует BASE).
+export const INCUBATION_BASE_MS = 5 * 60_000;
+export const INCUBATION_MIN_MS = 2 * 60_000;
 export const MUTATION_BASE = 0.01;         // базовый шанс мутации окраса при рождении
 
 // --- Вместимости комнат ---
@@ -208,9 +221,9 @@ export const SHELTER_BASE_CAP = 8;
 // витрина коллекции без 70 живых котов. Разморозки НЕТ (только клон или утилизация).
 // Ёмкость капсул = CRYO_BASE_CAP + узел «❄️ Криогенетика» (cryoCap); к макс. рангу ~30.
 export const CRYO_BASE_CAP = 6;               // стартовые капсулы (даёт 1-й ранг Криогенетики)
-// Клонирование стоит ×5 от выхода лаборатории того же кота (5 × round(market × LAB_DNA_RATE)):
-// привязка к ценности особи + анти-луп (клон впятеро дороже сдачи того же кота на опыты).
-export const CLONE_LAB_MULT = 5;
+// Клонирование стоит ×3 от выхода лаборатории того же кота (3 × round(market × LAB_DNA_RATE)):
+// привязка к ценности особи + анти-луп (клон втрое дороже сдачи того же кота на опыты).
+export const CLONE_LAB_MULT = 3;
 // Заморозка через drag-станцию «Криокапсула» (по образцу клиники): три пути оплаты —
 // 📺 реклама (бесплатно, глобальный кулдаун), 💰 монеты или 💎 кристаллы (мгновенно).
 export const FREEZE_COIN_COST = 150;
@@ -228,18 +241,37 @@ export const STARTER_CAT_COST = 50; // простой кот из питомни
 
 // Генетический анализ кота (система знаний): вскрывает СРАЗУ всё дерево родословной
 // и список скрытых генов (пород предков). Механику не меняет — только информация.
-// Оплата 💰 (знание добывается игрой), альтернатива — 📺 реклама с глобальным кулдауном.
-export const ANALYZE_COIN_COST = 100;
-export const ANALYZE_AD_COOLDOWN_MS = 10 * 60_000;
+// Цена в 💰 зависит от тира кота (породистого анализировать дороже); альтернатива —
+// 📺 реклама (теперь БЕЗ кулдауна: анализ инфо-действие, не экономический кран).
+export const ANALYZE_COIN_COST_BY_TIER: Record<RarityTier, number> = {
+  common: 75, uncommon: 125, rare: 175, epic: 225, legendary: 300,
+};
+/** Цена Генетического анализа кота данного тира в 💰. */
+export function analyzeCoinCost(tier: RarityTier): number {
+  return ANALYZE_COIN_COST_BY_TIER[tier];
+}
 
 // --- Исследование рецептов (вкладка «Исследования» Генолаба) ---
-// Стол с одним слотом-таймером: за 💰 + 🧬 через RECIPE_RESEARCH_MS выдаёт СЛУЧАЙНЫЙ
-// ещё не открытый рецепт из достижимого пула (обе родительские породы уже выведены).
-// Дубликаты исключены пулом. Ускорение — 📺 (−AD_SKIP_MS) или 💎 (мгновенно).
-// ТЕСТ: таймер 30 c для плейтестов. Вернуть после тестов: 60 * 60_000 (~1 час).
-export const RECIPE_RESEARCH_MS = 30_000;
-export const RECIPE_RESEARCH_COST_COINS = 300;
-export const RECIPE_RESEARCH_COST_DNA = 25;
+// Стол с одним слотом-таймером: за 💰 + 🧬 выдаёт СЛУЧАЙНЫЙ ещё не открытый рецепт из
+// достижимого пула (обе родительские породы уже выведены). Дубликаты исключены пулом.
+// Ускорение — 📺 (−AD_SKIP_MS) или 💎 (мгновенно).
+// ЦЕНА И ВРЕМЯ РАСТУТ ЛИНЕЙНО С УРОВНЕМ ЛАБОРАТОРИИ L (1..10): чем выше игрок, тем дороже
+// и дольше новое знание (компенсирует растущий доход). На уровне L:
+//   цена = 150×L 💰 + 5×L 🧬,   время = 5×L минут
+// (L1 → 150💰+5🧬 / 5 мин … L10 → 1500💰+50🧬 / 50 мин).
+export const RECIPE_RESEARCH_COINS_PER_LEVEL = 150;
+export const RECIPE_RESEARCH_DNA_PER_LEVEL = 5;
+export const RECIPE_RESEARCH_MS_PER_LEVEL = 5 * 60_000;
+
+/** Стоимость запуска стола рецептов на данном уровне лаборатории (💰 + 🧬). */
+export function recipeResearchCost(level: number): { coins: number; dna: number } {
+  const L = Math.max(1, level);
+  return { coins: RECIPE_RESEARCH_COINS_PER_LEVEL * L, dna: RECIPE_RESEARCH_DNA_PER_LEVEL * L };
+}
+/** Длительность исследования рецепта на данном уровне лаборатории (мс). */
+export function recipeResearchMs(level: number): number {
+  return RECIPE_RESEARCH_MS_PER_LEVEL * Math.max(1, level);
+}
 
 // --- Генная инженерия (усилители вязки) ---
 // Кнопки усилителей живут у названия Инкубатора; активируются за 🧬 гены или 💎
@@ -261,9 +293,10 @@ export const BOOSTS: readonly BoostDef[] = [
 ];
 
 // --- Рост котят ---
-// ТЕСТ: котёнок взрослеет за 30 c, чтобы видеть взросление/эффект/таблички.
-// Вернуть после тестов: 8 * 60_000 (~8 минут).
-export const KITTEN_GROWTH_MS = 30_000;
+// Продакшн-тайминг: котёнок взрослеет за 15 мин. Реклама сокращает остаток роста на
+// KITTEN_GROWTH_AD_MS (= полная длительность → одним показом малыш становится взрослым).
+export const KITTEN_GROWTH_MS = 15 * 60_000;
+export const KITTEN_GROWTH_AD_MS = 15 * 60_000; // 📺 −15 мин к росту котёнка (мгновенно взрослый)
 export const KITTEN_MIN_SCALE = 0.45;       // размер новорождённого относительно взрослого
 export const KITTEN_SLOW_FACTOR = 3;        // во сколько раз медленнее растёт котёнок, «оставленный с родителями»
 
@@ -291,11 +324,13 @@ export type ResearchEffectKind =
   | 'feedEff'          // коты едят меньше корма (доля снижения расхода)
   | 'foodCap'          // +ёмкость кормушки (ед.)
   | 'autoFeed'         // автопокупка корма за 💰 при опустошении (флаг: value ≥ 1)
-  | 'cryoCap';         // +капсулы крио-банка (1-й ранг ОТКРЫВАЕТ крио-банк как комнату)
+  | 'cryoCap'          // +капсулы крио-банка (1-й ранг ОТКРЫВАЕТ крио-банк как комнату)
+  | 'unlockLab';       // узел-разблокировка функции комнаты (значение не суммируется; см. FEATURE_RESEARCH)
 
 /** Один уровень узла: цена (в валюте узла), прибавка эффекта, гейт по уровню лаборатории. */
 export interface ResearchLevel {
-  cost: number;      // цена ЭТОГО уровня (в валюте узла — dna/coins)
+  cost: number;      // цена ЭТОГО уровня в ОСНОВНОЙ валюте узла (dna/coins)
+  coins?: number;    // ДОП. цена в 💰 сверх основной (для ветки Селекции на 🧬 — стоит и денег)
   value: number;     // прибавка эффекта на этом уровне (суммируется по купленным уровням)
   minLevel: number;  // мин. уровень лаборатории, чтобы купить именно этот уровень
 }
@@ -314,31 +349,25 @@ export interface ResearchDef {
 }
 
 export const RESEARCH: readonly ResearchDef[] = [
-  // ветка 0 — 🧪 Селекция (за 🧬: шансы рецептов, инбридинг, здоровье)
-  { id: 'r_sel_pairs', glyph: '💞', title: 'Подбор пар', desc: 'Шансы всех рецептов +5% за уровень',
-    currency: 'dna', effectKind: 'recipeChance', requires: [], col: 0, row: 0, levels: [
-      { cost: 40, value: 0.05, minLevel: 2 },
-      { cost: 100, value: 0.05, minLevel: 4 },
-      { cost: 220, value: 0.05, minLevel: 7 },
-    ] },
+  // ветка 0 — 🧪 Селекция (за 🧬 + 💰: шансы рецептов, инбридинг, здоровье, крио).
+  // Порядок цепочки: Маркеры → Подбор пар → Криогенетика → Витамины роста. Каждый
+  // уровень стоит основной валютой 🧬 И доп. монетами 💰 (поле coins) — Селекция
+  // теперь тянет обе валюты, а не только гены.
   { id: 'r_sel_markers', glyph: '🧬', title: 'Генетические маркеры', desc: 'Риск инбридинга у котёнка ниже (потолок −50%)',
-    currency: 'dna', effectKind: 'kinshipSafety', requires: ['r_sel_pairs'], col: 1, row: 0, levels: [
-      { cost: 150, value: 0.20, minLevel: 5 },
-      { cost: 320, value: 0.15, minLevel: 8 },
+    currency: 'dna', effectKind: 'kinshipSafety', requires: [], col: 0, row: 0, levels: [
+      { cost: 60, coins: 120, value: 0.20, minLevel: 2 },
+      { cost: 140, coins: 300, value: 0.15, minLevel: 4 },
     ] },
+  { id: 'r_sel_pairs', glyph: '💞', title: 'Подбор пар', desc: 'Шансы всех рецептов +5% за уровень',
+    currency: 'dna', effectKind: 'recipeChance', requires: ['r_sel_markers'], col: 1, row: 0, levels: [
+      { cost: 80, coins: 200, value: 0.05, minLevel: 4 },
+      { cost: 180, coins: 450, value: 0.05, minLevel: 6 },
+      { cost: 360, coins: 900, value: 0.05, minLevel: 8 },
+    ] },
+  // Витамины роста — финальный узел ветки (Криогенетика переехала в ветку «🔬 Лаборатория»).
   { id: 'r_sel_vitamins', glyph: '💊', title: 'Витамины роста', desc: 'Новорождённые котята +1 ❤',
-    currency: 'dna', effectKind: 'extraHeart', requires: ['r_sel_markers'], col: 2, row: 0, levels: [
-      { cost: 260, value: 1, minLevel: 6 },
-    ] },
-  // Поздний сток 🧬: 1-й ранг ОТКРЫВАЕТ крио-банк (комнату) + стартовые капсулы,
-  // следующие ранги наращивают вместимость до ~30 (CRYO_BASE_CAP + Σvalue). minLevel
-  // поздние (8→10), чтобы механика оставалась эндгеймом. Валюта — 🧬 (ветка Селекции).
-  { id: 'r_sel_cryo', glyph: '❄️', title: 'Криогенетика', desc: 'Открывает крио-банк, +6 капсул за уровень',
-    currency: 'dna', effectKind: 'cryoCap', requires: ['r_sel_vitamins'], col: 3, row: 0, levels: [
-      { cost: 400, value: 6, minLevel: 8 },
-      { cost: 650, value: 6, minLevel: 8 },
-      { cost: 1000, value: 6, minLevel: 9 },
-      { cost: 1500, value: 6, minLevel: 10 },
+    currency: 'dna', effectKind: 'extraHeart', requires: ['r_sel_pairs'], col: 2, row: 0, levels: [
+      { cost: 500, coins: 1500, value: 1, minLevel: 8 },
     ] },
 
   // ветка 1 — 🎓 Обучение (за 💰: доход пьедесталов, коллекция, офлайн)
@@ -413,6 +442,29 @@ export const RESEARCH: readonly ResearchDef[] = [
     currency: 'coins', effectKind: 'autoFeed', requires: ['r_feed'], col: 4, row: 3, levels: [
       { cost: 3000, value: 1, minLevel: 8 },
     ] },
+
+  // ветка 4 — 🔬 Лаборатория (оборудование лабы). Узлы ОТКРЫВАЮТ функции комнат самим
+  // фактом покупки, а не уровнем: станцию «на эксперименты» в Приюте и клинику-ветеринара
+  // в Питомнике (см. FEATURE_RESEARCH), а также крио-банк (r_sel_cryo — 1-й ранг открывает
+  // комнату). За 💰, кроме крио (🧬 + 💰). minLevel узлов = прежние LAB_UNLOCKS этих фич.
+  { id: 'r_lab_station', glyph: '🧪', title: 'На эксперименты', desc: 'Открывает в Приюте станцию сдачи котов на опыты (🧬)',
+    currency: 'coins', effectKind: 'unlockLab', requires: [], col: 0, row: 4, levels: [
+      { cost: 300, value: 1, minLevel: 2 },
+    ] },
+  { id: 'r_lab_vet', glyph: '💉', title: 'Ветеринар', desc: 'Открывает в Питомнике клинику лечения потраченных вязок',
+    currency: 'coins', effectKind: 'unlockLab', requires: ['r_lab_station'], col: 1, row: 4, levels: [
+      { cost: 500, value: 1, minLevel: 3 },
+    ] },
+  // Крио переехала сюда из «Селекции»: 1-й ранг ОТКРЫВАЕТ крио-банк (комнату) + стартовые
+  // капсулы, следующие ранги наращивают вместимость до ~30 (CRYO_BASE_CAP + Σvalue).
+  // id узла НЕ меняем — по нему хранится прогресс в сейве и завязан cryoUnlocked.
+  { id: 'r_sel_cryo', glyph: '❄️', title: 'Криогенетика', desc: 'Открывает крио-банк, +6 капсул за уровень',
+    currency: 'dna', effectKind: 'cryoCap', requires: ['r_lab_vet'], col: 2, row: 4, levels: [
+      { cost: 300, coins: 800, value: 6, minLevel: 6 },
+      { cost: 550, coins: 1500, value: 6, minLevel: 7 },
+      { cost: 900, coins: 2600, value: 6, minLevel: 8 },
+      { cost: 1400, coins: 4200, value: 6, minLevel: 9 },
+    ] },
 ];
 
 export interface UpgradeDef {
@@ -434,9 +486,14 @@ export interface UpgradeDef {
 export const UPGRADES: Record<string, UpgradeDef> = {
   slots: { label: 'Слоты вязки', currency: 'coins', baseCost: 500, mult: 4, max: 2 },
   // 1 → 5 пьедесталов (base 1 + до 4 апгрейдов), покупки гейтит уровень (PEDESTAL_UNLOCK_LEVELS).
-  // ВНИМАНИЕ (тюнинг): при mult 4 верхние уровни очень дороги (~160к 💰 за 5-й) — проверить на плейтесте.
-  championSlots: { label: 'Слоты выставки', currency: 'coins', baseCost: 2500, mult: 4, max: 4 },
+  // Цена НЕ по mult, а явным прайсом PEDESTAL_COSTS (см. economy.upgradeCost). baseCost/mult
+  // тут лишь заглушки формата; max=4 задаёт число докупаемых пьедесталов.
+  championSlots: { label: 'Слоты выставки', currency: 'coins', baseCost: 500, mult: 1, max: 4 },
 };
+
+// Явный прайс пьедесталов выставки: 1-й бесплатный (базовый), далее покупки 2..5
+// стоят фиксированно (не по mult-кривой). Индекс = число уже купленных апгрейдов.
+export const PEDESTAL_COSTS: readonly number[] = [500, 2000, 8000, 24000];
 
 export interface GeneDef {
   label: string;
@@ -481,12 +538,12 @@ export function unlocksAtLevel(level: number): string[] {
   if (slotIdx >= 0) out.push(`💞 слот вязки №${slotIdx + 2}`);
   const pedIdx = PEDESTAL_UNLOCK_LEVELS.indexOf(level);
   if (pedIdx >= 0) out.push(`🏆 пьедестал №${pedIdx + 2}`);
+  // Станция «на эксперименты» и ветеринар открываются ПОКУПКОЙ узла «Лаборатории»
+  // (FEATURE_RESEARCH), а не уровнем — в баннере уровня их не анонсируем.
   const featNames: Partial<Record<LabFeature, string>> = {
-    labStation: '🧬 станция «в лабораторию»',
     food: '🍽 кормушка',
     research: '🔬 улучшения',
     engineering: '🧪 усилители вязки',
-    clinic: '💉 клиника лечения',
     recipeLab: '🧪 исследование рецептов',
   };
   for (const key of Object.keys(featNames) as LabFeature[]) {

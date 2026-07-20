@@ -3,7 +3,7 @@
  * Идентичность кота теперь — ПОРОДА из каталога + пол; редкость — тир породы.
  */
 
-import { breedName, breedTraits, sortTraits, traitTag, lookOf, lookTags } from '../genetics/index.js';
+import { breedName, breedTraits, sortTraits, traitTag } from '../genetics/index.js';
 import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, OrderReq } from '../game/index.js';
 import { KINSHIP_RU } from '../game/index.js';
@@ -28,16 +28,16 @@ export function describeCat(cat: Cat): string {
 }
 
 /**
- * Видимые признаки кота готовыми подписями: наследуемые гены его породы (визитка)
- * + облик по полу (окрас · рисунок · глаза). У дворового визитки нет — облик случаен.
+ * Видимые ПРИЗНАКИ кота готовыми подписями — только наследуемые гены строения его
+ * породы (визитка). Их читают рецепты; их же показывает анализ. Облик (окрас ·
+ * рисунок · глаза) сюда НЕ входит: он косметика по полу, а спрайты всё равно не
+ * совпадают с окрасами. У дворового (moggie) визитки нет — список пуст.
  */
 export function catVisibleTraits(cat: Cat): string[] {
-  const genes = sortTraits(breedTraits(cat.breed)).map(traitTag);
-  const look = lookOf(cat.breed, cat.genotype.sex);
-  return [...genes, ...(look ? lookTags(look) : [])];
+  return sortTraits(breedTraits(cat.breed)).map(traitTag);
 }
 
-/** Детальные строки облика кота (для меню). Редкость показывают цветные звёзды. */
+/** Детальные строки признаков кота (для меню). Редкость показывают цветные звёзды. */
 export function catTraits(cat: Cat): string[] {
   const sex = cat.genotype.sex === 'female' ? 'пол: самка ♀' : 'пол: самец ♂';
   // порода не дублируется — она уже в заголовке меню кота (единственный потребитель)

@@ -5,10 +5,10 @@
 import { randomCat } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { GameState } from './types.js';
-import { BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, levelForReputation } from './config.js';
+import { BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, ORDER_REFRESH_MS, levelForReputation } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
 import { attachHiddenPedigree, revealPedigree } from './pedigree.js';
-import { rollDailyOrders } from './orders.js';
+import { initOrders } from './orders.js';
 
 /** Новое состояние новой игры: стартовая пара котов, 1 слот, базовые гены, заказы. */
 export function createInitialState(rng: Rng, now: number): GameState {
@@ -28,16 +28,16 @@ export function createInitialState(rng: Rng, now: number): GameState {
     activeBoost: null,
     research: {},
     knownRecipes: [],
-    recipeResearch: { startedAt: 0, readyAt: 0 },
+    recipeResearch: { startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0 },
     cryo: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
-    ordersDay: -1,       // «суток ещё не было» → rollDailyOrders выдаст стартовую доску
+    orderAdRefreshAt: 0, // 📺-обновление заказа сразу доступно
     orderBasket: null,
     champions: [],
     food: FOOD_CAP_BASE, // кормушка стартует полной
     lastSeenAt: now,
-    lastHealAdAt: 0,     // 📺-лечение в клинике сразу доступно (без стартового кулдауна)
+    lastHealAdAt: 0,     // 📺-лечение в клинике доступно всегда (кулдауна нет)
     lastAnalyzeAdAt: 0,  // 📺-вариант Генетического анализа сразу доступен
     lastFreezeAdAt: 0,   // 📺-вариант заморозки сразу доступен
     nextId: 1,
@@ -48,7 +48,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     attachHiddenPedigree(state, cat, rng);
     state.cats.push(cat);
   }
-  rollDailyOrders(state, rng, now); // стартовая доска на текущие московские сутки
+  initOrders(state, rng, now); // стартовая доска: часть слотов «сбыт», часть «цель»
   return state;
 }
 
@@ -100,10 +100,21 @@ export function deserialize(json: string): GameState {
   // --- Система знаний (поля добавлены позже; мягкие дефолты без бампа версии) ---
   if (!Array.isArray(data.knownRecipes)) data.knownRecipes = [];
   if (!data.recipeResearch || typeof data.recipeResearch !== 'object') {
-    data.recipeResearch = { startedAt: 0, readyAt: 0 };
+    data.recipeResearch = { startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0 };
+  } else {
+    // paidCoins/paidDna добавлены позже — мягкий дефолт для старых сейвов.
+    if (typeof data.recipeResearch.paidCoins !== 'number') data.recipeResearch.paidCoins = 0;
+    if (typeof data.recipeResearch.paidDna !== 'number') data.recipeResearch.paidDna = 0;
   }
   if (typeof data.lastAnalyzeAdAt !== 'number') data.lastAnalyzeAdAt = 0;
   if (typeof data.lastFreezeAdAt !== 'number') data.lastFreezeAdAt = 0;
+  // Заказы (v9): у каждого свой таймер жизни (refillAt→expiresAt) + orderAdRefreshAt.
+  // Старые сейвы и так сбрасываются загрузчиком по SAVE_VERSION; здесь — мягкая страховка.
+  if (!Array.isArray(data.orders)) data.orders = [];
+  for (const o of data.orders) {
+    if (typeof o.expiresAt !== 'number') o.expiresAt = (o.createdAt ?? 0) + ORDER_REFRESH_MS;
+  }
+  if (typeof data.orderAdRefreshAt !== 'number') data.orderAdRefreshAt = 0;
   // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
   // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;
   // рождённым в инкубаторе (есть motherBreed/fatherBreed) раскрываем родителей —

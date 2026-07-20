@@ -86,12 +86,13 @@ describe('туман родословной (этап A)', () => {
 });
 
 describe('генетический анализ (этап B)', () => {
-  it('за 💰: списывает монеты, ставит analyzed и вскрывает дерево', () => {
+  it('за 💰: списывает монеты по тиру, ставит analyzed и вскрывает дерево', () => {
     const { s, mom } = setup(20);
     attachHiddenPedigree(s, mom, makeRng(21));
-    s.coins = C.ANALYZE_COIN_COST;
+    const cost = C.analyzeCoinCost(mom.rarityTier);
+    s.coins = cost;
     const r = analyzeCat(s, mom.id, 'coins', 1000);
-    expect(r).toMatchObject({ ok: true, coins: C.ANALYZE_COIN_COST });
+    expect(r).toMatchObject({ ok: true, coins: cost });
     expect(s.coins).toBe(0);
     expect(mom.analyzed).toBe(true);
     expect(pedigreeHasFog(mom)).toBe(false);
@@ -100,23 +101,22 @@ describe('генетический анализ (этап B)', () => {
   it('не хватает монет → отказ без изменений', () => {
     const { s, mom } = setup(22);
     attachHiddenPedigree(s, mom, makeRng(23));
-    s.coins = C.ANALYZE_COIN_COST - 1;
+    s.coins = C.analyzeCoinCost(mom.rarityTier) - 1;
     expect(analyzeCat(s, mom.id, 'coins', 0)).toMatchObject({ ok: false, reason: 'не хватает монет' });
     expect(mom.analyzed).toBe(false);
     expect(pedigreeHasFog(mom)).toBe(true);
   });
 
-  it('📺: бесплатно, но с глобальным кулдауном', () => {
+  it('📺: бесплатно и БЕЗ кулдауна (можно подряд)', () => {
     const { s, mom, dad } = setup(24);
     attachHiddenPedigree(s, mom, makeRng(25));
     attachHiddenPedigree(s, dad, makeRng(26));
     s.coins = 0;
     expect(analyzeCat(s, mom.id, 'ad', 1000).ok).toBe(true);
     expect(mom.analyzed).toBe(true);
-    // сразу второй — кулдаун ещё не прошёл
-    expect(analyzeCat(s, dad.id, 'ad', 2000)).toMatchObject({ ok: false });
-    // после кулдауна — можно
-    expect(analyzeCat(s, dad.id, 'ad', 1000 + C.ANALYZE_AD_COOLDOWN_MS).ok).toBe(true);
+    // сразу второй — кулдауна больше нет, доступно тут же
+    expect(analyzeCat(s, dad.id, 'ad', 1000).ok).toBe(true);
+    expect(dad.analyzed).toBe(true);
   });
 
   it('повторный анализ — no-op (ok, бесплатно)', () => {
@@ -183,14 +183,16 @@ describe('исследование рецептов (этап D)', () => {
     s.level = C.LAB_UNLOCKS.recipeLab - 1;
     expect(startRecipeResearch(s, 0)).toMatchObject({ ok: false, reason: 'locked' });
     s.level = C.LAB_UNLOCKS.recipeLab;
-    s.coins = C.RECIPE_RESEARCH_COST_COINS - 1;
+    const price = C.recipeResearchCost(s.level);
+    s.coins = price.coins - 1;
+    s.dna = price.dna;
     expect(startRecipeResearch(s, 0)).toMatchObject({ ok: false, reason: 'не хватает ресурсов' });
-    s.coins = C.RECIPE_RESEARCH_COST_COINS;
-    s.dna = C.RECIPE_RESEARCH_COST_DNA;
+    s.coins = price.coins;
+    s.dna = price.dna;
     expect(startRecipeResearch(s, 1000).ok).toBe(true);
     expect(s.coins).toBe(0);
     expect(s.dna).toBe(0);
-    expect(s.recipeResearch.readyAt).toBe(1000 + C.RECIPE_RESEARCH_MS);
+    expect(s.recipeResearch.readyAt).toBe(1000 + C.recipeResearchMs(s.level));
     // слот занят — второй запуск невозможен
     s.coins = 10_000; s.dna = 10_000;
     expect(startRecipeResearch(s, 2000)).toMatchObject({ ok: false, reason: 'стол занят исследованием' });
@@ -206,11 +208,11 @@ describe('исследование рецептов (этап D)', () => {
   it('финиш: выдаёт случайный рецепт из пула → knownRecipes; до готовности — null', () => {
     const { s } = setup(43);
     expect(startRecipeResearch(s, 0).ok).toBe(true);
-    const early = finishRecipeResearch(s, C.RECIPE_RESEARCH_MS - 1, makeRng(1));
+    const early = finishRecipeResearch(s, C.recipeResearchMs(s.level) - 1, makeRng(1));
     expect(early.recipe).toBeNull();
     expect(s.recipeResearch.readyAt).toBeGreaterThan(0);
     const poolKeys = researchableRecipes(s).map((r) => recipeKey(r));
-    const done = finishRecipeResearch(s, C.RECIPE_RESEARCH_MS, makeRng(1));
+    const done = finishRecipeResearch(s, C.recipeResearchMs(s.level), makeRng(1));
     expect(done.recipe).not.toBeNull();
     expect(s.knownRecipes).toContain(recipeKey(done.recipe as Recipe));
     expect(s.recipeResearch.readyAt).toBe(0); // стол свободен
@@ -220,14 +222,15 @@ describe('исследование рецептов (этап D)', () => {
 
   it('грейс: пул опустел за время исследования → возврат стоимости', () => {
     const { s } = setup(44);
+    const price = C.recipeResearchCost(s.level);
     expect(startRecipeResearch(s, 0).ok).toBe(true);
     const coins = s.coins;
     const dna = s.dna;
     s.knownRecipes = RECIPES.map((r) => recipeKey(r)); // всё открыли, пока шёл таймер
-    const done = finishRecipeResearch(s, C.RECIPE_RESEARCH_MS, makeRng(1));
+    const done = finishRecipeResearch(s, C.recipeResearchMs(s.level), makeRng(1));
     expect(done).toMatchObject({ recipe: null, refunded: true });
-    expect(s.coins).toBe(coins + C.RECIPE_RESEARCH_COST_COINS);
-    expect(s.dna).toBe(dna + C.RECIPE_RESEARCH_COST_DNA);
+    expect(s.coins).toBe(coins + price.coins);
+    expect(s.dna).toBe(dna + price.dna);
   });
 
   it('ускорения: 💎 завершает сразу (цена ∝ остатку), 📺 срезает AD_SKIP_MS', () => {
@@ -309,11 +312,11 @@ describe('сейв: поля системы знаний', () => {
   it('новые поля переживают round-trip; у старого сейва — мягкие дефолты', () => {
     const { s } = setup(60);
     s.knownRecipes = ['x|y|z'];
-    s.recipeResearch = { startedAt: 5, readyAt: 9 };
+    s.recipeResearch = { startedAt: 5, readyAt: 9, paidCoins: 450, paidDna: 15 };
     s.lastAnalyzeAdAt = 7;
     const back = deserialize(serialize(s));
     expect(back.knownRecipes).toEqual(['x|y|z']);
-    expect(back.recipeResearch).toEqual({ startedAt: 5, readyAt: 9 });
+    expect(back.recipeResearch).toEqual({ startedAt: 5, readyAt: 9, paidCoins: 450, paidDna: 15 });
     expect(back.lastAnalyzeAdAt).toBe(7);
     // «старый» сейв без полей
     const legacy = JSON.parse(serialize(s)) as Record<string, unknown>;
@@ -322,7 +325,7 @@ describe('сейв: поля системы знаний', () => {
     delete legacy.lastAnalyzeAdAt;
     const migrated = deserialize(JSON.stringify(legacy));
     expect(migrated.knownRecipes).toEqual([]);
-    expect(migrated.recipeResearch).toEqual({ startedAt: 0, readyAt: 0 });
+    expect(migrated.recipeResearch).toEqual({ startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0 });
     expect(migrated.lastAnalyzeAdAt).toBe(0);
   });
 

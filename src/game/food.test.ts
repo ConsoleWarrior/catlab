@@ -25,7 +25,7 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(1), 0);
     s.level = 3;
     s.cats = [];
-    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // 10 × 0.1 → rate 1.0/мин
+    for (let i = 0; i < 20; i++) addCat(s, 'moggie'); // 20 × 0.05 → rate 1.0/мин
     expect(foodRatePerMin(s)).toBeCloseTo(1.0);
     s.food = 10;
     expect(consumeFood(s, 4)).toBeCloseTo(4);  // хватило → 4 сытые минуты
@@ -55,7 +55,7 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(3), 0);
     s.level = 3;
     s.cats = [];
-    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // rate 1.0
+    for (let i = 0; i < 20; i++) addCat(s, 'moggie'); // 20 × 0.05 → rate 1.0
     s.food = 50;
     expect(foodMinutesLeft(s)).toBeCloseTo(50);
     s.cats = []; // ртов не осталось → расхода нет
@@ -78,10 +78,10 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(5), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'maine_coon'); // T3 → 0.3
+    const champ = addCat(s, 'maine_coon'); // T3 → 0.15
     setChampion(s, champ.id, 0, 0);
     expect(feedingCatCount(s)).toBe(1);
-    expect(foodRatePerMin(s)).toBeCloseTo(0.3); // на пьедестале, но с довольствия не снят
+    expect(foodRatePerMin(s)).toBeCloseTo(0.15); // на пьедестале, но с довольствия не снят
   });
 });
 
@@ -90,12 +90,12 @@ describe('collectIncome с кормом', () => {
     const s = createInitialState(makeRng(10), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'savannah');             // T5 → 0.5/мин
-    for (let i = 0; i < 7; i++) addCat(s, 'moggie'); // 7 × 0.1 → всего 1.2/мин
+    const champ = addCat(s, 'savannah');             // T5 → 0.25/мин
+    for (let i = 0; i < 7; i++) addCat(s, 'moggie'); // 7 × 0.05 → всего 0.6/мин
     setChampion(s, champ.id, 0, 0);
     const rate = foodRatePerMin(s);
-    expect(rate).toBeCloseTo(1.2);
-    s.food = 3;          // хватит на 2.5 минуты
+    expect(rate).toBeCloseTo(0.6);
+    s.food = 3;          // хватит на 5 минут
     s.lastSeenAt = 0;
     const passive = passiveRatePerMin(s);
     const r = collectIncome(s, 10 * 60_000); // отсутствовали 10 минут
@@ -107,7 +107,7 @@ describe('collectIncome с кормом', () => {
     const s = createInitialState(makeRng(11), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'savannah'); // 0.5/мин — корма (200) хватит на 400 мин
+    const champ = addCat(s, 'savannah'); // 0.25/мин — корма (200) хватит на 800 мин
     setChampion(s, champ.id, 0, 0);
     s.food = C.FOOD_CAP_BASE;
     s.lastSeenAt = 0;
@@ -115,7 +115,7 @@ describe('collectIncome с кормом', () => {
     const passive = passiveRatePerMin(s);
     const r = collectIncome(s, 300 * 60_000); // 300 мин: корма хватило, потолок — нет
     expect(r.coins).toBe(Math.floor(passive * cap));
-    expect(s.food).toBeCloseTo(C.FOOD_CAP_BASE - 0.5 * 300); // корм съеден за всё отсутствие
+    expect(s.food).toBeCloseTo(C.FOOD_CAP_BASE - C.FOOD_PER_MIN_BY_TIER.legendary * 300); // корм съеден за всё отсутствие
   });
 });
 

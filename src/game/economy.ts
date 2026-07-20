@@ -24,8 +24,14 @@ export function slotCount(state: GameState): number {
 
 // --- Уровень лаборатории: гейты прогрессии ---
 
-/** Открыта ли фича на текущем уровне лаборатории (labStation/research/engineering/...). */
+/**
+ * Открыта ли фича. Большинство — по уровню лаборатории (LAB_UNLOCKS), но станция «на
+ * эксперименты» и ветеринар открываются ПОКУПКОЙ узла ветки «Лаборатория» (FEATURE_RESEARCH,
+ * по образцу крио-банка) — для них проверяем владение узлом, а не уровень.
+ */
 export function isUnlocked(state: GameState, feature: C.LabFeature): boolean {
+  const nodeId = C.FEATURE_RESEARCH[feature];
+  if (nodeId) return researchOwned(state, nodeId);
   return state.level >= C.LAB_UNLOCKS[feature];
 }
 
@@ -78,6 +84,21 @@ export function researchMaxed(state: GameState, def: C.ResearchDef): boolean {
 /** Следующий (ещё не купленный) уровень узла или null, если узел прокачан полностью. */
 export function researchNext(state: GameState, def: C.ResearchDef): C.ResearchLevel | null {
   return def.levels[researchLevel(state, def.id)] ?? null;
+}
+
+/**
+ * Доп. цена в 💰 сверх основной валюты узла. Есть только у веток НЕ на монеты
+ * (Селекция за 🧬 стоит ещё и денег). У монетных веток дубля нет — вернём 0.
+ */
+export function researchExtraCoins(def: C.ResearchDef, next: C.ResearchLevel | null): number {
+  return next && def.currency !== 'coins' ? (next.coins ?? 0) : 0;
+}
+
+/** Хватает ли ресурсов на следующий уровень узла: основная валюта + доп. монеты. */
+export function canAffordResearch(state: GameState, def: C.ResearchDef, next: C.ResearchLevel | null): boolean {
+  if (!next) return false;
+  if (state[def.currency] < next.cost) return false;
+  return state.coins >= researchExtraCoins(def, next);
 }
 
 /**
@@ -584,6 +605,12 @@ export function upgradeCost(state: GameState, id: string): { currency: Currency;
     const def = C.UPGRADES.slots!;
     const level = state.slots.length - 1; // 0 = покупаем 2-й слот
     return { currency: def.currency, amount: Math.round(def.baseCost * def.mult ** level) };
+  }
+  if (id === 'championSlots') {
+    // Пьедесталы — явный прайс PEDESTAL_COSTS (1-й бесплатный, далее 500/2000/8000/24000),
+    // индекс = число уже купленных апгрейдов. Дальше последнего — уже максимум.
+    const amount = C.PEDESTAL_COSTS[lvl(state, 'championSlots')];
+    return amount === undefined ? null : { currency: C.UPGRADES.championSlots!.currency, amount };
   }
   const def = C.UPGRADES[id];
   if (!def) return null;

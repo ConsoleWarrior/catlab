@@ -2,18 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { makeRng, makeCat, breedLevel } from '../genetics/index.js';
 import {
   createInitialState, matchesOrder, generateOrder, claimOrder, makeCatInstance,
-  rollDailyOrders, refreshOrderByAd, mskDay, msUntilOrdersReset, ORDER_TARGET, DAY_MS,
+  initOrders, refreshExpiredOrders, adRefreshOrder, canAdRefreshOrder, msUntilAdRefresh,
+  msUntilOrderExpiry, ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS,
 } from './index.js';
 import type { Order } from './index.js';
 
 const noReward = { coins: 0, crystals: 0, dna: 0, reputation: 0 };
+const mkOrder = (over: Partial<Order>): Order => ({
+  id: 'o', req: { breed: 'persian' }, reward: noReward, createdAt: 0, expiresAt: ORDER_REFRESH_MS, ...over,
+});
 
 describe('matchesOrder', () => {
   it('совпадение и несовпадение по породе', () => {
     const s = createInitialState(makeRng(1), 0);
     const persian = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
-    const ok: Order = { id: 'o', req: { breed: 'persian' }, reward: noReward, createdAt: 0, done: false, adRefreshed: false };
-    const bad: Order = { ...ok, req: { breed: 'siamese' } };
+    const ok = mkOrder({ req: { breed: 'persian' } });
+    const bad = mkOrder({ req: { breed: 'siamese' } });
     expect(matchesOrder(ok, persian)).toBe(true);
     expect(matchesOrder(bad, persian)).toBe(false);
   });
@@ -22,7 +26,7 @@ describe('matchesOrder', () => {
     const s = createInitialState(makeRng(2), 0);
     const persian = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian'); // uncommon
     const bengal = makeCatInstance(s, makeCat('male'), 0, 'nursery', 'bengal');     // legendary
-    const order: Order = { id: 'o', req: { minRarity: 'rare' }, reward: noReward, createdAt: 0, done: false, adRefreshed: false };
+    const order = mkOrder({ req: { minRarity: 'rare' } });
     expect(matchesOrder(order, persian)).toBe(false);
     expect(matchesOrder(order, bengal)).toBe(true);
   });
@@ -30,7 +34,7 @@ describe('matchesOrder', () => {
   it('дворовый кот не подходит под заказ конкретной породы', () => {
     const s = createInitialState(makeRng(3), 0);
     const moggie = makeCatInstance(s, makeCat('female'), 0); // breed по умолчанию moggie
-    const order: Order = { id: 'o', req: { breed: 'persian' }, reward: noReward, createdAt: 0, done: false, adRefreshed: false };
+    const order = mkOrder({ req: { breed: 'persian' } });
     expect(matchesOrder(order, moggie)).toBe(false);
   });
 });
@@ -44,6 +48,7 @@ describe('generateOrder', () => {
       expect(o.req.breed !== undefined || o.req.minRarity !== undefined).toBe(true);
       expect(o.req.earShape).toBeUndefined();
       expect(o.req.coatLength).toBeUndefined();
+      expect(o.expiresAt).toBe(ORDER_REFRESH_MS); // свежий заказ живёт 6 ч от now(0)
       // конкретная порода в заказе — всегда породистая (не базовый дворовый)
       if (o.req.breed) expect(o.req.breed).not.toBe('moggie');
     }
@@ -111,28 +116,29 @@ describe('generateOrder', () => {
 });
 
 describe('claimOrder', () => {
-  const persianOrder = (): Order => ({
+  const persianOrder = (): Order => mkOrder({
     id: 'o1', req: { breed: 'persian' },
-    reward: { coins: 100, crystals: 0, dna: 5, reputation: 120 },
-    createdAt: 0, done: false, adRefreshed: false,
+    reward: { coins: 100, crystals: 0, dna: 5, reputation: 500 },
   });
 
-  it('кот из корзины → награда, репутация, уровень; кот уезжает, заказ помечен выполненным', () => {
+  it('кот из корзины → награда, репутация, уровень; кот уезжает, слот сразу получает свежий заказ', () => {
     const s = createInitialState(makeRng(5), 0);
     const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
     s.cats.push(cat);
-    s.orders.push(persianOrder());
+    s.orders = [persianOrder()];
     s.orderBasket = cat.id;
     const before = s.coins;
-    const r = claimOrder(s, 'o1', 0);
+    const r = claimOrder(s, 'o1', 0, makeRng(50));
     expect(r.ok).toBe(true);
     expect(s.coins).toBe(before + 100);
     expect(s.dna).toBe(5);
-    expect(s.reputation).toBe(120);
-    expect(s.level).toBe(2); // 1 + floor(120/100)
+    expect(s.reputation).toBe(500);
+    expect(s.level).toBe(2); // 500 ≥ порог L2 (480)
     expect(s.cats.find((c) => c.id === cat.id)).toBeUndefined();
-    // заказ остаётся на доске помеченным, корзина освобождается вместе с котом
-    expect(s.orders.find((o) => o.id === 'o1')?.done).toBe(true);
+    // выполненный заказ сменился свежим в том же слоте: id новый, заказ активен
+    expect(s.orders.length).toBe(1);
+    expect(s.orders[0]!.id).not.toBe('o1');
+    expect(s.orders[0]!.expiresAt).toBeGreaterThan(0);
     expect(s.orderBasket).toBeNull();
   });
 
@@ -140,102 +146,106 @@ describe('claimOrder', () => {
     const s = createInitialState(makeRng(5), 0);
     const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
     s.cats.push(cat);
-    s.orders.push(persianOrder());
+    s.orders = [persianOrder()];
     s.orderBasket = null;
-    expect(claimOrder(s, 'o1', 0).ok).toBe(false);
+    expect(claimOrder(s, 'o1', 0, makeRng(51)).ok).toBe(false);
     expect(s.cats.find((c) => c.id === cat.id)).toBeDefined();
   });
 
-  it('выполненный заказ повторно не закрыть', () => {
+  it('выполненный слот больше не держит тот же заказ (повторно не закрыть по id)', () => {
     const s = createInitialState(makeRng(5), 0);
     for (const _ of [0, 1]) {
       const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
       s.cats.push(cat);
     }
-    s.orders.push(persianOrder());
+    s.orders = [persianOrder()];
     const persians = s.cats.filter((c) => c.breed === 'persian');
     s.orderBasket = persians[0]!.id;
-    expect(claimOrder(s, 'o1', 0).ok).toBe(true);
+    expect(claimOrder(s, 'o1', 0, makeRng(52)).ok).toBe(true);
     s.orderBasket = persians[1]!.id; // другой подходящий кот
-    expect(claimOrder(s, 'o1', 0).ok).toBe(false);
+    expect(claimOrder(s, 'o1', 0, makeRng(53))).toMatchObject({ ok: false, reason: 'заказ не найден' });
   });
 
   it('неподходящий кот в корзине отклоняется', () => {
     const s = createInitialState(makeRng(6), 0);
     const cat = makeCatInstance(s, makeCat('female'), 0); // дворовый
     s.cats.push(cat);
-    s.orders.push({ id: 'o2', req: { breed: 'siamese' }, reward: noReward, createdAt: 0, done: false, adRefreshed: false });
+    s.orders = [mkOrder({ id: 'o2', req: { breed: 'siamese' }, reward: noReward })];
     s.orderBasket = cat.id;
-    expect(claimOrder(s, 'o2', 0).ok).toBe(false);
+    expect(claimOrder(s, 'o2', 0, makeRng(54)).ok).toBe(false);
   });
 });
 
-describe('суточный цикл доски', () => {
-  const MSK = 3 * 3600_000;
-  const day = (n: number): number => n * DAY_MS - MSK; // московская полночь n-х суток UTC-эпохи
-
-  it('стартовая доска = ORDER_TARGET слотов на текущие сутки', () => {
-    const s = createInitialState(makeRng(1), day(20_000) + 5 * 3600_000);
+describe('таймер жизни заказов (6 ч)', () => {
+  it('стартовая доска = ORDER_TARGET активных заказов со сроком жизни', () => {
+    const s = createInitialState(makeRng(1), 1000);
     expect(s.orders.length).toBe(ORDER_TARGET);
-    expect(s.orders.every((o) => !o.done && !o.adRefreshed)).toBe(true);
+    expect(s.orders.every((o) => o.expiresAt > 1000)).toBe(true);
   });
 
-  it('внутри суток доска не меняется, в московскую полночь — перевыпуск', () => {
-    const t0 = day(20_000) + 5 * 3600_000; // 05:00 MSK
-    const s = createInitialState(makeRng(2), t0);
+  it('initOrders наполняет доску активными заказами', () => {
+    const s = createInitialState(makeRng(2), 0);
+    s.orders = [];
+    initOrders(s, makeRng(3), 500);
+    expect(s.orders.length).toBe(ORDER_TARGET);
+    expect(s.orders.every((o) => o.expiresAt === 500 + ORDER_REFRESH_MS)).toBe(true);
+  });
+
+  it('refreshExpiredOrders: просроченный заказ сменяется, не просроченный не трогается', () => {
+    const s = createInitialState(makeRng(4), 0);
+    const idExpired = s.orders[0]!.id;
+    s.orders[0]!.expiresAt = 100;      // истёк к now=1000
+    s.orders[1]!.expiresAt = 5_000_000; // ещё жив
+    const idAlive = s.orders[1]!.id;
+    expect(refreshExpiredOrders(s, makeRng(5), 1000)).toBe(true);
+    expect(s.orders[0]!.id).not.toBe(idExpired);  // слот 0 обновился
+    expect(s.orders[0]!.expiresAt).toBe(1000 + ORDER_REFRESH_MS); // новый срок жизни
+    expect(s.orders[1]!.id).toBe(idAlive);        // слот 1 не тронут
+    expect(s.orders[1]!.expiresAt).toBe(5_000_000);
+  });
+
+  it('refreshExpiredOrders без просроченных — no-op', () => {
+    const s = createInitialState(makeRng(6), 0);
+    for (const o of s.orders) o.expiresAt = 999_999_999; // все живы
     const ids = s.orders.map((o) => o.id);
-    // тот же день, даже спустя часы → no-op
-    expect(rollDailyOrders(s, makeRng(3), t0 + 10 * 3600_000)).toBe(false);
+    expect(refreshExpiredOrders(s, makeRng(7), 1000)).toBe(false);
     expect(s.orders.map((o) => o.id)).toEqual(ids);
-    // шаг за полночь → доска целиком новая
-    expect(rollDailyOrders(s, makeRng(3), day(20_001))).toBe(true);
-    expect(s.orders.map((o) => o.id)).not.toEqual(ids);
+  });
+
+  it('долгий офлайн = по одному свежему заказу на просроченный слот', () => {
+    const s = createInitialState(makeRng(8), 0);
+    for (const o of s.orders) o.expiresAt = 100; // все давно просрочены
+    expect(refreshExpiredOrders(s, makeRng(9), 10_000_000)).toBe(true);
     expect(s.orders.length).toBe(ORDER_TARGET);
-  });
-
-  it('смена суток сбрасывает done/📺-замену и освобождает корзину', () => {
-    const t0 = day(20_000) + 3600_000;
-    const s = createInitialState(makeRng(4), t0);
-    s.orders[0]!.done = true;
-    s.orders[1]!.adRefreshed = true;
-    s.orderBasket = s.cats[0]!.id;
-    rollDailyOrders(s, makeRng(5), day(20_001) + 60_000);
-    expect(s.orders.every((o) => !o.done && !o.adRefreshed)).toBe(true);
-    expect(s.orderBasket).toBeNull();
-  });
-
-  it('долгий офлайн = один перевыпуск, а не по доске за пропущенный день', () => {
-    const s = createInitialState(makeRng(6), day(20_000));
-    expect(rollDailyOrders(s, makeRng(7), day(20_030))).toBe(true); // вернулись через 30 суток
-    expect(s.orders.length).toBe(ORDER_TARGET);
-    expect(rollDailyOrders(s, makeRng(7), day(20_030) + 60_000)).toBe(false);
-  });
-
-  it('таймер до смены считается от московской полуночи', () => {
-    const t = day(20_000) + 5 * 3600_000; // 05:00 MSK → до полуночи 19 ч
-    expect(msUntilOrdersReset(t)).toBe(19 * 3600_000);
-    expect(mskDay(day(20_000))).toBe(20_000);
-    expect(mskDay(day(20_000) - 1)).toBe(19_999); // за миг до полуночи — ещё вчера
+    expect(s.orders.every((o) => o.expiresAt === 10_000_000 + ORDER_REFRESH_MS)).toBe(true);
   });
 });
 
-describe('📺-замена заказа', () => {
-  it('меняет слот на новый и тратится один раз за сутки', () => {
+describe('📺-обновление заказа (раз в час)', () => {
+  it('обновляет один заказ и ставит глобальный кулдаун', () => {
     const s = createInitialState(makeRng(8), 0);
-    const id = s.orders[0]!.id;
-    const r = refreshOrderByAd(s, id, makeRng(9), 0);
-    expect(r.ok).toBe(true);
-    const fresh = s.orders[0]!;
-    expect(fresh.id).not.toBe(id);
-    // флаг переезжает на новый заказ — иначе замену можно было бы крутить бесконечно
-    expect(fresh.adRefreshed).toBe(true);
-    expect(refreshOrderByAd(s, fresh.id, makeRng(10), 0).ok).toBe(false);
-    expect(s.orders.length).toBe(ORDER_TARGET);
+    const oldId = s.orders[0]!.id;
+    expect(canAdRefreshOrder(s, 0)).toBe(true);
+    expect(adRefreshOrder(s, makeRng(60), oldId, 0).ok).toBe(true);
+    expect(s.orders[0]!.id).not.toBe(oldId);        // заказ сменился
+    expect(s.orders[0]!.expiresAt).toBe(ORDER_REFRESH_MS);
+    // кулдаун встал: сразу второй раз нельзя
+    expect(canAdRefreshOrder(s, 0)).toBe(false);
+    expect(msUntilAdRefresh(s, 0)).toBe(ORDER_AD_REFRESH_COOLDOWN_MS);
+    expect(adRefreshOrder(s, makeRng(61), s.orders[1]!.id, 0))
+      .toMatchObject({ ok: false, reason: 'обновление ещё на кулдауне' });
   });
 
-  it('выполненный заказ не меняется', () => {
+  it('после кулдауна снова доступно', () => {
     const s = createInitialState(makeRng(11), 0);
-    s.orders[0]!.done = true;
-    expect(refreshOrderByAd(s, s.orders[0]!.id, makeRng(12), 0).ok).toBe(false);
+    expect(adRefreshOrder(s, makeRng(62), s.orders[0]!.id, 0).ok).toBe(true);
+    expect(canAdRefreshOrder(s, ORDER_AD_REFRESH_COOLDOWN_MS)).toBe(true);
+    expect(adRefreshOrder(s, makeRng(63), s.orders[1]!.id, ORDER_AD_REFRESH_COOLDOWN_MS).ok).toBe(true);
+  });
+
+  it('msUntilOrderExpiry считает остаток до авто-смены', () => {
+    const s = createInitialState(makeRng(12), 1000);
+    expect(msUntilOrderExpiry(s.orders[0]!, 1000)).toBe(ORDER_REFRESH_MS);
+    expect(msUntilOrderExpiry(s.orders[0]!, 1000 + ORDER_REFRESH_MS + 5)).toBe(0);
   });
 });

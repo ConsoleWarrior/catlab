@@ -63,11 +63,15 @@ describe('стоимость апгрейдов', () => {
     expect(upgradeCost(s, 'slots')).toEqual({ currency: 'coins', amount: 2000 });
   });
 
-  it('обычный апгрейд дорожает по mult', () => {
+  it('пьедесталы — явный прайс PEDESTAL_COSTS (1-й бесплатный, далее 500/2000/8000/24000)', () => {
     const s = createInitialState(makeRng(7), 0);
-    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: 2500 });
+    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: 500 });
     s.upgrades.championSlots = 1;
-    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: Math.round(2500 * 4) });
+    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: 2000 });
+    s.upgrades.championSlots = 3;
+    expect(upgradeCost(s, 'championSlots')).toEqual({ currency: 'coins', amount: 24000 });
+    s.upgrades.championSlots = 4; // все 4 апгрейда куплены → цены больше нет
+    expect(upgradeCost(s, 'championSlots')).toBeNull();
   });
 
   it('upgradeMaxed по достижении максимума', () => {

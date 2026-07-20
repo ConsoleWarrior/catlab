@@ -20,10 +20,10 @@ import { BREEDS, BREEDS_BY_TIER, breedName, tierOfBreed, RECIPES, recipeKey } fr
 import type { RarityTier, Recipe } from '../../genetics/index.js';
 import {
   RESEARCH, isUnlocked, unlockLevelOf,
-  researchLevel, researchOwned, researchMaxed, researchNext,
+  researchLevel, researchOwned, researchMaxed, researchNext, researchExtraCoins, canAffordResearch,
   breedDiscovered, breedStudied, researchableRecipes,
   startRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
-  RECIPE_RESEARCH_MS, RECIPE_RESEARCH_COST_COINS, RECIPE_RESEARCH_COST_DNA,
+  recipeResearchCost, recipeResearchMs,
   speedUpCost, AD_SKIP_MS,
 } from '../../game/index.js';
 import type { ResearchDef } from '../../game/index.js';
@@ -48,6 +48,7 @@ const BRANCHES: { row: number; label: string }[] = [
   { row: 1, label: '🎓 Обучение · 💰' },
   { row: 2, label: '🤝 Пристройство · 💰' },
   { row: 3, label: '🏠 Хозяйство · 💰' },
+  { row: 4, label: '🔬 Лаборатория' },
 ];
 
 /** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
@@ -270,8 +271,8 @@ export function createGenolab(ctx: UiContext): Room {
     const levelLocked = !!next && ctx.state.level < next.minLevel;   // этот уровень ещё заперт
     const curColor = def.currency === 'dna' ? COLORS.dna : COLORS.coins;
     const curGlyph = def.currency === 'dna' ? '🧬' : '💰';
-    const balance = def.currency === 'dna' ? ctx.state.dna : ctx.state.coins;
-    const affordable = !!next && balance >= next.cost;
+    const extraCoins = researchExtraCoins(def, next); // доп. 💰 у Селекции (сверх 🧬)
+    const affordable = canAffordResearch(ctx.state, def, next);
     const buyable = !maxed && reqMet && !levelLocked && affordable;
     const hardLocked = !maxed && (!reqMet || levelLocked);
 
@@ -310,7 +311,10 @@ export function createGenolab(ctx: UiContext): Room {
         ? label('🔒', Math.min(16, nh * 0.16), COLORS.inkSoft, '800')
         : levelLocked
           ? label(`🔒 ур. ${next!.minLevel}`, Math.min(13.5, nh * 0.135), COLORS.inkSoft, '800')
-          : label(`${curGlyph} ${next!.cost}`, Math.min(15, nh * 0.15), affordable ? curColor : COLORS.inkSoft, '800');
+          : label(
+            extraCoins > 0 ? `${curGlyph}${next!.cost}+💰${extraCoins}` : `${curGlyph} ${next!.cost}`,
+            Math.min(extraCoins > 0 ? 12.5 : 15, nh * 0.15), affordable ? curColor : COLORS.inkSoft, '800',
+          );
     status.position.set(0, nh / 2 - nh * 0.13);
     c.addChild(status);
 
@@ -563,12 +567,14 @@ export function createGenolab(ctx: UiContext): Room {
       hint.position.set(viewW / 2, viewTop + 108);
       shell.body.addChild(done, hint);
     } else {
-      // стол свободен: цена 💰+🧬, длительность и запуск
-      const durText = RECIPE_RESEARCH_MS >= 60_000
-        ? `${Math.round(RECIPE_RESEARCH_MS / 60_000)} мин` : `${Math.round(RECIPE_RESEARCH_MS / 1000)} с`;
-      const afford = ctx.state.coins >= RECIPE_RESEARCH_COST_COINS && ctx.state.dna >= RECIPE_RESEARCH_COST_DNA;
+      // стол свободен: цена 💰+🧬 и длительность растут с уровнем лабы
+      const price = recipeResearchCost(ctx.state.level);
+      const durMs = recipeResearchMs(ctx.state.level);
+      const durText = durMs >= 60_000
+        ? `${Math.round(durMs / 60_000)} мин` : `${Math.round(durMs / 1000)} с`;
+      const afford = ctx.state.coins >= price.coins && ctx.state.dna >= price.dna;
       const info = label(
-        `в пуле: ${pool.length} · цена 💰 ${RECIPE_RESEARCH_COST_COINS} + 🧬 ${RECIPE_RESEARCH_COST_DNA} · ⏱ ${durText}`,
+        `в пуле: ${pool.length} · цена 💰 ${price.coins} + 🧬 ${price.dna} · ⏱ ${durText}`,
         12.5, COLORS.ink, '700',
       );
       info.position.set(viewW / 2, viewTop + 76);

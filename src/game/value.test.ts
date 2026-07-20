@@ -53,7 +53,7 @@ describe('корм и мягкий голод', () => {
     expect(foodRatePerMin(s)).toBeCloseTo(C.FOOD_PER_MIN_BY_TIER.common);
     addCat(s, 'british_shorthair');    // T2
     addCat(s, 'maine_coon');           // T3
-    expect(foodRatePerMin(s)).toBeCloseTo(0.1 + 0.2 + 0.3);
+    expect(foodRatePerMin(s)).toBeCloseTo(0.05 + 0.1 + 0.15);
   });
 
   it('ниже гейта кормушки (искусственный ур.0) корм не расходуется и голода нет', () => {
@@ -229,10 +229,11 @@ describe('массовые действия приюта', () => {
     s.cats = s.cats.filter((c) => c.location !== 'shelter');
     addShelterCat(s, 'persian');
     addShelterCat(s, 'bengal', 'male');
-    expect(sendAllToLab(s)).toMatchObject({ ok: false, reason: 'locked' }); // ур.0
-    // лаборатория открыта уровнем; опыт держим высоким, чтобы addReputation внутри
+    expect(sendAllToLab(s)).toMatchObject({ ok: false, reason: 'locked' }); // узел станции не куплен
+    // станция открывается покупкой узла; опыт держим высоким, чтобы addReputation внутри
     // цикла не пересчитал уровень вниз и не запер вторую сдачу.
     s.reputation = 10_000_000; s.level = C.levelForReputation(s.reputation);
+    s.research.r_lab_station = 1;
     const totals = shelterTotals(s);
     const r = sendAllToLab(s);
     expect(r.ok).toBe(true);
@@ -255,7 +256,8 @@ describe('массовые действия приюта', () => {
 describe('лаборатория и ускорение', () => {
   it('sendToLab даёт гены и убирает кота', () => {
     const s = createInitialState(makeRng(8), 0);
-    s.level = 10; // станция «в лабораторию» открыта уровнем
+    s.level = 10;
+    s.research.r_lab_station = 1; // станция «на эксперименты» открывается покупкой узла
     const cat = addCat(s, 'persian');
     const before = s.dna;
     const r = sendToLab(s, cat.id);
@@ -308,7 +310,7 @@ describe('лаборатория и ускорение', () => {
     expect(s.crystals).toBe(0);
   });
 
-  it('adSkipGrowth сокращает остаток роста на AD_SKIP_MS (бесплатно)', () => {
+  it('adSkipGrowth сокращает остаток роста на KITTEN_GROWTH_AD_MS (бесплатно)', () => {
     const s = createInitialState(makeRng(12), 0);
     const now = 1000;
     const kitten = makeCatInstance(s, makeCat('female'), now, 'nursery', 'moggie');
@@ -317,7 +319,7 @@ describe('лаборатория и ускорение', () => {
     s.cats.push(kitten);
     const before = growthRemainingMs(kitten, now);
     expect(adSkipGrowth(s, kitten.id, now).ok).toBe(true);
-    expect(before - growthRemainingMs(kitten, now)).toBe(C.AD_SKIP_MS);
+    expect(before - growthRemainingMs(kitten, now)).toBe(C.KITTEN_GROWTH_AD_MS);
   });
 
   it('championIncomePerMin растёт с исследованиями дохода', () => {

@@ -19,7 +19,7 @@ import {
   moveCat, clearBreederSlot, keepKittenWithParents,
   nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
-  finishRecipeResearch, rollDailyOrders,
+  finishRecipeResearch, refreshExpiredOrders,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -264,7 +264,7 @@ export class Game implements UiContext {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openCatMenu(c);
         },
-        openHeal: (id?: string) => { // диалог клиники (проверка UI лечения)
+        openHeal: (id?: string) => { // диалог ветеринара (проверка UI лечения)
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openHealConfirm(c);
         },
@@ -1217,11 +1217,11 @@ export class Game implements UiContext {
       } else if (dead) this.toast('Котёнок не выжил 😿');
     }
 
-    // доска заказов живёт сутками: в московскую полночь все слоты перевыпускаются
-    // (внутри суток вызов — no-op, поэтому проверяем каждый кадр без опаски)
-    if (rollDailyOrders(this.state, this.rng, this.now())) {
+    // доска заказов: заказ, чей 6-часовой таймер жизни истёк, сам сменяется свежим
+    // (внутри — no-op, если ничего не просрочено, поэтому проверяем каждый кадр)
+    if (refreshExpiredOrders(this.state, this.rng, this.now())) {
       this.commit();
-      this.toast('📋 Новые заказы на день! Загляни в Приют');
+      this.toast('📋 Заказ на доске сменился! Загляни в Приют');
     }
 
     // стол исследований (Генолаб → Исследования): таймер дошёл → открываем

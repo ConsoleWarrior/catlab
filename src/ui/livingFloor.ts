@@ -22,7 +22,7 @@ import { isBusy, growthScale, isAdult } from '../game/index.js';
 import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import type { FloorPlane } from './rooms/shell.js';
-import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
+import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT, catSizeFactor } from './catTextures.js';
 import { attachBlink, type Blinker } from './eyeBlink.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
@@ -165,10 +165,11 @@ export function createLivingFloor(
     // не подпрыгивает вместе с котом (см. body ниже). Приподнята на 2/3 своей
     // толщины (полная высота главной тени = 2×8=16 → ≈10.7px), чтобы лежать ПОД
     // котом, а не «перед» ним (иначе кажется оторванной у лап).
+    const sizeF = catSizeFactor(cat); // крупные породы (🐘) на 10% больше — сам спрайт, тень и подписи
     const shUp = (2 * 8) * (2 / 3);
     const shadow = new Graphics();
-    if (selected) shadow.ellipse(0, -4 - shUp, catH * 0.42, 12).fill({ color: COLORS.primary, alpha: 0.55 });
-    shadow.ellipse(0, -2 - shUp, catH * 0.34, 8).fill({ color: 0x000000, alpha: 0.12 });
+    if (selected) shadow.ellipse(0, -4 - shUp, catH * 0.42 * sizeF, 12).fill({ color: COLORS.primary, alpha: 0.55 });
+    shadow.ellipse(0, -2 - shUp, catH * 0.34 * sizeF, 8).fill({ color: 0x000000, alpha: 0.12 });
     view.addChild(shadow);
 
     const body = new Container();
@@ -211,18 +212,18 @@ export function createLivingFloor(
       nameT.position.set(-totalW / 2, 0);
       sexT.position.set(-totalW / 2 + nameT.width + gap, 0);
       caption.addChild(nameT, sexT);
-      caption.position.set(0, -(catH + 16));
+      caption.position.set(0, -(catH * sizeF + 16));
       view.addChild(caption);
     }
 
     if (selected) {
       const paw = label('🐾', 18, 0xffffff, '700');
-      paw.position.set(0, -catH * 0.95);
+      paw.position.set(0, -catH * 0.95 * sizeF);
       view.addChild(paw);
     }
     if (busy) {
       const z = label('💤', 18, COLORS.ink, '700');
-      z.position.set(catH * 0.34, -catH * 0.92);
+      z.position.set(catH * 0.34 * sizeF, -catH * 0.92 * sizeF);
       view.addChild(z);
     }
 

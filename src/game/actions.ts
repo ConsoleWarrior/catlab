@@ -8,7 +8,7 @@ import type { Rng, BreedBoosts, KinshipLevel, Recipe } from '../genetics/index.j
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
-import { matchesOrder } from './orders.js';
+import { matchesOrder, replaceOrder } from './orders.js';
 import { attachHiddenPedigree, buildPedigree, revealPedigree, pedigreeHasFog } from './pedigree.js';
 import { buildBreedingContext, rollKittenHearts } from './kinship.js';
 import { researchableRecipes } from './knowledge.js';
@@ -428,8 +428,8 @@ export function speedUpGrowth(state: GameState, catId: string, now: number): Res
 /**
  * Клиника (шприц): восстановить коту потраченные вязки (`breedCount`), НЕ `maxHearts` —
  * генетический потолок от инбридинга неизлечим, «Бесплодных» (0 ❤) клиника не берёт.
- * Два способа: '📺 ad' = +HEAL_AD_HEARTS с глобальным кулдауном (заглушка рекламы, как
- * adSkipBreeding); '💎 crystals' = полное восстановление, цена ∝ потраченным сердцам.
+ * Два способа: '📺 ad' = +HEAL_AD_HEARTS без кулдауна (заглушка рекламы, как analyzeCat);
+ * '💎 crystals' = полное восстановление, цена ∝ потраченным сердцам.
  * Гейт — уровень лаборатории (LAB_UNLOCKS.clinic).
  */
 export function healCat(
@@ -443,13 +443,9 @@ export function healCat(
   const spent = cat.breedCount ?? 0;
   if (spent <= 0) return { ok: false, reason: 'кот полностью здоров' };
   if (mode === 'ad') {
-    // lastHealAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
-    if (state.lastHealAdAt > 0 && now - state.lastHealAdAt < C.HEAL_AD_COOLDOWN_MS) {
-      return { ok: false, reason: 'реклама лечения ещё недоступна' };
-    }
     const healed = Math.min(spent, C.HEAL_AD_HEARTS);
     cat.breedCount = spent - healed;   // реклама-заглушка, реальный SDK — бэклог
-    state.lastHealAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
+    state.lastHealAdAt = Math.max(1, now); // фиксируем факт просмотра (кулдауна нет)
     return { ok: true, healed, crystals: 0 };
   }
   const cost = C.HEAL_CRYSTAL_PER_HEART * spent;
@@ -458,12 +454,12 @@ export function healCat(
   return { ok: true, healed: spent, crystals: cost };
 }
 
-/** Реклама: сократить остаток роста котёнка на AD_SKIP_MS (бесплатно, можно повторять). */
+/** Реклама: сократить остаток роста котёнка на KITTEN_GROWTH_AD_MS (−15 мин → сразу взрослый). */
 export function adSkipGrowth(state: GameState, catId: string, now: number): Result {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (E.growthRemainingMs(cat, now) <= 0) return { ok: true };
-  cat.bornAt -= C.AD_SKIP_MS; // сдвигаем рождение назад → остаток роста уменьшается
+  cat.bornAt -= C.KITTEN_GROWTH_AD_MS; // сдвигаем рождение назад → остаток роста уменьшается
   return { ok: true };
 }
 
@@ -643,28 +639,26 @@ export function unlockGene(state: GameState, geneId: string): Result {
  * Генетический анализ кота (система знаний, этап B): вскрывает СРАЗУ всё дерево
  * родословной (туман) и список скрытых генов — пород предков. Механику НЕ меняет:
  * скрытые гены влияли на рецепты и до анализа, игрок лишь получает информацию.
- * Оплата: 💰 (ANALYZE_COIN_COST) или '📺 ad' — бесплатно с глобальным кулдауном
- * (заглушка рекламы, как adSkipBreeding; реальный SDK — бэклог).
+ * Оплата: 💰 (цена по тиру кота, analyzeCoinCost) или '📺 ad' — бесплатно и БЕЗ
+ * кулдауна (анализ — инфо-действие, реальный SDK рекламы — бэклог).
  */
 export function analyzeCat(
   state: GameState, catId: string, mode: 'coins' | 'ad' = 'coins', now = 0,
 ): Result<{ coins: number }> {
+  void now; // кулдауна у анализа больше нет — параметр оставлен ради совместимости сигнатуры
   // Анализ доступен и замороженным котам (крио-банк) — родословную вскрывают и в капсуле.
   const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (cat.analyzed) { revealPedigree(cat); return { ok: true, coins: 0 }; } // уже изучен
+  const cost = C.analyzeCoinCost(cat.rarityTier);
   if (mode === 'ad') {
-    // lastAnalyzeAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
-    if (state.lastAnalyzeAdAt > 0 && now - state.lastAnalyzeAdAt < C.ANALYZE_AD_COOLDOWN_MS) {
-      return { ok: false, reason: 'реклама анализа ещё недоступна' };
-    }
-    state.lastAnalyzeAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
-  } else if (!spend(state, 'coins', C.ANALYZE_COIN_COST)) {
+    state.lastAnalyzeAdAt = Math.max(1, now); // фиксируем факт просмотра (кулдауна нет)
+  } else if (!spend(state, 'coins', cost)) {
     return { ok: false, reason: 'не хватает монет' };
   }
   cat.analyzed = true;
   revealPedigree(cat);
-  return { ok: true, coins: mode === 'coins' ? C.ANALYZE_COIN_COST : 0 };
+  return { ok: true, coins: mode === 'coins' ? cost : 0 };
 }
 
 // --- Исследование рецептов (вкладка «Исследования» Генолаба, этап D) ---
@@ -678,12 +672,18 @@ export function startRecipeResearch(state: GameState, now: number): Result {
   if (!E.isUnlocked(state, 'recipeLab')) return { ok: false, reason: 'locked' };
   if (state.recipeResearch.readyAt > 0) return { ok: false, reason: 'стол занят исследованием' };
   if (researchableRecipes(state).length === 0) return { ok: false, reason: 'нет доступных рецептов' };
-  if (state.coins < C.RECIPE_RESEARCH_COST_COINS || state.dna < C.RECIPE_RESEARCH_COST_DNA) {
+  const price = C.recipeResearchCost(state.level);
+  if (state.coins < price.coins || state.dna < price.dna) {
     return { ok: false, reason: 'не хватает ресурсов' };
   }
-  state.coins -= C.RECIPE_RESEARCH_COST_COINS;
-  state.dna -= C.RECIPE_RESEARCH_COST_DNA;
-  state.recipeResearch = { startedAt: now, readyAt: now + C.RECIPE_RESEARCH_MS };
+  state.coins -= price.coins;
+  state.dna -= price.dna;
+  state.recipeResearch = {
+    startedAt: now,
+    readyAt: now + C.recipeResearchMs(state.level),
+    paidCoins: price.coins,
+    paidDna: price.dna,
+  };
   return { ok: true };
 }
 
@@ -698,14 +698,14 @@ export function finishRecipeResearch(
 ): { recipe: Recipe | null; refunded: boolean } {
   const rr = state.recipeResearch;
   if (rr.readyAt === 0 || now < rr.readyAt) return { recipe: null, refunded: false };
-  rr.startedAt = 0;
-  rr.readyAt = 0;
   const pool = researchableRecipes(state);
   if (pool.length === 0) {
-    state.coins += C.RECIPE_RESEARCH_COST_COINS;
-    state.dna += C.RECIPE_RESEARCH_COST_DNA;
+    state.coins += rr.paidCoins;   // возврат ровно уплаченного (цена зависит от уровня)
+    state.dna += rr.paidDna;
+    rr.startedAt = 0; rr.readyAt = 0; rr.paidCoins = 0; rr.paidDna = 0;
     return { recipe: null, refunded: true };
   }
+  rr.startedAt = 0; rr.readyAt = 0; rr.paidCoins = 0; rr.paidDna = 0;
   const recipe = pool[Math.floor(rng() * pool.length)]!;
   state.knownRecipes.push(recipeKey(recipe));
   return { recipe, refunded: false };
@@ -781,9 +781,18 @@ export function unlockResearch(state: GameState, id: string): Result {
   if (!def.requires.every((req) => E.researchOwned(state, req))) {
     return { ok: false, reason: 'сначала изучи предыдущее' };
   }
-  if (!spend(state, def.currency, next.cost)) {
-    return { ok: false, reason: def.currency === 'coins' ? 'не хватает монет' : 'не хватает ДНК' };
+  // Двойная цена: основная валюта узла + доп. монеты (у Селекции на 🧬). Проверяем
+  // и списываем атомарно — иначе списали бы гены, а на монеты бы не хватило.
+  const extraCoins = E.researchExtraCoins(def, next);
+  if (!E.canAffordResearch(state, def, next)) {
+    return {
+      ok: false,
+      reason: def.currency !== 'coins' && state[def.currency] >= next.cost ? 'не хватает монет'
+        : def.currency === 'coins' ? 'не хватает монет' : 'не хватает ДНК',
+    };
   }
+  spend(state, def.currency, next.cost);
+  if (extraCoins > 0) spend(state, 'coins', extraCoins);
   state.research[id] = E.researchLevel(state, id) + 1;
   return { ok: true };
 }
@@ -793,17 +802,17 @@ export function unlockResearch(state: GameState, id: string): Result {
 /**
  * Выполнить заказ котом ИЗ КОРЗИНЫ: награда + репутация, кот уезжает к клиенту.
  * Кот берётся только из корзины (зона в Приюте) — предъявить клиенту кота, которого
- * не положили в корзину, нельзя. Выполненный заказ не исчезает: слот помечается
- * `done` и до следующей московской полуночи занят (см. orders.rollDailyOrders).
+ * не положили в корзину, нельзя. Выполненный заказ сразу сменяется свежим в том же слоте
+ * (replaceOrder, нужен rng) — доска остаётся заполненной, пустых слотов/кулдауна нет.
  */
 export function claimOrder(
   state: GameState,
   orderId: string,
-  _now: number,
+  now: number,
+  rng: Rng,
 ): Result<{ reward: import('./types.js').OrderReward }> {
   const order = state.orders.find((o) => o.id === orderId);
   if (!order) return { ok: false, reason: 'заказ не найден' };
-  if (order.done) return { ok: false, reason: 'заказ уже выполнен' };
   const catId = state.orderBasket;
   if (!catId) return { ok: false, reason: 'положите кота в корзину заказов' };
   const cat = findCat(state, catId);
@@ -813,13 +822,14 @@ export function claimOrder(
 
   // Исследование «Клиенты-заводчики» (orderDna) добавляет 🧬 к награде заказа.
   const dnaGain = Math.round(order.reward.dna * (1 + E.researchBonus(state, 'orderDna')));
+  const reward = { ...order.reward, dna: dnaGain };
   state.coins += order.reward.coins;
   state.crystals += order.reward.crystals;
   state.dna += dnaGain;
   addReputation(state, order.reward.reputation); // ⭐ опыт + пересчёт уровня лаборатории
-  order.done = true;
+  replaceOrder(state, rng, orderId, now);         // слот сразу получает свежий заказ
   removeCat(state, catId); // сам снимет кота с корзины и с пьедестала
-  return { ok: true, reward: { ...order.reward, dna: dnaGain } };
+  return { ok: true, reward };
 }
 
 // --- Корзина заказов (зона в Приюте) ---

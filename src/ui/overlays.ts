@@ -8,24 +8,25 @@ import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
   isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
-  basketCat, refreshOrderByAd, msUntilOrdersReset,
+  basketCat, adRefreshOrder, msUntilOrderExpiry, canAdRefreshOrder, msUntilAdRefresh,
   isAdult, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
-  roomCount, nurseryCapacity, shelterCapacity,
+  roomCount, nurseryCapacity, shelterCapacity, makeCatInstance,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, toggleBoost, boostCharges, activeBoostId,
   adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
   sendToLab, labReward, shelterTotals, adoptAll, sendAllToLab,
-  healCat, HEAL_AD_COOLDOWN_MS, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
+  healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cryoCount, cryoCapacity,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
-  analyzeCat, ANALYZE_COIN_COST, ANALYZE_AD_COOLDOWN_MS, KINSHIP_RU,
+  analyzeCat, analyzeCoinCost, KINSHIP_RU,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
-  RESEARCH, unlockResearch, researchLevel, researchNext,
+  RESEARCH, unlockResearch, researchLevel, researchNext, researchExtraCoins, canAffordResearch,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, dormantTraits, traitTag } from '../genetics/index.js';
+import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
+import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
 
@@ -76,6 +77,64 @@ function askText(title: string, initial: string, maxLen: number, onDone: (v: str
     if (e.key === 'Enter') finish(input.value);
     else if (e.key === 'Escape') finish(null);
   };
+}
+
+/**
+ * DEV: HTML-оверлей с выпадающим списком всех пород (сгруппованы по тиру) и
+ * кнопкой «Заспавнить». Спавн выполняет колбэк `spawn`, возвращающий строку
+ * статуса (успех/питомник заполнен) — она показывается прямо в оверлее, окно
+ * не закрывается, чтобы можно было заспавнить несколько котов подряд.
+ */
+function askBreedSpawn(spawn: (breedKey: string) => string): void {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:1000;display:flex;align-items:center;'
+    + 'justify-content:center;background:rgba(42,35,32,.55);font-family:system-ui,sans-serif;';
+  const box = document.createElement('div');
+  box.style.cssText = 'background:#fffaf3;padding:18px;border-radius:16px;display:flex;flex-direction:column;'
+    + 'gap:12px;min-width:260px;box-shadow:0 10px 32px rgba(0,0,0,.3);';
+  const lab = document.createElement('div');
+  lab.textContent = '🐈 Заспавнить породу в питомник';
+  lab.style.cssText = 'font-weight:700;color:#5a4a42;font-size:16px;';
+  const select = document.createElement('select');
+  select.style.cssText = 'font-size:16px;padding:9px 11px;border:2px solid #e9d8c6;border-radius:10px;'
+    + 'outline:none;color:#5a4a42;background:#fff;';
+  for (const tier of TIERS) {
+    const group = document.createElement('optgroup');
+    group.label = TIER_RU[tier];
+    for (const b of BREEDS.filter((x) => x.tier === tier)) {
+      const opt = document.createElement('option');
+      opt.value = b.key;
+      opt.textContent = b.name;
+      group.append(opt);
+    }
+    if (group.children.length) select.append(group);
+  }
+  const status = document.createElement('div');
+  status.style.cssText = 'font-size:14px;font-weight:700;color:#5a4a42;min-height:18px;';
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+  const close = document.createElement('button');
+  close.textContent = 'Закрыть';
+  close.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
+    + 'cursor:pointer;background:#e9d8c6;color:#5a4a42;';
+  const ok = document.createElement('button');
+  ok.textContent = 'Заспавнить';
+  ok.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
+    + 'cursor:pointer;background:#ff9eb5;color:#fff;';
+  row.append(close, ok);
+  box.append(lab, select, status, row);
+  wrap.append(box);
+  document.body.append(wrap);
+  select.focus();
+
+  let done = false;
+  const finish = (): void => { if (done) return; done = true; wrap.remove(); };
+  ok.onclick = () => { status.textContent = spawn(select.value); };
+  close.onclick = finish;
+  wrap.onpointerdown = (e) => { if (e.target === wrap) finish(); };
+  window.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { finish(); window.removeEventListener('keydown', esc); }
+  });
 }
 
 function rewardText(r: { coins: number; crystals: number; dna: number; reputation: number }): string {
@@ -410,7 +469,8 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
   const curGlyph = def.currency === 'dna' ? '🧬' : '💰';
   const balance = def.currency === 'dna' ? ctx.state.dna : ctx.state.coins;
   const cost = next?.cost ?? 0;
-  const afford = !!next && balance >= cost;
+  const extraCoins = researchExtraCoins(def, next); // доп. 💰 у Селекции (сверх 🧬)
+  const afford = canAffordResearch(ctx.state, def, next);
   const items: Container[] = [];
 
   let y = 24;
@@ -433,9 +493,13 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
   desc.position.set(W / 2, y); items.push(desc);
   y += desc.height + 16;
 
-  const price = label(`Цена: ${curGlyph} ${cost}`, 17, afford ? curColor : COLORS.warn, '800');
+  const priceText = extraCoins > 0 ? `Цена: ${curGlyph} ${cost} + 💰 ${extraCoins}` : `Цена: ${curGlyph} ${cost}`;
+  const price = label(priceText, 17, afford ? curColor : COLORS.warn, '800');
   price.position.set(W / 2, y); items.push(price); y += 24;
-  const bal = label(`У вас: ${curGlyph} ${fmt(balance)}`, 13, COLORS.inkSoft, '700');
+  const balText = extraCoins > 0
+    ? `У вас: ${curGlyph} ${fmt(balance)} · 💰 ${fmt(ctx.state.coins)}`
+    : `У вас: ${curGlyph} ${fmt(balance)}`;
+  const bal = label(balText, 13, COLORS.inkSoft, '700');
   bal.position.set(W / 2, y); items.push(bal); y += 30;
 
   const pad = 24, gap = 12;
@@ -740,7 +804,7 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
 /**
  * Подтверждение Генетического анализа (система знаний, этап B): вскрывает СРАЗУ
  * всю родословную кота и его скрытые гены (породы предков). Механику не меняет —
- * скрытые гены работали и до анализа. Оплата 💰 или 📺 (глобальный кулдаун).
+ * скрытые гены работали и до анализа. Оплата 💰 (цена по тиру) или 📺 (без кулдауна).
  * После успеха открывает родословную — показать игроку, что он купил.
  */
 export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
@@ -774,10 +838,11 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   const btnW = W - 48;
   const done = (): void => { ctx.commit(); ctx.toast('Анализ готов 🧬 родословная вскрыта'); close(); ctx.openPedigree(cat); };
 
-  // 💰 основная цена
-  const afford = ctx.state.coins >= ANALYZE_COIN_COST;
+  // 💰 основная цена — по тиру кота (породистого анализировать дороже)
+  const cost = analyzeCoinCost(cat.rarityTier);
+  const afford = ctx.state.coins >= cost;
   const coinBtn = new Button({
-    text: `💰 Провести анализ · ${ANALYZE_COIN_COST}`,
+    text: `💰 Провести анализ · ${cost}`,
     w: btnW, h: 44, color: afford ? COLORS.primary : COLORS.cardEdge,
     textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
   });
@@ -791,16 +856,11 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   root.addChild(coinBtn);
   y += 52;
 
-  // 📺 бесплатная альтернатива с глобальным кулдауном (заглушка рекламы)
-  const cdLeft = ctx.state.lastAnalyzeAdAt > 0
-    ? ANALYZE_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastAnalyzeAdAt) : 0;
-  const adReady = cdLeft <= 0;
+  // 📺 бесплатная альтернатива (кулдауна больше нет — анализ инфо-действие)
   const adBtn = new Button({
-    text: adReady ? '📺 Бесплатно за рекламу' : `📺 через ${Math.ceil(cdLeft / 60_000)} мин`,
-    w: btnW, h: 44, color: adReady ? COLORS.good : COLORS.cardEdge,
-    textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+    text: '📺 Бесплатно за рекламу',
+    w: btnW, h: 44, color: COLORS.good, textColor: 0xffffff, fontSize: 15,
   });
-  adBtn.enabled = adReady;
   adBtn.position.set(W / 2, y + 22);
   adBtn.onTap = () => {
     const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
@@ -1132,7 +1192,7 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     addBtn('🧬 Генетический анализ', COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
   }
 
-  // Лечение (клиника-шприц) и заморозка (криокапсула) — только перетаскиванием кота
+  // Лечение (ветеринар-шприц) и заморозка (криокапсула) — только перетаскиванием кота
   // на соответствующую станцию в Питомнике (кнопок в меню кота больше нет, чтобы не
   // засорять список и держать действия у станций). См. rooms/nursery.ts.
 
@@ -1314,16 +1374,16 @@ export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Containe
 }
 
 /**
- * Клиника: диалог лечения кота (💉). Показывает сердца (потраченные 🖤 / оставшиеся ❤️)
+ * Ветеринар: диалог лечения кота (💉). Показывает сердца (потраченные 🖤 / оставшиеся ❤️)
  * и два способа восстановить вязки: 📺 реклама (+1 ❤, глобальный кулдаун) или
  * 💎 полное лечение (цена ∝ потраченным сердцам). maxHearts НЕ меняется — потолок
- * от инбридинга неизлечим; «Бесплодных» (0 ❤) клиника не берёт (healCat откажет).
+ * от инбридинга неизлечим; «Бесплодных» (0 ❤) ветеринар не берёт (healCat откажет).
  */
 export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
   const W = 340;
   const root = new Container();
 
-  const title = label('💉 Клиника', 18, COLORS.ink, '800');
+  const title = label('💉 Ветеринар', 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
   const sub = label('восстанавливает потраченные вязки', 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 50);
@@ -1356,20 +1416,16 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
     root.addChild(note);
     y += 28;
   } else {
-    // 📺 реклама: +1 ❤ бесплатно, но с глобальным кулдауном (0 = ещё не смотрели)
-    const cdLeft = ctx.state.lastHealAdAt > 0
-      ? HEAL_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastHealAdAt) : 0;
-    const adReady = cdLeft <= 0;
+    // 📺 реклама: +1 ❤ бесплатно, без кулдауна
     const adBtn = new Button({
-      text: adReady ? `📺 +${HEAL_AD_HEARTS} ❤ бесплатно` : `📺 через ${Math.ceil(cdLeft / 60_000)} мин`,
-      w: btnW, h: 44, color: adReady ? COLORS.good : COLORS.cardEdge,
-      textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+      text: `📺 +${HEAL_AD_HEARTS} ❤ бесплатно`,
+      w: btnW, h: 44, color: COLORS.good,
+      textColor: 0xffffff, fontSize: 15,
     });
-    adBtn.enabled = adReady;
     adBtn.position.set(W / 2, y + 22);
     adBtn.onTap = () => {
       const r = healCat(ctx.state, cat.id, 'ad', ctx.now());
-      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Клиника ещё заперта 🔒' : r.reason); close(); return; }
+      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
       ctx.commit();
       ctx.toast(`Кот подлечен 💉 +${r.healed} ❤`);
       close();
@@ -1389,7 +1445,7 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
     fullBtn.position.set(W / 2, y + 22);
     fullBtn.onTap = () => {
       const r = healCat(ctx.state, cat.id, 'crystals', ctx.now());
-      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Клиника ещё заперта 🔒' : r.reason); close(); return; }
+      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
       ctx.commit();
       ctx.toast(`Кот полностью здоров 💉 +${r.healed} ❤  −${r.crystals} 💎`);
       close();
@@ -1411,7 +1467,7 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
 /**
  * Криокапсула: диалог заморозки кота (🧊). Открывается перетаскиванием кота на
  * станцию-криокапсулу в Питомнике (кнопки в меню кота больше нет). Три пути оплаты,
- * как в клинике/анализе: 📺 реклама (бесплатно, глобальный кулдаун), 💰 монеты или
+ * как у ветеринара/анализа: 📺 реклама (бесплатно, глобальный кулдаун), 💰 монеты или
  * 💎 кристаллы. В капсуле кот не ест и не даёт доход; разморозки нет — только клон/утиль.
  */
 export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
@@ -1623,11 +1679,11 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
 }
 
 /**
- * Доска заказов (кнопка 📋 в Приюте). Заказы держатся сутки и меняются в московскую
- * полночь — сверху виден остаток до смены. Выполнить заказ можно ТОЛЬКО котом из
- * корзины: кнопка «Выполнить» активна лишь у тех строк, под которые он подходит,
- * иначе строка объясняет, чего не хватает. Каждый невыполненный заказ можно один
- * раз за сутки заменить за 📺.
+ * Доска заказов (кнопка 📋 в Приюте). Каждый слот всегда держит активный заказ со своим
+ * 6-часовым таймером жизни: не выполнил вовремя — заказ сам сменится (на строке виден
+ * остаток «⏳ обновится через Ч:ММ»). Раз в час ОДИН заказ можно обновить досрочно за 📺.
+ * Выполнить заказ можно ТОЛЬКО котом из корзины: кнопка «Выполнить» активна лишь у строк,
+ * под которые он подходит.
  */
 export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 620;
@@ -1636,90 +1692,86 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const title = label('📋 Заказы клиентов', 20, COLORS.ink, '800');
   title.position.set(W / 2, 26);
 
-  const left = msUntilOrdersReset(ctx.now());
-  const hh = Math.floor(left / 3_600_000);
-  const mm = Math.floor((left % 3_600_000) / 60_000);
-  const timer = label(`Смена заказов через ${hh} ч ${mm} мин (в полночь по Москве)`, 12.5, COLORS.inkSoft, '700');
-  timer.anchor.set(0.5, 0);
-  timer.position.set(W / 2, 42);
-
   const cat = basketCat(ctx.state);
   const basket = label(
     cat ? `🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}` : '🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Приюте',
     13, cat ? COLORS.ink : COLORS.inkSoft, '800',
   );
   basket.anchor.set(0.5, 0);
-  basket.position.set(W / 2, 60);
+  basket.position.set(W / 2, 46);
 
-  const adHelp = label('📺 Заменить — посмотреть рекламу и получить вместо заказа другой (по одной замене на заказ в сутки)',
+  const adAvail = canAdRefreshOrder(ctx.state, ctx.now());
+  // остаток «Ч:ММ» (таймер жизни ≤ 6 ч и кулдаун обновления)
+  const fmtHM = (ms: number): string => {
+    const h = Math.floor(ms / 3_600_000);
+    const m = Math.floor((ms % 3_600_000) / 60_000);
+    return `${h}:${String(m).padStart(2, '0')}`;
+  };
+  const adHelp = label(
+    adAvail
+      ? 'Не выполнил за 6 ч — заказ сменится сам. 📺 обновляет один заказ досрочно.'
+      : `Не выполнил за 6 ч — заказ сменится сам. 📺-обновление снова через ${fmtHM(msUntilAdRefresh(ctx.state, ctx.now()))}.`,
     11.5, COLORS.inkSoft, '600');
   adHelp.anchor.set(0.5, 0);
-  adHelp.position.set(W / 2, 78);
+  adHelp.position.set(W / 2, 66);
 
   const rowH = 96;
   const orders = ctx.state.orders;
-  let y = 102;
+  let y = 90;
   const rows = new Container();
 
   for (const order of orders) {
     const row = new Container();
-    const fits = !!cat && !order.done && matchesOrder(order, cat);
+    const fits = !!cat && matchesOrder(order, cat);
     const busy = !!cat && isBusy(ctx.state, cat.id);
-    row.addChild(panel(W - 32, rowH - 12, order.done ? COLORS.cardEdge : COLORS.card, 12));
+    row.addChild(panel(W - 32, rowH - 12, COLORS.card, 12));
 
     const req = label(`«${describeReq(order.req)}»`, 16, COLORS.ink, '800');
     req.anchor.set(0, 0.5);
-    req.position.set(16, 22);
-    req.alpha = order.done ? 0.55 : 1;
+    req.position.set(16, 20);
     row.addChild(req);
 
-    const rew = label(
-      order.done ? 'Выполнен ✅ — новый заказ придёт в полночь' : 'Награда: ' + rewardText(order.reward),
-      13, COLORS.inkSoft, '700',
-    );
+    const rew = label('Награда: ' + rewardText(order.reward), 13, COLORS.inkSoft, '700');
     rew.anchor.set(0, 0.5);
-    rew.position.set(16, 46);
+    rew.position.set(16, 44);
     row.addChild(rew);
 
-    // 📺-замена: по одной на слот за сутки, выполненный слот не меняем
-    if (!order.done) {
-      const adBtn = new Button({
-        text: order.adRefreshed ? '📺 уже меняли' : '📺 Заменить',
-        w: 128, h: 36, color: COLORS.secondary, textColor: 0xffffff, fontSize: 12,
-      });
-      adBtn.enabled = !order.adRefreshed;
-      adBtn.position.set(W - 32 - 232, (rowH - 12) / 2 - 9);
-      adBtn.onTap = () => {
-        const r = refreshOrderByAd(ctx.state, order.id, ctx.rng, ctx.now());
-        if (!r.ok) { ctx.toast(r.reason); return; }
-        ctx.commit();
-        ctx.toast('Заказ заменён 📺 — этот слот сегодня больше не обновить');
-        close(); ctx.openOrders();
-      };
-      row.addChild(adBtn);
-      const adHint = label(
-        order.adRefreshed ? 'следующая замена — завтра' : 'реклама → другой заказ',
-        10.5, COLORS.inkSoft, '600',
-      );
-      adHint.anchor.set(0.5, 0.5);
-      adHint.position.set(W - 32 - 232, (rowH - 12) / 2 + 18);
-      row.addChild(adHint);
-    }
+    const timer = label(`⏳ обновится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, 11.5, COLORS.inkSoft, '600');
+    timer.anchor.set(0, 0.5);
+    timer.position.set(16, 66);
+    row.addChild(timer);
 
-    const btnText = order.done ? 'выполнен' : !cat ? 'нужен кот' : busy ? 'кот занят' : fits ? 'Выполнить' : 'не подходит';
+    // главная кнопка «Выполнить» (сверху) + маленькая «📺 обновить» (снизу)
+    const btnText = !cat ? 'нужен кот' : busy ? 'кот занят' : fits ? 'Выполнить' : 'не подходит';
     const btn = new Button({
-      text: btnText, w: 140, h: 44,
+      text: btnText, w: 150, h: 40,
       color: fits && !busy ? COLORS.primary : COLORS.cardEdge,
       textColor: fits && !busy ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
     btn.enabled = fits && !busy;
-    btn.position.set(W - 32 - 78, (rowH - 12) / 2);
+    btn.position.set(W - 32 - 88, 26);
     btn.onTap = () => {
-      const r = claimOrder(ctx.state, order.id, ctx.now());
+      const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) { ctx.commit(); ctx.toast('Заказ выполнен! ' + rewardText(r.reward)); close(); ctx.openOrders(); }
       else ctx.toast(r.reason);
     };
     row.addChild(btn);
+
+    const refBtn = new Button({
+      text: adAvail ? '📺 обновить' : '⏳ обновление позже', w: 150, h: 30,
+      color: adAvail ? COLORS.secondary : COLORS.cardEdge,
+      textColor: adAvail ? 0xffffff : COLORS.inkSoft, fontSize: 12.5,
+    });
+    refBtn.enabled = adAvail;
+    refBtn.position.set(W - 32 - 88, 60);
+    refBtn.onTap = () => {
+      const r = adRefreshOrder(ctx.state, ctx.rng, order.id, ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      ctx.commit();
+      ctx.toast('Заказ обновлён 📺');
+      close(); ctx.openOrders();
+    };
+    row.addChild(refBtn);
 
     row.position.set(16, y);
     rows.addChild(row);
@@ -1732,7 +1784,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
 
   const H = y + 56;
   root.addChild(panel(W, H, COLORS.hud, 18));
-  root.addChild(title, timer, basket, adHelp, rows, closeBtn);
+  root.addChild(title, basket, adHelp, rows, closeBtn);
   return root;
 }
 
@@ -1803,6 +1855,35 @@ export function buildDevMenu(ctx: UiContext, close: () => void): Container {
     centerRow(lvlBtns, y + 19, W, 10);
     items.push(...lvlBtns);
     y += 48;
+
+    // открыть все рецепты в Котодексе (knownRecipes ← ключи всех рецептов)
+    const known = (s.knownRecipes ?? []).length;
+    const recipesBtn = new Button({
+      text: known >= RECIPES.length ? `📖 Все рецепты открыты (${RECIPES.length})` : `📖 Открыть все рецепты (${known}/${RECIPES.length})`,
+      w: W - 48, h: 42, color: COLORS.secondary, fontSize: 14,
+    });
+    recipesBtn.position.set(W / 2, y + 21);
+    recipesBtn.onTap = () => {
+      s.knownRecipes = RECIPES.map(recipeKey);
+      ctx.commit();
+      ctx.toast('Все рецепты открыты');
+      render();
+    };
+    items.push(recipesBtn);
+    y += 52;
+
+    // заспавнить любую породу в питомник (если место позволяет)
+    const spawnBtn = new Button({ text: '🐈 Заспавнить породу…', w: W - 48, h: 42, color: COLORS.good, fontSize: 15 });
+    spawnBtn.position.set(W / 2, y + 21);
+    spawnBtn.onTap = () => askBreedSpawn((breedKey) => {
+      if (roomCount(s, 'nursery') >= nurseryCapacity(s)) return '🚫 Питомник заполнен';
+      const sex = ctx.rng() < 0.5 ? 'female' : 'male';
+      s.cats.push(makeCatInstance(s, randomCat(ctx.rng, sex), ctx.now(), 'nursery', breedKey));
+      ctx.commit();
+      return `✅ ${breedName(breedKey)} → питомник (${roomCount(s, 'nursery')}/${nurseryCapacity(s)})`;
+    });
+    items.push(spawnBtn);
+    y += 52;
 
     const closeBtn = new Button({ text: 'Закрыть', w: W - 48, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
     closeBtn.position.set(W / 2, y + 21);

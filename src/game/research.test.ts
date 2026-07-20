@@ -100,12 +100,12 @@ describe('C: пристройство — orderDna', () => {
     s.orders = [{
       id: 'o1', req: { minRarity: 'common' },
       reward: { coins: 100, crystals: 0, dna: 20, reputation: 10 },
-      createdAt: 0, done: false, adRefreshed: false,
+      createdAt: 0, expiresAt: 6 * 60 * 60_000,
     }];
     s.orderBasket = cat.id; // заказ закрывают котом из корзины
     s.research = { r_order_dna: 2 }; // 2×25% = +50% 🧬 с заказов
     const before = s.dna;
-    const r = claimOrder(s, 'o1', 0);
+    const r = claimOrder(s, 'o1', 0, makeRng(2));
     expect(r.ok).toBe(true);
     expect(s.dna - before).toBe(Math.round(20 * 1.5)); // 30
     if (r.ok) expect(r.reward.dna).toBe(30);
@@ -116,7 +116,7 @@ describe('C: хозяйство — корм', () => {
   it('feedEff снижает расход корма', () => {
     const s = createInitialState(makeRng(1), 0);
     s.level = 3; s.cats = [];
-    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // 10 × 0.1 → 1.0/мин
+    for (let i = 0; i < 20; i++) addCat(s, 'moggie'); // 20 × 0.05 → 1.0/мин
     expect(foodRatePerMin(s)).toBeCloseTo(1.0);
     expect(feedEfficiency(s)).toBe(0);
     s.research = { r_feed: 2 };             // 2×15% = −30%

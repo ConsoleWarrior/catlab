@@ -376,24 +376,26 @@ describe('дерево исследований', () => {
   it('unlockResearch: пререквизиты, уровни, стоимость и неизвестный узел', () => {
     const s = createInitialState(makeRng(50), 0);
     s.level = 10; // все уровни узлов открыты (проверяем логику узлов, не гейт по уровню)
-    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(false); // нужен r_sel_pairs
-    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(false);   // 0 ДНК
+    s.coins = 10_000; // Селекция теперь стоит и 🧬, и 💰
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(false);    // нужен r_sel_markers (корень цепочки)
+    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(false);  // 0 ДНК
     s.dna = 1000;
-    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);    // ур.1
-    expect(s.research.r_sel_pairs).toBe(1);
-    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);    // ур.2 того же узла
-    expect(s.research.r_sel_pairs).toBe(2);
-    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);  // пререквизит есть (≥1 ур.)
-    expect(s.dna).toBe(1000 - 40 - 100 - 150);                 // ур1+ур2 «Подбора» + ур1 «Маркеров»
+    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);   // ур.1 корня
+    expect(s.research.r_sel_markers).toBe(1);
+    expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);   // ур.2 того же узла
+    expect(s.research.r_sel_markers).toBe(2);
+    expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);     // пререквизит есть (≥1 ур.)
+    expect(s.dna).toBe(1000 - 60 - 140 - 80);                   // ур1+ур2 «Маркеров» + ур1 «Подбора»
     expect(unlockResearch(s, 'bogus').ok).toBe(false);
   });
 
   it('unlockResearch: полностью прокачанный узел больше не покупается', () => {
     const s = createInitialState(makeRng(51), 0);
-    s.level = 10; s.dna = 10_000;
-    // «Витамины роста» — одноуровневый узел; для него нужен пререквизит «Маркеры».
-    unlockResearch(s, 'r_sel_pairs');
+    s.level = 10; s.dna = 10_000; s.coins = 30_000;
+    // «Витамины роста» — одноуровневый узел, финал цепочки Селекции: Маркеры→Подбор→Витамины
+    // (Криогенетика переехала в ветку «Лаборатория»).
     unlockResearch(s, 'r_sel_markers');
+    unlockResearch(s, 'r_sel_pairs');
     expect(unlockResearch(s, 'r_sel_vitamins').ok).toBe(true);
     expect(unlockResearch(s, 'r_sel_vitamins')).toMatchObject({ ok: false, reason: 'уже изучено' });
   });

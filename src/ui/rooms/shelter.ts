@@ -3,29 +3,29 @@
  * «в добрые руки» (переноска у двери) или сдадут в лабораторию за 🧬
  * (лабораторный слот). Тап по котику → меню. Улучшения — в оверлее ⚙️.
  *
- * Здесь же стойка заказов: кнопка 📋 у названия комнаты (с таймером до смены
- * доски в московскую полночь) и зона-корзина под ней — заказ можно закрыть
+ * Здесь же стойка заказов: кнопка 📋 у названия комнаты (со счётчиком заказов и
+ * остатком до авто-смены ближайшего) и зона-корзина под ней — заказ можно закрыть
  * ТОЛЬКО котом, положенным в корзину (см. actions.claimOrder).
  */
 
 import { Container, Graphics, Rectangle, Sprite } from 'pixi.js';
 import {
-  catsIn, shelterCapacity, isInSlot, isUnlocked, unlockLevelOf, shelterTotals,
-  isInBasket, basketCat, putCatInBasket, clearOrderBasket, msUntilOrdersReset, matchesOrder,
+  catsIn, shelterCapacity, isInSlot, isUnlocked, shelterTotals,
+  isInBasket, basketCat, putCatInBasket, clearOrderBasket, msUntilOrderExpiry, matchesOrder,
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
+import { catArtTexture } from '../catTextures.js';
 import { decorZone } from '../decorArt.js';
 
-/** Остаток до смены заказов «Ч:ММ:СС» — подпись на кнопке доски. */
+/** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
 function fmtLeft(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return `${h}:${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+  const total = Math.max(0, Math.floor(ms / 60_000));
+  const h = Math.floor(total / 60);
+  return `${h}:${String(total % 60).padStart(2, '0')}`;
 }
 
 export function createShelter(ctx: UiContext): Room {
@@ -49,7 +49,8 @@ export function createShelter(ctx: UiContext): Room {
 
   // Лабораторный слот — плейсхолдер-станция у левой стены (спрайт будет позже).
   // Перетащил кота сюда → подтверждение сдачи «на эксперименты» за 🧬 (sendToLab).
-  // Станция открывается уровнем лаборатории (labStation) — до этого показываем замок.
+  // Станция открывается ПОКУПКОЙ узла «На эксперименты» (Генолаб → Улучшения → Лаборатория) —
+  // до этого показываем замок.
   const labW = ctx.roomW * 0.15;
   const labH = labW * 0.95;
   const labCx = ctx.roomW * 0.13;
@@ -72,7 +73,7 @@ export function createShelter(ctx: UiContext): Room {
       .fill({ color: 0xbfeae6, alpha: unlocked ? 0.55 : 0.3 });
     const flask = label(unlocked ? '🧪' : '🔒', labW * 0.42, COLORS.ink, '700');
     flask.position.set(labCx, labZone.y + labH * 0.56);
-    const tag = label(unlocked ? '🧬 в лабораторию' : `Откроется на ур. ${unlockLevelOf('labStation')}`,
+    const tag = label(unlocked ? '🧪 на эксперименты' : '🔒 открой в Генолабе',
       13, COLORS.ink, '800');
     const pillBg = new Graphics();
     const pw = tag.width + 18;
@@ -110,8 +111,8 @@ export function createShelter(ctx: UiContext): Room {
 
     const labBtn = new Button({
       text: labOpen
-        ? `🧪 В лабораторию всех\n🧬${totals.lab.dna}${totals.lab.coins > 0 ? `  💰${totals.lab.coins}` : ''}`
-        : `🧪 В лабораторию всех\n🔒 с ур. ${unlockLevelOf('labStation')}`,
+        ? `🧪 На эксперименты всех\n🧬${totals.lab.dna}${totals.lab.coins > 0 ? `  💰${totals.lab.coins}` : ''}`
+        : '🧪 На эксперименты всех\n🔒 открой в Генолабе',
       w: BW, h: BH, color: COLORS.dna, fontSize: 12.5,
     });
     labBtn.position.set(rightCx, cy);
@@ -137,14 +138,13 @@ export function createShelter(ctx: UiContext): Room {
     const BW = 168, BH = 44;
     const cx = 18 + titleW + 10 + BW / 2;      // сразу справа от плашки названия
     const cy = ctx.topInset + 8 + 22;
-    const doneCount = ctx.state.orders.filter((o) => o.done).length;
 
     const btn = new Button({ text: '📋 Заказы', w: BW, h: BH, color: COLORS.warn, textColor: COLORS.ink, fontSize: 13 });
     btn.position.set(cx, cy);
     btn.onTap = () => ctx.openOrders();
     ordersBtn = btn;
     ordersLayer.addChild(btn);
-    updateOrdersBtn(doneCount);
+    updateOrdersBtn();
 
     // Корзина — «небольшая зона» ровно под кнопкой. Кот в ней рисуется прямо тут,
     // поэтому визуально понятно, кого именно предъявим клиенту.
@@ -152,8 +152,8 @@ export function createShelter(ctx: UiContext): Room {
     const by = cy + BH / 2 + 10;
     basketZone = new Rectangle(bx, by, BASKET_W, BASKET_H);
     const cat = basketCat(ctx.state);
-    // подсветка, когда кот в корзине подходит хоть под один невыполненный заказ
-    const fits = !!cat && ctx.state.orders.some((o) => !o.done && matchesOrder(o, cat));
+    // подсветка, когда кот в корзине подходит хоть под один заказ на доске
+    const fits = !!cat && ctx.state.orders.some((o) => matchesOrder(o, cat));
 
     const box = new Graphics();
     box.roundRect(bx, by, BASKET_W, BASKET_H, 14)
@@ -162,7 +162,8 @@ export function createShelter(ctx: UiContext): Room {
     ordersLayer.addChild(box);
 
     if (cat) {
-      const sp = new Sprite(ctx.catTexture(cat));
+      // арт-спрайт коллекции (тот же вариант, что кот показывает на полу), фолбэк — процедурный
+      const sp = new Sprite(catArtTexture(cat) ?? ctx.catTexture(cat));
       const k = Math.min((BASKET_W - 18) / sp.texture.width, (BASKET_H - 26) / sp.texture.height);
       sp.scale.set(k);
       sp.anchor.set(0.5, 1);
@@ -195,10 +196,13 @@ export function createShelter(ctx: UiContext): Room {
     });
   }
 
-  /** Подпись кнопки: сколько заказов ещё открыто + остаток до смены доски. */
-  function updateOrdersBtn(doneCount: number): void {
-    const total = ctx.state.orders.length;
-    ordersBtn?.setText(`📋 Заказы ${total - doneCount}/${total}\n⏳ ${fmtLeft(msUntilOrdersReset(ctx.now()))}`);
+  /** Подпись кнопки: число заказов + остаток до авто-смены ближайшего (все слоты активны). */
+  function updateOrdersBtn(): void {
+    const orders = ctx.state.orders;
+    const total = orders.length;
+    if (total === 0) { ordersBtn?.setText('📋 Заказы 0'); return; }
+    const soonest = Math.min(...orders.map((o) => msUntilOrderExpiry(o, ctx.now())));
+    ordersBtn?.setText(`📋 Заказы ${total}\n⏳ ${fmtLeft(soonest)}`);
   }
 
   const floorLayer = new Container();
@@ -224,13 +228,13 @@ export function createShelter(ctx: UiContext): Room {
       const r = putCatInBasket(ctx.state, cat.id);
       if (!r.ok) { ctx.toast(r.reason); return false; }
       ctx.commit();
-      const fits = ctx.state.orders.some((o) => !o.done && matchesOrder(o, cat));
-      ctx.toast(fits ? 'Котик в корзине — открой 📋 Заказы 🧺' : 'Котик в корзине, но под сегодняшние заказы не подходит 🧺');
+      const fits = ctx.state.orders.some((o) => matchesOrder(o, cat));
+      ctx.toast(fits ? 'Котик в корзине — открой 📋 Заказы 🧺' : 'Котик в корзине, но под заказы не подходит 🧺');
       return true;
     }
     if (labZone.contains(lp.x, lp.y)) {
       if (!isUnlocked(ctx.state, 'labStation')) {
-        ctx.toast(`Лаборатория откроется на ур. ${unlockLevelOf('labStation')} 🔒`);
+        ctx.toast('Открой станцию «На эксперименты» в Генолабе 🔬');
         return false;             // заперто → кот вернётся на своё место
       }
       ctx.commit();               // grab-спрайт уже уничтожен — вернём наземного кота на пол
@@ -268,7 +272,7 @@ export function createShelter(ctx: UiContext): Room {
     tickAcc += dt;
     if (tickAcc >= 1) {
       tickAcc = 0;
-      updateOrdersBtn(ctx.state.orders.filter((o) => o.done).length);
+      updateOrdersBtn();
     }
   }
 

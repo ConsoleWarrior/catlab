@@ -4,7 +4,7 @@
  * ВЫСТАВКИ: поставленный на пьедестал кот становится чемпионом и приносит
  * пассивный доход (∝ своей ценности); число дохода подписано над ним.
  * Перетащил кота на пьедестал → на выставку; стащил на пол → снял с выставки.
- * У правой стены — клиника-шприц (💉): перетащил кота → диалог лечения вязок.
+ * У левой стены — ветеринар-шприц (💉): перетащил кота → диалог лечения вязок.
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
@@ -100,7 +100,7 @@ export function createNursery(ctx: UiContext): Room {
     const syringe = label(unlocked ? '💉' : '🔒', stationW * 0.42, COLORS.ink, '700');
     syringe.position.set(clinicCx, clinicZone.y + stationH * 0.56);
     const badge = stationBadge(clinicCx, clinicZone.y,
-      unlocked ? '💉 клиника' : `Откроется на ур. ${unlockLevelOf('clinic')}`);
+      unlocked ? '💉 ветеринар' : '🔒 открой в Генолабе');
     clinicLayer.addChild(box, syringe, badge);
   }
 
@@ -286,7 +286,7 @@ export function createNursery(ctx: UiContext): Room {
     // «чемпион мимо пьедестала», иначе чемпиона снимет с выставки вместо лечения)
     if (clinicZone.contains(lp.x, lp.y)) {
       if (!isUnlocked(ctx.state, 'clinic')) {
-        ctx.toast(`Клиника откроется на ур. ${unlockLevelOf('clinic')} 🔒`);
+        ctx.toast('Открой «Ветеринара» в Генолабе 🔬');
         return false;             // заперто → кот вернётся на своё место
       }
       ctx.commit();               // grab-спрайт уничтожен — вернём кота на пол/пьедестал
