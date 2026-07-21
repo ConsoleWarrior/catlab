@@ -9,7 +9,7 @@ import {
   startBreeding, collectReady, incubationDuration, makeCatInstance,
 } from './index.js';
 import {
-  LEVEL_REP_THRESHOLDS, MAX_LEVEL, REP_BIRTH_BY_TIER, REP_NEW_BREED_MULT,
+  LEVEL_REP_THRESHOLDS, MAX_LEVEL, TIER_MARKET_VALUE, REP_BIRTH_RATE, REP_NEW_BREED_MULT,
 } from './config.js';
 import type { GameState } from './index.js';
 
@@ -155,11 +155,11 @@ describe('гейты уровня блокируют действия', () => {
   it('уровни узла гейтятся своим minLevel (прокачка растянута по уровням)', () => {
     const s = createInitialState(makeRng(8), 0);
     s.dna = 10_000; s.coins = 10_000;
-    // research открыт с ур.2; у «Генетических маркеров» (корень) ур.1 — minLevel 2, ур.2 — minLevel 4.
+    // research открыт с ур.1; у «Генетических маркеров» (корень) ур.1 — minLevel 2, ур.2 — minLevel 5.
     s.level = 2;
     expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);            // ур.1 узла доступен
     expect(unlockResearch(s, 'r_sel_markers')).toMatchObject({ ok: false, reason: 'locked' }); // ур.2 заперт
-    s.level = 4;
+    s.level = 5;
     expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);            // ур.2 открылся
   });
 });
@@ -174,9 +174,10 @@ describe('опыт за важные действия', () => {
     const ev = collectReady(s, incubationDuration(s), rng)[0]!;
     expect(ev.kitten).toBeDefined();
     const tier = ev.kitten!.rarityTier;
-    const expected = REP_BIRTH_BY_TIER[tier] * (ev.newBreed ? REP_NEW_BREED_MULT : 1);
-    expect(ev.rep).toBe(Math.round(expected));
-    expect(s.reputation).toBe(repBefore + Math.round(expected));
+    const expected = Math.round(TIER_MARKET_VALUE[tier] * REP_BIRTH_RATE)
+      * (ev.newBreed ? REP_NEW_BREED_MULT : 1);
+    expect(ev.rep).toBe(expected);
+    expect(s.reputation).toBe(repBefore + expected);
   });
 
   it('пристройство и лаборатория начисляют опыт ∝ ценности', () => {

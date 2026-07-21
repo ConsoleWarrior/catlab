@@ -3,7 +3,7 @@ import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, nurseryCapacity, shelterCapacity, incubationDuration,
   mutationRate, offlineCapMin, upgradeCost, upgradeMaxed, passiveRatePerMin,
-  adoptReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue, ORDER_TARGET,
+  adoptReward, labReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue, ORDER_TARGET,
 } from './index.js';
 import * as C from './config.js';
 
@@ -50,8 +50,8 @@ describe('геттеры прокачки', () => {
   it('потолок офлайн-дохода растёт узлом «Ночной смотритель»', () => {
     const s = createInitialState(makeRng(5), 0);
     expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN);
-    s.research = { r_offline: 2 }; // 2×120
-    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 240);
+    s.research = { r_offline: 2 }; // 2×60
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 120);
   });
 });
 
@@ -98,17 +98,16 @@ describe('доход и пристройство', () => {
     const s = createInitialState(makeRng(10), 0);
     const cat = s.cats[0]!;
     const market = catMarketValue(cat);
-    const dnaBase = C.TIER_VALUE[cat.rarityTier].dna;
     expect(adoptReward(s, cat)).toEqual({
       coins: Math.round(market * C.ADOPT_COIN_FRACTION),
-      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION)),
+      dna: Math.max(1, Math.round(market * C.ADOPT_DNA_RATE)),
     });
     // легаси-ключи connections/biobank больше не влияют на награду
     s.upgrades.connections = 1;
     s.upgrades.biobank = 1;
     expect(adoptReward(s, cat)).toEqual({
       coins: Math.round(market * C.ADOPT_COIN_FRACTION),
-      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION)),
+      dna: Math.max(1, Math.round(market * C.ADOPT_DNA_RATE)),
     });
   });
 });
@@ -148,7 +147,7 @@ describe('дерево исследований (эффекты)', () => {
     s.research = { r_nursery: 2, r_shelter: 2, r_offline: 1 };
     expect(nurseryCapacity(s)).toBe(C.NURSERY_BASE_CAP + 4); // 2×+2
     expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + 6); // 2×+3
-    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 120);
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 60);
   });
 
   it('доходные узлы дают множитель и бонус за коллекцию', () => {
@@ -162,15 +161,16 @@ describe('дерево исследований (эффекты)', () => {
     expect(passiveRatePerMin(s)).toBeCloseTo(base + 4 * 0.25);
   });
 
-  it('узлы пристройства увеличивают 💰 и 🧬', () => {
+  it('узлы пристройства: +💰 за раздачу; Биобанк+ усиливает 🧬 только за сдачу на эксперименты', () => {
     const s = createInitialState(makeRng(32), 0);
     const cat = s.cats[0]!;
     const market = catMarketValue(cat);
-    const dnaBase = C.TIER_VALUE[cat.rarityTier].dna;
-    s.research = { r_adopt_coins: 2, r_adopt_dna: 1 }; // +0.40 к 💰 (2×0.20), +0.15 к 🧬
+    s.research = { r_adopt_coins: 2, r_adopt_dna: 1 }; // +40% 💰 раздачи; +15% 🧬 лаборатории
     expect(adoptReward(s, cat)).toEqual({
       coins: Math.round(market * C.ADOPT_COIN_FRACTION * (1 + 0.40)),
-      dna: Math.max(1, Math.round(dnaBase * C.ADOPT_DNA_FRACTION * (1 + 0.15))),
+      dna: Math.max(1, Math.round(market * C.ADOPT_DNA_RATE)), // «в добрые руки» Биобанк+ НЕ трогает
     });
+    // «Биобанк+» теперь усиливает 🧬 именно за сдачу на эксперименты (labReward)
+    expect(labReward(s, cat).dna).toBe(Math.max(1, Math.round(market * C.LAB_DNA_RATE * (1 + 0.15))));
   });
 });

@@ -8,7 +8,7 @@
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
-import { Container, Graphics, Rectangle } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import type { Sprite } from 'pixi.js';
 import {
   catsIn, roomCount, nurseryCapacity, buyCat, buyCatCost, isInSlot, moveCat,
@@ -22,7 +22,7 @@ import {
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorPlane } from './shell.js';
+import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 import { catSprite, aiSitSpriteFor, rarityGlow } from '../catTextures.js';
@@ -53,71 +53,58 @@ export function createNursery(ctx: UiContext): Room {
   // экранные прямоугольники пьедесталов (в локальных координатах комнаты) — для дропа
   let pedRects: { x: number; y: number; w: number; h: number }[] = [];
 
-  // Две drag-станции по нижним углам (по образцу станции «в лабораторию» в Приюте):
-  // клиника-шприц СЛЕВА (лечение), криокапсула СПРАВА (заморозка в крио-банк).
-  // Перетащил кота на станцию → соответствующий диалог. Слои под «живым полом»
-  // (коты проходят ПЕРЕД ними); пересобираются в refresh.
-  const stationW = ctx.roomW * 0.15;
-  const stationH = stationW * 0.95;
-  const stationY = ctx.roomH * 0.86 - stationH;
+  // Две drag-станции по нижним углам (общий образец cornerStation — короб жмётся в
+  // угол с отступом ≈ полосе навигации): клиника-шприц в левом углу (лечение),
+  // криокапсула в правом (заморозка в крио-банк). Перетащил кота на станцию →
+  // соответствующий диалог. Слои под «живым полом» (коты проходят ПЕРЕД ними);
+  // пересобираются в refresh.
   const ICE_EDGE = 0x8ecae6; // морозный акцент криокапсулы
 
-  // клиника — СЛЕВА; до открытия уровнем (LAB_UNLOCKS.clinic) — замок
-  const clinicCx = ctx.roomW * 0.13;
-  const clinicZone = new Rectangle(clinicCx - stationW / 2, stationY, stationW, stationH);
+  // клиника — левый НИЖНИЙ угол; до открытия уровнем (LAB_UNLOCKS.clinic) — замок
+  const clinicZone = cornerStation(ctx.roomW, ctx.roomH, 'left');
+  const clinicCx = clinicZone.x + clinicZone.width / 2;
   const clinicLayer = new Container();
   shell.container.addChildAt(clinicLayer, shell.container.getChildIndex(floorLayer));
 
-  // криокапсула — СПРАВА; появляется только когда открыт крио-банк (узел «Криогенетика»)
-  const cryoCx = ctx.roomW * 0.87;
-  const cryoZone = new Rectangle(cryoCx - stationW / 2, stationY, stationW, stationH);
+  // криокапсула — правый НИЖНИЙ угол; появляется только когда открыт крио-банк (узел «Криогенетика»)
+  const cryoZone = cornerStation(ctx.roomW, ctx.roomH, 'right');
+  const cryoCx = cryoZone.x + cryoZone.width / 2;
   const cryoLayer = new Container();
   shell.container.addChildAt(cryoLayer, shell.container.getChildIndex(floorLayer));
-
-  /** Плашка-подпись станции (пилюля с текстом над коробом). */
-  function stationBadge(cx: number, topY: number, text: string): Container {
-    const tag = label(text, 13, COLORS.ink, '800');
-    const pillBg = new Graphics();
-    const pw = tag.width + 18;
-    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).fill({ color: COLORS.hud, alpha: 0.9 });
-    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).stroke({ width: 2, color: COLORS.cardEdge });
-    const badge = new Container();
-    badge.addChild(pillBg, tag);
-    badge.position.set(cx, topY - 8);
-    return badge;
-  }
 
   function refreshClinic(): void {
     clinicLayer.removeChildren();
     const unlocked = isUnlocked(ctx.state, 'clinic');
+    const { x, y, width: sw, height: sh } = clinicZone;
     const box = new Graphics();
     // короб-станция (заглушка): белый медицинский бокс + «кушетка»
-    box.roundRect(clinicZone.x, clinicZone.y, stationW, stationH, 14)
+    box.roundRect(x, y, sw, sh, 14)
       .fill({ color: unlocked ? 0xf3f6f4 : 0x6b7370, alpha: unlocked ? 0.9 : 0.6 })
       .stroke({ width: 3, color: unlocked ? 0xd66a6a : 0x4a504e });
-    box.roundRect(clinicZone.x + stationW * 0.12, clinicZone.y + stationH * 0.16, stationW * 0.76, stationH * 0.4, 8)
+    box.roundRect(x + sw * 0.12, y + sh * 0.16, sw * 0.76, sh * 0.4, 8)
       .fill({ color: unlocked ? 0xf7c8c8 : 0xbfbfbf, alpha: unlocked ? 0.6 : 0.3 });
-    const syringe = label(unlocked ? '💉' : '🔒', stationW * 0.42, COLORS.ink, '700');
-    syringe.position.set(clinicCx, clinicZone.y + stationH * 0.56);
-    const badge = stationBadge(clinicCx, clinicZone.y,
+    const syringe = label(unlocked ? '💉' : '🔒', sw * 0.42, COLORS.ink, '700');
+    syringe.position.set(clinicCx, y + sh * 0.56);
+    const badge = stationBadge(clinicCx, y,
       unlocked ? '💉 ветеринар' : '🔒 открой в Генолабе');
     clinicLayer.addChild(box, syringe, badge);
   }
 
-  /** Станция-криокапсула (справа): только когда крио-банк открыт узлом «Криогенетика». */
+  /** Станция-криокапсула (правый угол): только когда крио-банк открыт узлом «Криогенетика». */
   function refreshCryo(): void {
     cryoLayer.removeChildren();
     if (!cryoUnlocked(ctx.state)) return; // до открытия крио-банка станции нет
+    const { x, y, width: sw, height: sh } = cryoZone;
     const box = new Graphics();
     // морозный короб + внутренняя «колба» криокапсулы
-    box.roundRect(cryoZone.x, cryoZone.y, stationW, stationH, 14)
+    box.roundRect(x, y, sw, sh, 14)
       .fill({ color: 0xe8f6fb, alpha: 0.92 })
       .stroke({ width: 3, color: ICE_EDGE });
-    box.roundRect(cryoZone.x + stationW * 0.24, cryoZone.y + stationH * 0.14, stationW * 0.52, stationH * 0.62, 12)
+    box.roundRect(x + sw * 0.24, y + sh * 0.14, sw * 0.52, sh * 0.62, 12)
       .fill({ color: 0xbfe6f2, alpha: 0.6 });
-    const snow = label('🧊', stationW * 0.42, COLORS.ink, '700');
-    snow.position.set(cryoCx, cryoZone.y + stationH * 0.5);
-    const badge = stationBadge(cryoCx, cryoZone.y, '❄️ криокапсула');
+    const snow = label('🧊', sw * 0.42, COLORS.ink, '700');
+    snow.position.set(cryoCx, y + sh * 0.5);
+    const badge = stationBadge(cryoCx, y, '❄️ криокапсула');
     cryoLayer.addChild(box, snow, badge);
   }
 

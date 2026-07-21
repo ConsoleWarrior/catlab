@@ -6,7 +6,7 @@
  */
 
 import {
-  Application, Assets, Container, Graphics, Rectangle, Sprite, Text, BlurFilter,
+  Application, Assets, Container, Graphics, Rectangle, Sprite, Text,
 } from 'pixi.js';
 import type { Texture, FederatedPointerEvent } from 'pixi.js';
 import { makeRng, randomCat, expressPhenotype, pick, BREEDS, breedName } from '../genetics/index.js';
@@ -28,7 +28,7 @@ import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { loadEyeData } from './eyeBlink.js';
 import { setRoomBg } from './roomArt.js';
-import { setDecorTexture, decorZone } from './decorArt.js';
+import { setDecorTexture } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
@@ -134,11 +134,6 @@ export class Game implements UiContext {
   private hudGap = 0;            // зазор между ресурсами в ряду
   private hudBgTex?: Texture;    // текстурный фон топ-бара
 
-  // подсветка переноски в приюте, когда кота тащат (лампа: мягкий ореол + ядро)
-  private adoptGlow = new Container();
-  private adoptGlowHalo = new Graphics();
-  private adoptBlur = new BlurFilter({ strength: 8, quality: 3, kernelSize: 5 });
-
   // прочее
   private incomeAcc = 0;
   private saveTimer = 0;
@@ -226,11 +221,6 @@ export class Game implements UiContext {
     // обработки событий, на отрисовку/анимацию тоста не влияет.
     this.toastBox.eventMode = 'none';
     this.dragLayer.eventMode = 'none';
-
-    // структура подсветки переноски: мягкий ореол (BlurFilter) + яркое ядро
-    this.adoptGlowHalo.filters = [this.adoptBlur];
-    this.adoptGlow.addChild(this.adoptGlowHalo);
-    this.adoptGlow.visible = false;
 
     this.resize();
     this.installInput();
@@ -637,7 +627,6 @@ export class Game implements UiContext {
     g.sprite.destroy({ children: true });
     this.grab = null;
     this.app.canvas.style.cursor = 'default';
-    this.updateAdoptGlow(false);
 
     // пристроить кота в текущей комнате (слот вязки / приют / питомник)
     if (this.handleCatDrop(opts.cat, gx, gy)) return; // успех → commit пересобрал комнаты
@@ -663,35 +652,6 @@ export class Game implements UiContext {
     // 2 c между сменами комнат — чтобы не проскакивать центральную комнату насквозь
     if (g.x < edge && this.currentRoom > lo) { this.goRoom(this.currentRoom - 1); g.edgeCd = 2; }
     else if (g.x > this.roomW - edge && this.currentRoom < hi) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
-  }
-
-  /** Подсветка переноски золотым свечением (как от лампы) при перетаскивании кота. */
-  private updateAdoptGlow(show: boolean, t = 0): void {
-    const room = this.rooms[this.currentRoom];
-    if (!room || !show || room.id !== 'shelter') {
-      this.adoptGlow.visible = false;
-      return;
-    }
-    const zone = decorZone('shelter', 'adopt', this.roomW, this.roomH);
-    if (!zone) { this.adoptGlow.visible = false; return; }
-    const cx = zone.x + zone.width / 2;
-    const cy = zone.y + zone.height / 2;
-
-    // перекладываем в контейнер нужной комнаты (первый раз / после смены комнаты)
-    if (this.adoptGlow.parent !== room.container) {
-      this.adoptGlow.removeFromParent();
-      // втыкаем перед декорациями, чтобы свечение было под спрайтом переноски (из-под неё)
-      room.container.addChildAt(this.adoptGlow, 3);
-    }
-
-    const pulse = 0.65 + 0.35 * Math.sin(t * 2.75);
-    this.adoptGlow.visible = true;
-
-    // Мягкий круг света от переноски - BlurFilter делает края тусклыми
-    this.adoptGlowHalo.clear();
-    this.adoptGlowHalo
-      .circle(cx, cy, Math.max(zone.width, zone.height) * 0.40)
-      .fill({ color: 0xffd700, alpha: 0.5 * pulse });
   }
 
   /** Куда уронили кота: Инкубатор → слот вязки, Приют → переноска (пристройство), Приют/Питомник → переезд. */
@@ -784,13 +744,7 @@ export class Game implements UiContext {
     }
     this.pendingGrab = null;
 
-    // пересобираем комнаты под новый размер. adoptGlow — общий Game-объект,
-    // который updateAdoptGlow() временно подвешивает в контейнер комнаты
-    // «Приют»; открепляем его до destroy({children:true}), иначе он уничтожится
-    // вместе с комнатой и следующий clear() на мёртвой Graphics уронит весь
-    // тикер (после чего канвас просто перестаёт перерисовываться — снаружи это
-    // выглядит как «геометрия всего съехала» при ресайзе окна).
-    this.adoptGlow.removeFromParent();
+    // пересобираем комнаты под новый размер
     for (const r of this.rooms) r.container.destroy({ children: true });
     this.world.removeChildren();
     // Крио-банк появляется 5-й в ряду только после покупки узла «❄️ Криогенетика».
@@ -1168,11 +1122,6 @@ export class Game implements UiContext {
         g.glow.rotation = v.rotation;
       }
       this.carryEdgeScroll(dt); // у края экрана — переносим кота в соседнюю комнату
-
-      // подсветка переноски в приюте, когда тащим кота над комнатой
-      this.updateAdoptGlow(true, g.t);
-    } else {
-      this.updateAdoptGlow(false);
     }
 
     // таймеры/анимация текущей комнаты

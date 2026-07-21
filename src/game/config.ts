@@ -12,21 +12,12 @@ import type { Currency } from './types.js';
 // исследований (state.research: id→уровень). Старые сейвы сбрасываются загрузчиком по этой версии.
 export const SAVE_VERSION = 9;
 
-/** Ценность кота по тиру редкости: образец (🧬), пассив питомника (💰/мин, легаси). */
-export const TIER_VALUE: Record<RarityTier, { adopt: number; dna: number; incomePerMin: number }> = {
-  common: { adopt: 20, dna: 1, incomePerMin: 1 },
-  uncommon: { adopt: 60, dna: 3, incomePerMin: 3 },
-  rare: { adopt: 200, dna: 8, incomePerMin: 10 },
-  epic: { adopt: 800, dna: 20, incomePerMin: 25 },
-  legendary: { adopt: 3000, dna: 60, incomePerMin: 60 },
-};
-
 // --- Рыночная ценность кота (продажа/заказы/выставка/лаборатория) ---
 // Единая шкала «сколько стоит кот»: тир — главный фактор порядка величины,
 // порода внутри тира (breedValueMult), родословная и здоровье уточняют цену.
 // См. economy.catMarketValue.
 export const TIER_MARKET_VALUE: Record<RarityTier, number> = {
-  common: 50, uncommon: 160, rare: 520, epic: 2000, legendary: 7500,
+  common: 50, uncommon: 150, rare: 450, epic: 1200, legendary: 3500,
 };
 
 // Родословная: +за каждое известное поколение сверх родителей, +за «породистость»
@@ -43,12 +34,21 @@ export const HEALTH_VALUE_FLOOR = 0.6;
 // «В добрые руки»: доля рыночной цены (в разы меньше продажи по заказу) + немного 🧬.
 // Доход урезан вдвое (0.25→0.125), чтобы массовая раздача перестала быть главным
 // краном 💰 и ⭐ (см. REP_ADOPT_MULT) — цель растянуть прогресс на 1-2 месяца.
+// 🧬 теперь = доля от TIER_MARKET_VALUE[тир] (а не отдельная плоская таблица) — авто-следует
+// за шкалой ценности: 50/150/450/1200/3500 × 0.006 → ≈ 1/1/3/7/21 🧬 по тирам.
 export const ADOPT_COIN_FRACTION = 0.125;
-export const ADOPT_DNA_FRACTION = 0.5;
+// 🧬 теперь считается от полного catMarketValue (как 💰 и ⭐ рядом) — единообразно с
+// остальными наградами пристройства/лаборатории, а не от «плоской по тиру» базы.
+// Ставка снижена вдвое (0.006 → 0.005 порода в среднем ×1.2), чтобы средняя награда
+// осталась той же, но теперь порода/родословная/здоровье конкретного кота её уточняют.
+export const ADOPT_DNA_RATE = 0.005;          // 🧬 = round(catMarketValue × rate)
 
 // --- Лаборатория (кот → 🧬 гены) ---
 // Кот уезжает «на эксперименты»: главный способ добыть гены из лишних котов.
-export const LAB_DNA_RATE = 0.08;             // 🧬 = round(catMarketValue × rate)
+// Доход 🧬 урезан на 60% (0.08 → 0.032), чтобы гены не копились слишком быстро
+// (растягиваем прогресс). ВНИМАНИЕ: cloneCost завязан на этот же коэффициент
+// (клон = 3 × round(market × LAB_DNA_RATE)) — клон подешевел на те же 60%.
+export const LAB_DNA_RATE = 0.032;            // 🧬 = round(catMarketValue × rate)
 export const LAB_COIN_RATE = 0.05;            // немного 💰 сверху
 
 // --- Корм (контейнер + мягкий голод, этап B) ---
@@ -96,9 +96,9 @@ export const ORDER_REP_MULT = 0.15;           // ⭐ опыт за заказ �
 // Опыт (⭐) копится не только с заказов, но и с рождений/продаж/сдачи в лабораторию.
 // Награда за рождение — по тиру котёнка (гринд дворовых даёт крохи), с ×множителем за
 // ПЕРВОЕ открытие породы (коллекционирование — ядро игры). Всё — первый прикид, тюнится.
-export const REP_BIRTH_BY_TIER: Record<RarityTier, number> = {
-  common: 2, uncommon: 5, rare: 12, epic: 30, legendary: 70,
-};
+// Теперь ⭐ за рождение = доля от TIER_MARKET_VALUE[тир] (а не плоская таблица) — авто-следует
+// за шкалой ценности: 50/150/450/1200/3500 × 0.018 → ≈ 1/3/8/22/63 ⭐ по тирам.
+export const REP_BIRTH_RATE = 0.027;          // ⭐ за рождение = round(TIER_MARKET_VALUE[тир] × rate)
 export const REP_NEW_BREED_MULT = 5;          // ×к опыту за рождение, если порода открыта впервые
 export const REP_ADOPT_MULT = 0.025;          // ⭐ за пристройство = доля ценности (урезан вдвое 0.05→0.025)
 export const REP_LAB_MULT = 0.05;             // ⭐ за сдачу кота в лабораторию = доля ценности
@@ -313,14 +313,14 @@ export type ResearchEffectKind =
   | 'income'           // +доля к пассивному доходу (множитель)
   | 'collectionIncome' // +плоский доход за каждую открытую породу
   | 'adoptCoins'       // +доля к 💰 за пристройство
-  | 'adoptDna'         // +доля к 🧬 за пристройство/лабораторию
+  | 'adoptDna'         // +доля к 🧬 ТОЛЬКО за сдачу на эксперименты (лабораторию)
   | 'nurseryCap'       // +мест в питомнике
   | 'shelterCap'       // +мест в приюте
   | 'offline'          // +минут к потолку офлайн-дохода
   | 'recipeChance'     // ×множитель шанса ВСЕХ рецептов размножения (доля, +value)
   | 'kinshipSafety'    // снижение риска инбридинга для котёнка (доля, потолок 0.5)
   | 'extraHeart'       // +N ❤ новорождённым (бесплодных 0 ❤ не спасает)
-  | 'orderDna'         // +доля к 🧬 с выполненных заказов
+  | 'orderReward'      // +доля к НАГРАДЕ заказа: 💰 монеты, 🧬 гены и ⭐ опыт (💎 не трогает)
   | 'feedEff'          // коты едят меньше корма (доля снижения расхода)
   | 'foodCap'          // +ёмкость кормушки (ед.)
   | 'autoFeed'         // автопокупка корма за 💰 при опустошении (флаг: value ≥ 1)
@@ -333,6 +333,8 @@ export interface ResearchLevel {
   coins?: number;    // ДОП. цена в 💰 сверх основной (для ветки Селекции на 🧬 — стоит и денег)
   value: number;     // прибавка эффекта на этом уровне (суммируется по купленным уровням)
   minLevel: number;  // мин. уровень лаборатории, чтобы купить именно этот уровень
+  desc?: string;     // описание ИМЕННО этого уровня (с накопленным итогом); если задано —
+                     // карточка/подтверждение показывают его вместо общего ResearchDef.desc
 }
 
 export interface ResearchDef {
@@ -353,30 +355,31 @@ export const RESEARCH: readonly ResearchDef[] = [
   // Порядок цепочки: Маркеры → Подбор пар → Криогенетика → Витамины роста. Каждый
   // уровень стоит основной валютой 🧬 И доп. монетами 💰 (поле coins) — Селекция
   // теперь тянет обе валюты, а не только гены.
-  { id: 'r_sel_markers', glyph: '🧬', title: 'Генетические маркеры', desc: 'Риск инбридинга у котёнка ниже (потолок −50%)',
+  { id: 'r_sel_markers', glyph: '🧬', title: 'Генетические маркеры', desc: 'Риск инбридинга у котёнка ниже',
     currency: 'dna', effectKind: 'kinshipSafety', requires: [], col: 0, row: 0, levels: [
-      { cost: 60, coins: 120, value: 0.20, minLevel: 2 },
-      { cost: 140, coins: 300, value: 0.15, minLevel: 4 },
+      { cost: 60, coins: 500, value: 0.25, minLevel: 2, desc: 'Риск инбридинга котёнка меньше на 25%' },
+      { cost: 300, coins: 3000, value: 0.25, minLevel: 5, desc: 'Риск инбридинга котёнка меньше на 50%' },
     ] },
   { id: 'r_sel_pairs', glyph: '💞', title: 'Подбор пар', desc: 'Шансы всех рецептов +5% за уровень',
     currency: 'dna', effectKind: 'recipeChance', requires: ['r_sel_markers'], col: 1, row: 0, levels: [
-      { cost: 80, coins: 200, value: 0.05, minLevel: 4 },
-      { cost: 180, coins: 450, value: 0.05, minLevel: 6 },
-      { cost: 360, coins: 900, value: 0.05, minLevel: 8 },
+      { cost: 200, coins: 2500, value: 0.05, minLevel: 4 },
+      { cost: 400, coins: 5000, value: 0.05, minLevel: 6 },
+      { cost: 600, coins: 10000, value: 0.05, minLevel: 8 },
     ] },
   // Витамины роста — финальный узел ветки (Криогенетика переехала в ветку «🔬 Лаборатория»).
   { id: 'r_sel_vitamins', glyph: '💊', title: 'Витамины роста', desc: 'Новорождённые котята +1 ❤',
     currency: 'dna', effectKind: 'extraHeart', requires: ['r_sel_pairs'], col: 2, row: 0, levels: [
-      { cost: 500, coins: 1500, value: 1, minLevel: 8 },
+      { cost: 1000, coins: 12500, value: 1, minLevel: 8 },
     ] },
 
   // ветка 1 — 🎓 Обучение (за 💰: доход пьедесталов, коллекция, офлайн)
-  { id: 'r_show', glyph: '🎓', title: 'Дрессировка', desc: '+доход пьедесталов за уровень',
+  { id: 'r_show', glyph: '🎓', title: 'Дрессировка', desc: 'Доход котов на пьедесталах выше',
     currency: 'coins', effectKind: 'income', requires: [], col: 0, row: 1, levels: [
-      { cost: 250, value: 0.20, minLevel: 2 },
-      { cost: 700, value: 0.25, minLevel: 4 },
-      { cost: 1800, value: 0.30, minLevel: 6 },
-      { cost: 5000, value: 0.40, minLevel: 9 },
+      { cost: 500, value: 0.20, minLevel: 2, desc: 'Доход котов на пьедесталах +20% (всего +20%)' },
+      { cost: 1000, value: 0.20, minLevel: 4, desc: 'Доход котов на пьедесталах +20% (всего +40%)' },
+      { cost: 2000, value: 0.20, minLevel: 6, desc: 'Доход котов на пьедесталах +20% (всего +60%)' },
+      { cost: 4000, value: 0.20, minLevel: 8, desc: 'Доход котов на пьедесталах +20% (всего +80%)' },
+      { cost: 8000, value: 0.20, minLevel: 10, desc: 'Доход котов на пьедесталах +20% (всего +100%)' },
     ] },
   { id: 'r_collection', glyph: '📖', title: 'Коллекционер', desc: '+0.25 💰/мин за каждую ВЫВЕДЕННУЮ породу за уровень',
     currency: 'coins', effectKind: 'collectionIncome', requires: ['r_show'], col: 1, row: 1, levels: [
@@ -384,11 +387,13 @@ export const RESEARCH: readonly ResearchDef[] = [
       { cost: 2600, value: 0.25, minLevel: 7 },
       { cost: 7000, value: 0.25, minLevel: 10 },
     ] },
-  { id: 'r_offline', glyph: '🌙', title: 'Ночной смотритель', desc: '+120 мин к потолку офлайна за уровень',
+  { id: 'r_offline', glyph: '🌙', title: 'Ночной смотритель', desc: '+60 мин к потолку офлайн-дохода за уровень',
     currency: 'coins', effectKind: 'offline', requires: ['r_collection'], col: 2, row: 1, levels: [
-      { cost: 500, value: 120, minLevel: 4 },
-      { cost: 1500, value: 120, minLevel: 6 },
-      { cost: 4500, value: 120, minLevel: 9 },
+      // база потолка = OFFLINE_CAP_BASE_MIN (120 мин); «всего N» = 120 + накопленное
+      { cost: 1000, value: 60, minLevel: 4, desc: '+60 мин к потолку времени оффлайн дохода (всего 180 минут)' },
+      { cost: 2500, value: 60, minLevel: 6, desc: '+60 мин к потолку времени оффлайн дохода (всего 240 минут)' },
+      { cost: 5000, value: 60, minLevel: 8, desc: '+60 мин к потолку времени оффлайн дохода (всего 300 минут)' },
+      { cost: 10000, value: 60, minLevel: 10, desc: '+60 мин к потолку времени оффлайн дохода (всего 360 минут)' },
     ] },
 
   // ветка 2 — 🤝 Пристройство (за 💰: 💰/🧬 за отданных котов и заказы)
@@ -398,49 +403,49 @@ export const RESEARCH: readonly ResearchDef[] = [
       { cost: 700, value: 0.20, minLevel: 5 },
       { cost: 2400, value: 0.20, minLevel: 8 },
     ] },
-  { id: 'r_adopt_dna', glyph: '🧫', title: 'Биобанк+', desc: '+15% 🧬 за пристройство/лабораторию за уровень',
+  { id: 'r_adopt_dna', glyph: '🧫', title: 'Биобанк+', desc: '+15% 🧬 за сдачу на эксперименты за уровень',
     currency: 'coins', effectKind: 'adoptDna', requires: ['r_adopt_coins'], col: 1, row: 2, levels: [
-      { cost: 350, value: 0.15, minLevel: 3 },
-      { cost: 1100, value: 0.15, minLevel: 6 },
-      { cost: 3600, value: 0.15, minLevel: 9 },
+      { cost: 1000, value: 0.15, minLevel: 3 },
+      { cost: 2500, value: 0.15, minLevel: 6 },
+      { cost: 5000, value: 0.15, minLevel: 9 },
     ] },
-  { id: 'r_order_dna', glyph: '🧑‍🔬', title: 'Клиенты-заводчики', desc: '+25% 🧬 с выполненных заказов за уровень',
-    currency: 'coins', effectKind: 'orderDna', requires: ['r_adopt_dna'], col: 2, row: 2, levels: [
-      { cost: 2000, value: 0.25, minLevel: 7 },
-      { cost: 6500, value: 0.25, minLevel: 10 },
+  { id: 'r_order_dna', glyph: '🧑‍🔬', title: 'Клиенты-заводчики', desc: '+15% награда за заказы (💰 монеты, 🧬 гены, ⭐ опыт) за уровень',
+    currency: 'dna', effectKind: 'orderReward', requires: ['r_adopt_dna'], col: 2, row: 2, levels: [
+      { cost: 200, coins: 2500, value: 0.15, minLevel: 4 },
+      { cost: 400, coins: 5000, value: 0.15, minLevel: 6 },
     ] },
 
   // ветка 3 — 🏠 Хозяйство (за 💰: вместимости, кормушка, корм, автокормушка)
   { id: 'r_nursery', glyph: '🏠', title: 'Пристройка', desc: '+2 места в питомнике за уровень',
     currency: 'coins', effectKind: 'nurseryCap', requires: [], col: 0, row: 3, levels: [
-      { cost: 200, value: 2, minLevel: 2 },
-      { cost: 450, value: 2, minLevel: 3 },
-      { cost: 1000, value: 2, minLevel: 5 },
-      { cost: 2400, value: 2, minLevel: 7 },
-      { cost: 6000, value: 2, minLevel: 9 },
+      { cost: 500, value: 2, minLevel: 2 },
+      { cost: 1000, value: 2, minLevel: 3 },
+      { cost: 2500, value: 2, minLevel: 5 },
+      { cost: 5000, value: 2, minLevel: 7 },
+      { cost: 10000, value: 2, minLevel: 9 },
     ] },
   { id: 'r_shelter', glyph: '🏡', title: 'Приют+', desc: '+3 места в приюте за уровень',
     currency: 'coins', effectKind: 'shelterCap', requires: ['r_nursery'], col: 1, row: 3, levels: [
-      { cost: 150, value: 3, minLevel: 2 },
-      { cost: 380, value: 3, minLevel: 4 },
-      { cost: 900, value: 3, minLevel: 6 },
-      { cost: 2200, value: 3, minLevel: 8 },
-      { cost: 5500, value: 3, minLevel: 10 },
+      { cost: 500, value: 3, minLevel: 2 },
+      { cost: 1500, value: 3, minLevel: 4 },
+      { cost: 3500, value: 3, minLevel: 6 },
+      { cost: 7500, value: 3, minLevel: 8 },
+      { cost: 12500, value: 3, minLevel: 10 },
     ] },
   { id: 'r_food', glyph: '🥫', title: 'Большая кормушка', desc: '+200 к ёмкости кормушки за уровень',
     currency: 'coins', effectKind: 'foodCap', requires: ['r_shelter'], col: 2, row: 3, levels: [
-      { cost: 250, value: 200, minLevel: 3 },
-      { cost: 800, value: 200, minLevel: 5 },
-      { cost: 2500, value: 200, minLevel: 8 },
+      { cost: 1000, value: 200, minLevel: 3 },
+      { cost: 3000, value: 200, minLevel: 5 },
+      { cost: 8000, value: 200, minLevel: 8 },
     ] },
   { id: 'r_feed', glyph: '🍽', title: 'Экономный рацион', desc: 'Коты едят на 15% меньше корма за уровень',
     currency: 'coins', effectKind: 'feedEff', requires: ['r_food'], col: 3, row: 3, levels: [
-      { cost: 400, value: 0.15, minLevel: 4 },
-      { cost: 1400, value: 0.15, minLevel: 7 },
+      { cost: 4000, value: 0.15, minLevel: 4 },
+      { cost: 8000, value: 0.15, minLevel: 7 },
     ] },
   { id: 'r_autofeed', glyph: '🤖', title: 'Автокормушка', desc: 'Сама докупает корм за 💰 при опустошении',
     currency: 'coins', effectKind: 'autoFeed', requires: ['r_feed'], col: 4, row: 3, levels: [
-      { cost: 3000, value: 1, minLevel: 8 },
+      { cost: 15000, value: 1, minLevel: 8 },
     ] },
 
   // ветка 4 — 🔬 Лаборатория (оборудование лабы). Узлы ОТКРЫВАЮТ функции комнат самим
@@ -456,14 +461,13 @@ export const RESEARCH: readonly ResearchDef[] = [
       { cost: 500, value: 1, minLevel: 3 },
     ] },
   // Крио переехала сюда из «Селекции»: 1-й ранг ОТКРЫВАЕТ крио-банк (комнату) + стартовые
-  // капсулы, следующие ранги наращивают вместимость до ~30 (CRYO_BASE_CAP + Σvalue).
+  // капсулы, следующие ранги наращивают вместимость до 24 (CRYO_BASE_CAP 6 + 3×6).
   // id узла НЕ меняем — по нему хранится прогресс в сейве и завязан cryoUnlocked.
   { id: 'r_sel_cryo', glyph: '❄️', title: 'Криогенетика', desc: 'Открывает крио-банк, +6 капсул за уровень',
     currency: 'dna', effectKind: 'cryoCap', requires: ['r_lab_vet'], col: 2, row: 4, levels: [
-      { cost: 300, coins: 800, value: 6, minLevel: 6 },
-      { cost: 550, coins: 1500, value: 6, minLevel: 7 },
-      { cost: 900, coins: 2600, value: 6, minLevel: 8 },
-      { cost: 1400, coins: 4200, value: 6, minLevel: 9 },
+      { cost: 300, coins: 5000, value: 6, minLevel: 6 },
+      { cost: 550, coins: 7500, value: 6, minLevel: 7 },
+      { cost: 900, coins: 10000, value: 6, minLevel: 8 },
     ] },
 ];
 

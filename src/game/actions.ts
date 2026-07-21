@@ -239,8 +239,10 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     const baseHearts = rollKittenHearts(ctx.kinship, rng, E.kinshipSafety(state));
     kitten.maxHearts = E.applyExtraHearts(baseHearts, E.extraHearts(state));
     state.cats.push(kitten);
-    // ⭐ опыт за рождение: по тиру котёнка, с бонусом за первое открытие породы.
-    const rep = C.REP_BIRTH_BY_TIER[kitten.rarityTier] * (newBreed ? C.REP_NEW_BREED_MULT : 1);
+    // ⭐ опыт за рождение: доля от рыночной ценности тира котёнка (гринд дворовых даёт
+    // крохи), с ×множителем за первое открытие породы.
+    const rep = Math.round(C.TIER_MARKET_VALUE[kitten.rarityTier] * C.REP_BIRTH_RATE)
+      * (newBreed ? C.REP_NEW_BREED_MULT : 1);
     addReputation(state, rep);
     // Малыш «на руках» в центре слота: родители рядом, перегородка поднята.
     // Игрок решит в карточке рождения — в питомник, в приют или оставить с роднёй.
@@ -820,13 +822,17 @@ export function claimOrder(
   if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
   if (!matchesOrder(order, cat)) return { ok: false, reason: 'кот в корзине не подходит под заказ' };
 
-  // Исследование «Клиенты-заводчики» (orderDna) добавляет 🧬 к награде заказа.
-  const dnaGain = Math.round(order.reward.dna * (1 + E.researchBonus(state, 'orderDna')));
-  const reward = { ...order.reward, dna: dnaGain };
-  state.coins += order.reward.coins;
+  // Исследование «Клиенты-заводчики» (orderReward) повышает всю награду заказа:
+  // 💰 монеты, 🧬 гены и ⭐ опыт (💎 кристаллы — премиум, не множатся).
+  const mult = 1 + E.researchBonus(state, 'orderReward');
+  const coinGain = Math.round(order.reward.coins * mult);
+  const dnaGain = Math.round(order.reward.dna * mult);
+  const repGain = Math.round(order.reward.reputation * mult);
+  const reward = { ...order.reward, coins: coinGain, dna: dnaGain, reputation: repGain };
+  state.coins += coinGain;
   state.crystals += order.reward.crystals;
   state.dna += dnaGain;
-  addReputation(state, order.reward.reputation); // ⭐ опыт + пересчёт уровня лаборатории
+  addReputation(state, repGain);                  // ⭐ опыт + пересчёт уровня лаборатории
   replaceOrder(state, rng, orderId, now);         // слот сразу получает свежий заказ
   removeCat(state, catId); // сам снимет кота с корзины и с пьедестала
   return { ok: true, reward };

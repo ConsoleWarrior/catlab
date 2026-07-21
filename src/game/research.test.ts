@@ -65,10 +65,10 @@ describe('C: селекция — инбридинг и здоровье', () =>
   it('kinshipSafety = сумма купленных уровней (потолок 0.5)', () => {
     const s = createInitialState(makeRng(1), 0);
     expect(kinshipSafety(s)).toBe(0);
-    s.research = { r_sel_markers: 1 };     // −20%
-    expect(kinshipSafety(s)).toBeCloseTo(0.20);
-    s.research = { r_sel_markers: 2 };     // −20% −15% = −35%
-    expect(kinshipSafety(s)).toBeCloseTo(0.35);
+    s.research = { r_sel_markers: 1 };     // −25%
+    expect(kinshipSafety(s)).toBeCloseTo(0.25);
+    s.research = { r_sel_markers: 2 };     // −25% −25% = −50% (потолок)
+    expect(kinshipSafety(s)).toBeCloseTo(0.50);
   });
 
   it('rollKittenHearts: safety выталкивает бросок к полному здоровью', () => {
@@ -93,22 +93,25 @@ describe('C: селекция — инбридинг и здоровье', () =>
   });
 });
 
-describe('C: пристройство — orderDna', () => {
-  it('«Клиенты-заводчики» повышают 🧬 с заказа', () => {
+describe('C: пристройство — orderReward', () => {
+  it('«Клиенты-заводчики» повышают всю награду заказа: 💰 гены и ⭐ опыт', () => {
     const s = createInitialState(makeRng(1), 0);
     const cat = s.cats[0]!;
     s.orders = [{
       id: 'o1', req: { minRarity: 'common' },
-      reward: { coins: 100, crystals: 0, dna: 20, reputation: 10 },
+      reward: { coins: 100, crystals: 5, dna: 20, reputation: 10 },
       createdAt: 0, expiresAt: 6 * 60 * 60_000,
     }];
     s.orderBasket = cat.id; // заказ закрывают котом из корзины
-    s.research = { r_order_dna: 2 }; // 2×25% = +50% 🧬 с заказов
-    const before = s.dna;
+    s.research = { r_order_dna: 2 }; // 2×15% = +30% к награде (кроме 💎)
+    const coinsBefore = s.coins, dnaBefore = s.dna, crBefore = s.crystals, repBefore = s.reputation;
     const r = claimOrder(s, 'o1', 0, makeRng(2));
     expect(r.ok).toBe(true);
-    expect(s.dna - before).toBe(Math.round(20 * 1.5)); // 30
-    if (r.ok) expect(r.reward.dna).toBe(30);
+    expect(s.coins - coinsBefore).toBe(Math.round(100 * 1.3)); // 130
+    expect(s.dna - dnaBefore).toBe(Math.round(20 * 1.3));      // 26
+    expect(s.reputation - repBefore).toBe(Math.round(10 * 1.3)); // 13 ⭐
+    expect(s.crystals - crBefore).toBe(5);                     // 💎 не множатся
+    if (r.ok) { expect(r.reward.coins).toBe(130); expect(r.reward.dna).toBe(26); }
   });
 });
 
@@ -155,7 +158,7 @@ describe('C: многоуровневые узлы суммируют эффек
   it('researchBonus складывает уровни; offlineCapMin растёт по «Ночному смотрителю»', () => {
     const s = createInitialState(makeRng(1), 0);
     s.research = { r_show: 2, r_offline: 2 };
-    expect(researchBonus(s, 'income')).toBeCloseTo(0.20 + 0.25); // ур.1+ур.2 «Дрессировки»
-    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 240); // 2×120
+    expect(researchBonus(s, 'income')).toBeCloseTo(0.20 + 0.20); // ур.1+ур.2 «Дрессировки»
+    expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN + 120); // 2×60
   });
 });

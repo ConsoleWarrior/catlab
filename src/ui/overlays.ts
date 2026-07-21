@@ -483,7 +483,7 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
   }
 
   const desc = new Text({
-    text: def.desc,
+    text: next?.desc ?? def.desc,   // описание покупаемого уровня (с итогом), иначе общий
     style: {
       fontFamily: FONT, fontSize: 15, fontWeight: '600', fill: COLORS.ink,
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 20,

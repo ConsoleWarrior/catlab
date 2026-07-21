@@ -3,7 +3,7 @@
  * титульная плашка. Возвращает тело (body) для контента комнаты.
  */
 
-import { Container, Graphics, Sprite, Text } from 'pixi.js';
+import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { UiContext } from '../context.js';
 import { COLORS, label, ROOM_ACCENT } from '../theme.js';
 import { roomBg } from '../roomArt.js';
@@ -31,7 +31,8 @@ const TITLE_H = 44;
 // низу экрана. Контент комнат заканчивается на этой высоте — ниже только панель
 // навигации, без кликабельного контента, чтобы навигация не перехватывала тапы
 // по контенту (и наоборот). Держим её минимальной — лишнее место отдано контенту.
-const NAV_RESERVE = 26;
+// Экспортируется: на её толщину ориентируется отступ угловых станций (cornerStation).
+export const NAV_RESERVE = 26;
 
 /**
  * Высота полосы пола (грунта под котами). Адаптивная: на коротких экранах
@@ -210,6 +211,35 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
     titleH: TITLE_H,
     setTitleBadge,
   };
+}
+
+/**
+ * Прямоугольник «станции-короба» в нижнем углу комнаты (drag-цель: ветеринар,
+ * криокапсула, лаборатория «на эксперименты», пристройство «в добрые руки»).
+ * Короб жмётся в угол с отступом ≈ толщине полосы навигации (NAV_RESERVE), поэтому
+ * все станции стоят единообразно по углам, над навигацией. Габарит короба — как был
+ * (0.15·w × 0.95 от ширины), меняется только привязка к углу.
+ */
+export function cornerStation(w: number, h: number, side: 'left' | 'right'): Rectangle {
+  const sw = w * 0.15;
+  const sh = sw * 0.95;
+  const m = NAV_RESERVE;
+  const x = side === 'left' ? m : w - m - sw;
+  const y = h - m - sh;
+  return new Rectangle(x, y, sw, sh);
+}
+
+/** Плашка-подпись станции (пилюля с текстом над коробом-станцией). */
+export function stationBadge(cx: number, topY: number, text: string): Container {
+  const tag = label(text, 13, COLORS.ink, '800');
+  const pillBg = new Graphics();
+  const pw = tag.width + 18;
+  pillBg.roundRect(-pw / 2, -14, pw, 26, 13).fill({ color: COLORS.hud, alpha: 0.9 });
+  pillBg.roundRect(-pw / 2, -14, pw, 26, 13).stroke({ width: 2, color: COLORS.cardEdge });
+  const badge = new Container();
+  badge.addChild(pillBg, tag);
+  badge.position.set(cx, topY - 8);
+  return badge;
 }
 
 /** Сетка позиций для карточек котов: квадратные клетки в contentW×contentH. */

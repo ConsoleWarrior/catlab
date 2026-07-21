@@ -15,11 +15,10 @@ import {
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorPlane } from './shell.js';
+import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 import { catArtTexture } from '../catTextures.js';
-import { decorZone } from '../decorArt.js';
 
 /** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
 function fmtLeft(ms: number): string {
@@ -31,58 +30,59 @@ function fmtLeft(ms: number): string {
 export function createShelter(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'shelter', '🏠 Приют');
 
-  // Зона пристройства — переноска у двери (декор с role:'adopt'). Перетащил кота
-  // сюда → подтверждение «Отдать в добрые руки?» (см. tryDropCat). Над переноской
-  // — лёгкая подпись-подсказка, чтобы зона читалась.
-  const adoptZone = decorZone('shelter', 'adopt', ctx.roomW, ctx.roomH);
-  if (adoptZone) {
-    const tag = label('🤝 в добрые руки', 13, COLORS.ink, '800');
-    const pillBg = new Graphics();
-    const pw = tag.width + 18;
-    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).fill({ color: COLORS.hud, alpha: 0.9 });
-    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).stroke({ width: 2, color: COLORS.cardEdge });
-    const badge = new Container();
-    badge.addChild(pillBg, tag);
-    badge.position.set(adoptZone.x + adoptZone.width / 2, adoptZone.y - 6);
-    shell.container.addChild(badge);
-  }
+  // Две drag-станции по нижним углам (общий образец cornerStation — короб жмётся в
+  // угол с отступом ≈ полосе навигации, как ветеринар/криокапсула в Питомнике):
+  // лаборатория «на эксперименты» в ЛЕВОМ углу, пристройство «в добрые руки» в ПРАВОМ.
+  // Перетащил кота на станцию → соответствующий диалог (см. tryDropCat).
 
-  // Лабораторный слот — плейсхолдер-станция у левой стены (спрайт будет позже).
-  // Перетащил кота сюда → подтверждение сдачи «на эксперименты» за 🧬 (sendToLab).
-  // Станция открывается ПОКУПКОЙ узла «На эксперименты» (Генолаб → Улучшения → Лаборатория) —
-  // до этого показываем замок.
-  const labW = ctx.roomW * 0.15;
-  const labH = labW * 0.95;
-  const labCx = ctx.roomW * 0.13;
-  const labCy = ctx.roomH * 0.86; // низ-центр (как у переноски)
-  const labZone = new Rectangle(labCx - labW / 2, labCy - labH, labW, labH);
-  // Слой станции пересобираем в refresh() — замок должен сняться, когда игрок дорастёт
-  // до нужного уровня (уровень меняется по ходу игры, комната при этом не пересоздаётся).
+  // Лаборатория — левый нижний угол. Перетащил кота → сдача «на эксперименты» за 🧬
+  // (sendToLab). Станция открывается ПОКУПКОЙ узла «На эксперименты» (Генолаб →
+  // Улучшения → Лаборатория) — до этого замок. Слой пересобираем в refresh() (замок
+  // должен сняться, когда игрок дорастёт до нужного уровня, без пересоздания комнаты).
+  const labZone = cornerStation(ctx.roomW, ctx.roomH, 'left');
+  const labCx = labZone.x + labZone.width / 2;
   const labLayer = new Container();
   shell.container.addChild(labLayer);
 
   function refreshLabStation(): void {
     labLayer.removeChildren();
     const unlocked = isUnlocked(ctx.state, 'labStation');
+    const { x, y, width: sw, height: sh } = labZone;
     const box = new Graphics();
     // короб-станция (заглушка): скруглённый бокс + «столешница»
-    box.roundRect(labZone.x, labZone.y, labW, labH, 14)
+    box.roundRect(x, y, sw, sh, 14)
       .fill({ color: unlocked ? 0x2f7d78 : 0x6b7370, alpha: unlocked ? 0.85 : 0.6 })
       .stroke({ width: 3, color: unlocked ? 0x1f5c58 : 0x4a504e });
-    box.roundRect(labZone.x + labW * 0.12, labZone.y + labH * 0.16, labW * 0.76, labH * 0.4, 8)
+    box.roundRect(x + sw * 0.12, y + sh * 0.16, sw * 0.76, sh * 0.4, 8)
       .fill({ color: 0xbfeae6, alpha: unlocked ? 0.55 : 0.3 });
-    const flask = label(unlocked ? '🧪' : '🔒', labW * 0.42, COLORS.ink, '700');
-    flask.position.set(labCx, labZone.y + labH * 0.56);
-    const tag = label(unlocked ? '🧪 на эксперименты' : '🔒 открой в Генолабе',
-      13, COLORS.ink, '800');
-    const pillBg = new Graphics();
-    const pw = tag.width + 18;
-    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).fill({ color: COLORS.hud, alpha: 0.9 });
-    pillBg.roundRect(-pw / 2, -14, pw, 26, 13).stroke({ width: 2, color: COLORS.cardEdge });
-    const badge = new Container();
-    badge.addChild(pillBg, tag);
-    badge.position.set(labCx, labZone.y - 8);
+    const flask = label(unlocked ? '🧪' : '🔒', sw * 0.42, COLORS.ink, '700');
+    flask.position.set(labCx, y + sh * 0.56);
+    const badge = stationBadge(labCx, y, unlocked ? '🧪 на эксперименты' : '🔒 открой в Генолабе');
     labLayer.addChild(box, flask, badge);
+  }
+
+  // Пристройство «в добрые руки» — правый нижний угол (заменила переноску-декор).
+  // Всегда открыта: пристройство доступно с начала игры. Перетащил кота → диалог
+  // «Отдать котика в добрые руки?» (см. tryDropCat → openAdoptConfirm).
+  const adoptZone = cornerStation(ctx.roomW, ctx.roomH, 'right');
+  const adoptCx = adoptZone.x + adoptZone.width / 2;
+  const adoptLayer = new Container();
+  shell.container.addChild(adoptLayer);
+
+  function refreshAdoptStation(): void {
+    adoptLayer.removeChildren();
+    const { x, y, width: sw, height: sh } = adoptZone;
+    const box = new Graphics();
+    // тёплый короб-станция + светлая «столешница» (в тон награды 💰)
+    box.roundRect(x, y, sw, sh, 14)
+      .fill({ color: 0xf1c76b, alpha: 0.9 })
+      .stroke({ width: 3, color: 0xc8912f });
+    box.roundRect(x + sw * 0.12, y + sh * 0.16, sw * 0.76, sh * 0.4, 8)
+      .fill({ color: 0xfff3d9, alpha: 0.7 });
+    const icon = label('🤝', sw * 0.42, COLORS.ink, '700');
+    icon.position.set(adoptCx, y + sh * 0.56);
+    const badge = stationBadge(adoptCx, y, '🤝 в добрые руки');
+    adoptLayer.addChild(box, icon, badge);
   }
 
   // Массовые кнопки вверху справа: «Раздать всех» / «В лабораторию всех» — по
@@ -241,8 +241,7 @@ export function createShelter(ctx: UiContext): Room {
       ctx.openLabConfirm(cat);     // «Сдать в лабораторию?» (Да → sendToLab)
       return true;
     }
-    const zone = decorZone('shelter', 'adopt', ctx.roomW, ctx.roomH);
-    if (zone && zone.contains(lp.x, lp.y)) {
+    if (adoptZone.contains(lp.x, lp.y)) {
       ctx.commit();
       ctx.openAdoptConfirm(cat);   // «Отдать котика в добрые руки?» (Да → adoptCat)
       return true;
@@ -260,6 +259,7 @@ export function createShelter(ctx: UiContext): Room {
     const titleW = shell.setTitleBadge(`🐱 ${present.length}/${cap}`);
 
     refreshLabStation(); // замок станции снимается, когда уровень дорастает
+    refreshAdoptStation(); // станция пристройства (правый угол) — всегда открыта
     refreshBulkButtons(); // суммы/замок/доступность кнопок «…всех»
     refreshOrdersDesk(titleW); // доска заказов: кнопка с таймером + корзина
     floor.refresh();

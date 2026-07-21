@@ -11,7 +11,7 @@ import * as C from './config.js';
 import type { Cat, GameState } from './index.js';
 
 /** Состояние с открытым крио-банком (ранг узла `rank`) + один взрослый кот в питомнике. */
-function setup(seed = 1, rank = 4): { s: GameState; cat: Cat } {
+function setup(seed = 1, rank = 3): { s: GameState; cat: Cat } {
   const s = createInitialState(makeRng(seed), 0);
   s.level = 10;
   s.dna = 100_000;

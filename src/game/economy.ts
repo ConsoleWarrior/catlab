@@ -109,7 +109,9 @@ export function researchBonus(state: GameState, kind: C.ResearchEffectKind): num
   let sum = 0;
   for (const def of C.RESEARCH) {
     if (def.effectKind !== kind) continue;
-    const owned = researchLevel(state, def.id);
+    // clamp: сейв мог сохранить уровень выше нынешнего числа уровней (если узел
+    // ужали в балансе) — берём не больше, чем реально есть уровней, чтобы не упасть.
+    const owned = Math.min(researchLevel(state, def.id), def.levels.length);
     for (let i = 0; i < owned; i++) sum += def.levels[i]!.value;
   }
   return sum;
@@ -477,15 +479,16 @@ export function catMarketValue(cat: Cat): number {
 
 /**
  * Награда за пристройство «в добрые руки»: доля рыночной цены (в разы меньше
- * продажи по заказу) + немного 🧬. Учитывает «Связи», «Биобанк» и исследования.
+ * продажи по заказу) + немного 🧬. Только 💰 усиливается «Добрыми руками»
+ * (adoptCoins); 🧬 здесь базовое — «Биобанк+» (adoptDna) теперь усиливает 🧬
+ * ТОЛЬКО за сдачу на эксперименты (labReward), не за раздачу в добрые руки.
  */
 export function adoptReward(state: GameState, cat: Cat): { coins: number; dna: number } {
   const market = catMarketValue(cat);
   return {
     coins: Math.round(market * C.ADOPT_COIN_FRACTION
       * (1 + researchBonus(state, 'adoptCoins'))),
-    dna: Math.max(1, Math.round(C.TIER_VALUE[cat.rarityTier].dna * C.ADOPT_DNA_FRACTION
-      * (1 + researchBonus(state, 'adoptDna')))),
+    dna: Math.max(1, Math.round(market * C.ADOPT_DNA_RATE)),
   };
 }
 

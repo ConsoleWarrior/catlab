@@ -44,11 +44,11 @@ const remembered = {
 
 /** Метаданные веток дерева исследований (ряд → заголовок + валюта прокачки). */
 const BRANCHES: { row: number; label: string }[] = [
+  { row: 4, label: '🔬 Лаборатория' },
+  { row: 3, label: '🏠 Хозяйство · 💰' },
   { row: 0, label: '🧪 Селекция · 🧬' },
   { row: 1, label: '🎓 Обучение · 💰' },
   { row: 2, label: '🤝 Пристройство · 💰' },
-  { row: 3, label: '🏠 Хозяйство · 💰' },
-  { row: 4, label: '🔬 Лаборатория' },
 ];
 
 /** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
@@ -294,7 +294,11 @@ export function createGenolab(ctx: UiContext): Room {
     title.position.set(0, -nh / 2 + nh * 0.19);
     c.addChild(title);
 
-    const desc = wrapped(def.desc, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600', nw - 14);
+    // если у уровней есть своё описание — показываем текст СЛЕДУЮЩЕГО покупаемого
+    // уровня (с накопленным итогом), а на максимуме — последнего; иначе общий desc.
+    const descIdx = Math.min(owned, total - 1);
+    const descText = def.levels[descIdx]?.desc ?? def.desc;
+    const desc = wrapped(descText, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600', nw - 14);
     desc.position.set(0, -nh / 2 + nh * 0.47);
     c.addChild(desc);
 

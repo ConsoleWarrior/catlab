@@ -385,7 +385,7 @@ describe('дерево исследований', () => {
     expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);   // ур.2 того же узла
     expect(s.research.r_sel_markers).toBe(2);
     expect(unlockResearch(s, 'r_sel_pairs').ok).toBe(true);     // пререквизит есть (≥1 ур.)
-    expect(s.dna).toBe(1000 - 60 - 140 - 80);                   // ур1+ур2 «Маркеров» + ур1 «Подбора»
+    expect(s.dna).toBe(1000 - 60 - 300 - 200);                  // ур1+ур2 «Маркеров» + ур1 «Подбора»
     expect(unlockResearch(s, 'bogus').ok).toBe(false);
   });
 
