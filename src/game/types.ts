@@ -133,5 +133,6 @@ export interface GameState {
   lastHealAdAt: number;             // факт последнего 📺-лечения в клинике (кулдауна нет)
   lastAnalyzeAdAt: number;          // глобальный кулдаун 📺-варианта Генетического анализа
   lastFreezeAdAt: number;           // глобальный кулдаун 📺-варианта заморозки в крио-банке
+  lastBoostAdAt: number;            // глобальный кулдаун 📺-зарядки усилителя вязки (один на все три)
   nextId: number;                   // счётчик уникальных id
 }

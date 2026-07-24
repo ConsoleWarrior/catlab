@@ -244,7 +244,7 @@ describe('исследование рецептов (этап D)', () => {
     s.crystals = 5;
     const r = speedUpRecipeResearch(s, 1000);
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.crystals).toBe(5); // 1 💎/мин × 5 мин
+    if (r.ok) expect(r.crystals).toBe(Math.round(5 * C.RECIPE_SPEEDUP_CRYSTAL_PER_MIN)); // 0.5 💎/мин × 5 мин = 3
     expect(s.recipeResearch.readyAt).toBe(1000);
   });
 });

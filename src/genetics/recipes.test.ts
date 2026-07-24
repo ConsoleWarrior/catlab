@@ -4,6 +4,7 @@ import { BREEDS, BREED_BY_KEY, tierOfBreed, TIER_LEVEL } from './catalog.js';
 import type { BreedBoosts } from './catalog.js';
 import {
   RECIPES, recipesFor, recipeMatches, recipeChance, resolveBreeding, isPedigreeRecipe,
+  tierUpTarget, boostCanFire,
 } from './recipes.js';
 import type { BreedingContext, BreedSide, KinshipLevel, Recipe } from './recipes.js';
 import { carriedTraitSet, TRAIT_BY_ID } from './traits.js';
@@ -255,6 +256,25 @@ describe('resolveBreeding (разрешение вязки)', () => {
       expect(k).toBe('burmese');
       expect(used.tierUp).toBe(true);
     }
+  });
+
+  it('tierUpTarget называет цель гарантии Активатора (превью 🔮 / чипы)', () => {
+    expect(tierUpTarget(ctx('siamese', 'british_shorthair'))).toBe('burmese'); // T3 > T2
+    expect(tierUpTarget(ctx('persian', 'british_shorthair'))).toBeUndefined(); // рецептов тира выше нет
+  });
+
+  it('boostCanFire: «выстрелит ли» активный усилитель на паре (подсказка ⚡)', () => {
+    // 🔼 — есть/нет цели для гарантии (та же логика, что tierUpTarget)
+    expect(boostCanFire('tierUp', ctx('siamese', 'british_shorthair'))).toBe(true);
+    expect(boostCanFire('tierUp', ctx('persian', 'british_shorthair'))).toBe(false);
+    // 🛡 — фолбэк способен уронить тир: разные породы (младший родитель/метис)…
+    expect(boostCanFire('noDown', ctx('ragdoll', 'bombay'))).toBe(true);
+    // …одинаковая небазовая порода — риск «метиса-сюрприза»; дворовым терять нечего
+    expect(boostCanFire('noDown', ctx('persian', 'persian'))).toBe(true);
+    expect(boostCanFire('noDown', ctx('moggie', 'moggie'))).toBe(false);
+    expect(boostCanFire('noDown', ctx('moggie', 'domestic_shorthair'))).toBe(false);
+    // 🍀 — есть прямой рецепт, которому достанется ×2 (инбридинг не занял множитель)
+    expect(boostCanFire('luckyUp', ctx('siamese', 'british_shorthair'))).toBe(true);
   });
 
   it('🛡 Стабилизатор: котёнок не ниже старшего родителя', () => {

@@ -23,6 +23,11 @@ export interface Shell {
    * Создаётся лениво; плашка расширяется под название + счётчик. Возвращает
    * итоговую ширину плашки — чтобы пристроить элементы справа от неё (чипы). */
   setTitleBadge: (text: string) => number;
+  /** Слой декора (интерьерные ИИ-спрайты, координаты нормализованы к комнате).
+   * Каждый спрайт несёт zIndex = линия пола · 1000; комната может включить
+   * sortableChildren и добавить СЮДА свои объекты той же системы координат
+   * (пьедесталы выставки питомника) — перекрытия решаются по глубине. */
+  decor: Container;
 }
 
 const PAD = 18;
@@ -161,7 +166,8 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
 
   // Декор комнаты (статичные интерьерные спрайты из decorArt) — над фоном/стенами,
   // но под титульной плашкой, телом комнаты и котами (их добавляют выше по слоям).
-  container.addChild(buildDecor(id, w, h));
+  const decor = buildDecor(id, w, h);
+  container.addChild(decor);
 
   // титульная плашка — вдвое короче (название + запас), справа освобождаем место
   // под кнопки комнаты (напр. чипы усилителей у Инкубатора).
@@ -210,6 +216,7 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
     titleW: bw,
     titleH: TITLE_H,
     setTitleBadge,
+    decor,
   };
 }
 

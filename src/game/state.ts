@@ -40,6 +40,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastHealAdAt: 0,     // 📺-лечение в клинике доступно всегда (кулдауна нет)
     lastAnalyzeAdAt: 0,  // 📺-вариант Генетического анализа сразу доступен
     lastFreezeAdAt: 0,   // 📺-вариант заморозки сразу доступен
+    lastBoostAdAt: 0,    // 📺-зарядка усилителя сразу доступна
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -108,6 +109,7 @@ export function deserialize(json: string): GameState {
   }
   if (typeof data.lastAnalyzeAdAt !== 'number') data.lastAnalyzeAdAt = 0;
   if (typeof data.lastFreezeAdAt !== 'number') data.lastFreezeAdAt = 0;
+  if (typeof data.lastBoostAdAt !== 'number') data.lastBoostAdAt = 0;
   // Заказы (v9): у каждого свой таймер жизни (refillAt→expiresAt) + orderAdRefreshAt.
   // Старые сейвы и так сбрасываются загрузчиком по SAVE_VERSION; здесь — мягкая страховка.
   if (!Array.isArray(data.orders)) data.orders = [];

@@ -10,7 +10,7 @@ import * as C from './config.js';
 import * as E from './economy.js';
 import { matchesOrder, replaceOrder } from './orders.js';
 import { attachHiddenPedigree, buildPedigree, revealPedigree, pedigreeHasFog } from './pedigree.js';
-import { buildBreedingContext, rollKittenHearts } from './kinship.js';
+import { buildBreedingContext, rollKittenHearts, softenKinship } from './kinship.js';
 import { researchableRecipes } from './knowledge.js';
 
 export type Result<T = unknown> = ({ ok: true } & T) | { ok: false; reason: string };
@@ -236,7 +236,10 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     // Цена инбридинга: котёнок может родиться с урезанным запасом сердец (0 —
     // «Бесплодный», тупик). «Генетические маркеры» снижают риск, «Витамины роста»
     // дают +1 ❤ (но бесплодных 0 ❤ не спасают — честный тупик).
-    const baseHearts = rollKittenHearts(ctx.kinship, rng, E.kinshipSafety(state));
+    // 🛡-перк: пока Стабилизатор активен, бросок ❤ идёт по родству «на ступень мягче»
+    // (заряд перк не тратит — бонус активности; рецептный множитель от настоящего родства).
+    const heartsKinship = E.activeBoostId(state) === 'noDown' ? softenKinship(ctx.kinship) : ctx.kinship;
+    const baseHearts = rollKittenHearts(heartsKinship, rng, E.kinshipSafety(state));
     kitten.maxHearts = E.applyExtraHearts(baseHearts, E.extraHearts(state));
     state.cats.push(kitten);
     // ⭐ опыт за рождение: доля от рыночной ценности тира котёнка (гринд дворовых даёт
@@ -400,7 +403,7 @@ export function speedUpBreeding(state: GameState, slotIndex: number, now: number
   if (!slot) return { ok: false, reason: 'нет такого слота' };
   if (slot.readyAt === 0) return { ok: false, reason: 'слот не занят вязкой' };
   const remaining = Math.max(0, slot.readyAt - now);
-  const cost = E.speedUpCost(remaining);
+  const cost = E.speedUpCost(remaining, C.BREED_SPEEDUP_CRYSTAL_PER_MIN);
   if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
   slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
   return { ok: true, crystals: cost };
@@ -421,7 +424,7 @@ export function speedUpGrowth(state: GameState, catId: string, now: number): Res
   if (!cat) return { ok: false, reason: 'кот не найден' };
   const remaining = E.growthRemainingMs(cat, now);
   if (remaining <= 0) return { ok: true, crystals: 0 };
-  const cost = E.speedUpCost(remaining);
+  const cost = E.speedUpCost(remaining, C.GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
   if (!spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
   cat.bornAt = now - E.effGrowthMs(cat); // возраст ≥ срок → сразу взрослый
   return { ok: true, crystals: cost };
@@ -717,7 +720,7 @@ export function finishRecipeResearch(
 export function speedUpRecipeResearch(state: GameState, now: number): Result<{ crystals: number }> {
   const rr = state.recipeResearch;
   if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
-  const cost = E.speedUpCost(Math.max(0, rr.readyAt - now));
+  const cost = E.speedUpCost(Math.max(0, rr.readyAt - now), C.RECIPE_SPEEDUP_CRYSTAL_PER_MIN);
   if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
   rr.readyAt = now; // готово немедленно — finishRecipeResearch заберёт рецепт
   return { ok: true, crystals: cost };
@@ -746,6 +749,28 @@ export function buyBoost(state: GameState, id: string, currency: Currency = 'dna
   if (!spend(state, currency, cost)) {
     return { ok: false, reason: currency === 'crystals' ? 'не хватает кристаллов' : 'не хватает ДНК' };
   }
+  state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
+  if (!E.activeBoostId(state)) state.activeBoost = def.id; // ничего не активно → активируем этот
+  return { ok: true };
+}
+
+/**
+ * 📺-зарядка усилителя: +1 заряд бесплатно за просмотр рекламы. Доступна только
+ * усилителям с `adCharge` (🛡/🍀) — Активатор слишком силён для бесплатного крана и
+ * заряжается только за валюту. Кулдаун глобальный (BOOST_AD_COOLDOWN_MS — один на
+ * оба, иначе двумя показами подряд собирается комплект). Как и в buyBoost: если
+ * сейчас ничего не активно — заряженный усилитель заодно становится активным.
+ */
+export function adChargeBoost(state: GameState, id: string, now: number): Result {
+  if (!E.isUnlocked(state, 'engineering')) return { ok: false, reason: 'locked' };
+  const def = C.BOOSTS.find((b) => b.id === id);
+  if (!def) return { ok: false, reason: 'нет такого усилителя' };
+  if (!def.adCharge) return { ok: false, reason: 'заряжается только за валюту' };
+  // lastBoostAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
+  if (state.lastBoostAdAt > 0 && now - state.lastBoostAdAt < C.BOOST_AD_COOLDOWN_MS) {
+    return { ok: false, reason: 'реклама ещё не готова' };
+  }
+  state.lastBoostAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
   state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
   if (!E.activeBoostId(state)) state.activeBoost = def.id; // ничего не активно → активируем этот
   return { ok: true };

@@ -67,6 +67,19 @@ export function kinshipLevel(mother: Cat, father: Cat): KinshipLevel {
 }
 
 /**
+ * Уровень родства «на ступень мягче» — перк активного 🛡 Стабилизатора («стабилизирует
+ * геном»): бросок сердец котёнка считается по смягчённому уровню, а множитель
+ * родословных рецептов остаётся от настоящего. Заряд перк НЕ тратит — это бонус
+ * активности (связка с инбридинг-стратегией, где 🍀 бесполезен).
+ */
+export function softenKinship(k: KinshipLevel): KinshipLevel {
+  const soft: Record<KinshipLevel, KinshipLevel> = {
+    none: 'none', moderate: 'none', high: 'moderate', critical: 'high',
+  };
+  return soft[k];
+}
+
+/**
  * Бросок здоровья новорождённого по уровню родства родителей: интервалы одного
  * броска из C.KINSHIP_HEALTH, иначе полный запас MAX_HEARTS. 0 — «Бесплодный».
  * `safety` (0..0.5, исследование «Генетические маркеры») пропорционально уменьшает

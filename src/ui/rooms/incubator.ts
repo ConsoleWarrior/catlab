@@ -8,7 +8,9 @@
  *
  * Визуал места вязки — мини-комната с перегородкой по центру. В покое перегородка
  * опущена, коты стоят по разные стороны. По кнопке «Свести» перегородка
- * поднимается, коты сходятся к центру и трутся боками, вверх всплывают сердечки.
+ * поднимается, коты сходятся к центру, встают рядышком и ласково тянутся друг к
+ * другу мордочками (медленное покачивание навстречу + мягкое «дыхание»), вверх
+ * всплывают сердечки. Подача намеренно «романтическая», без ритмичной тряски.
  */
 
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
@@ -18,14 +20,16 @@ import {
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
   buyUpgrade, upgradeCost, upgradeMaxed,
   maxSlotsForLevel, nextSlotUnlockLevel, isUnlocked, unlockLevelOf,
-  kinshipLevel, KINSHIP_RU,
-  speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS,
+  kinshipLevel, KINSHIP_RU, buildBreedingContext,
+  speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS, BREED_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
+import { boostCanFire } from '../../genetics/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel } from '../theme.js';
 import { catSprite, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { decorTexture } from '../decorArt.js';
+import { sfxMeow } from '../sound.js';
 import { darken } from '../../render/palette.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
@@ -95,11 +99,13 @@ export function createIncubator(ctx: UiContext): Room {
   const boostBar = new Container();
   shell.titleBar.addChild(boostBar);
   let boostGlows: { halo: Graphics; phase: number }[] = [];
+  // мигающие ярлыки «⚡ готов» (активный буст реально выстрелит на паре в слоте)
+  let readyPulses: { view: Container; phase: number }[] = [];
 
   // Чип усилителя — кнопка с ИИ-текстурой (boost_<id>.webp) и читаемым названием.
   const CHIP_W = 118, CHIP_H = 38;
 
-  function boostChip(def: BoostDef, activeId?: string): Container {
+  function boostChip(def: BoostDef, activeId?: string, fireReady = false): Container {
     const c = new Container();
     const charges = boostCharges(ctx.state, def.id); // склад зарядов (можно копить любых)
     const active = activeId === def.id;              // активен ИМЕННО этот (сработает в вязке)
@@ -166,6 +172,21 @@ export function createIncubator(ctx: UiContext): Room {
       on.position.set(-w / 2 + 9, -h / 2 + 9);
       c.addChild(on);
     }
+    // «⚡ готов»: активный усилитель реально сработает на одной из пар в слотах —
+    // мигающий ярлык под чипом (игрок учится понимать механику без вики).
+    if (active && fireReady) {
+      const pw = 66, ph = 15;
+      const pill = new Container();
+      const bgP = new Graphics();
+      bgP.roundRect(-pw / 2, -ph / 2, pw, ph, ph / 2)
+        .fill({ color: accent })
+        .stroke({ width: 1.5, color: 0xffffff, alpha: 0.9 });
+      const t = label('⚡ готов', 10, 0xffffff, '800');
+      pill.addChild(bgP, t);
+      pill.position.set(0, h / 2 + 1);
+      c.addChild(pill);
+      readyPulses.push({ view: pill, phase: Math.random() * 6 });
+    }
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
@@ -177,6 +198,7 @@ export function createIncubator(ctx: UiContext): Room {
   function renderBoostChips(plateW: number): void {
     boostBar.removeChildren();
     boostGlows = [];
+    readyPulses = [];
     const gap = 8;
     // чипы стоят справа от плашки названия, вплотную (boostBar — в локальных
     // координатах titleBar; plateW — ширина плашки со счётчиком слотов).
@@ -190,8 +212,18 @@ export function createIncubator(ctx: UiContext): Room {
       return;
     }
     const activeId = activeBoostId(ctx.state); // единовременно активен только один усилитель
+    // «⚡ готов»: активный усилитель реально выстрелит на одной из пар в слотах —
+    // поставленных или уже в вязке (буст срабатывает при рождении).
+    let fireReady = false;
+    if (activeId) {
+      for (const slot of ctx.state.slots) {
+        const m = slot.motherId ? ctx.state.cats.find((c) => c.id === slot.motherId) : undefined;
+        const f = slot.fatherId ? ctx.state.cats.find((c) => c.id === slot.fatherId) : undefined;
+        if (m && f && boostCanFire(activeId, buildBreedingContext(m, f))) { fireReady = true; break; }
+      }
+    }
     BOOSTS.forEach((def, i) => {
-      const chip = boostChip(def, activeId);
+      const chip = boostChip(def, activeId, fireReady);
       chip.position.set(firstCx + i * (CHIP_W + gap), shell.titleH / 2);
       boostBar.addChild(chip);
     });
@@ -296,13 +328,14 @@ export function createIncubator(ctx: UiContext): Room {
       chamber.addChild(bg);
     }
 
-    // позиции котов: по сторонам (покой) ↔ к центру, чуть внахлёст (вязка).
-    // Самец (Отец) — слева, самка (Мать) — справа.
+    // позиции котов: по сторонам (покой) ↔ рядышком у центра (вязка).
+    // Самец (Отец) — слева, самка (Мать) — справа; при встрече стоят бок о бок,
+    // повёрнутые друг к другу, и тянутся мордочками (без «один за другим»).
     const dadHomeX = cx + cw * 0.27;
     const momHomeX = cx + cw * 0.73;
-    const rub = catH * 0.16;
-    const dadMeetX = centerX - rub;
-    const momMeetX = centerX + rub;
+    const lean = catH * 0.2;             // насколько отходят от центра при встрече
+    const dadMeetX = centerX - lean;
+    const momMeetX = centerX + lean;
 
     // подписи ролей сторон: куда нести самца, куда самку. Под ними — белые
     // плашки, чтобы надписи «Отец/Мать» читались на любом ИИ-фоне бокса.
@@ -335,7 +368,7 @@ export function createIncubator(ctx: UiContext): Room {
       sprite.eventMode = 'static';
       sprite.cursor = busy ? 'pointer' : 'grab';
       if (busy) {
-        sprite.on('pointertap', () => ctx.openCatMenu(cat));
+        sprite.on('pointertap', () => { sfxMeow(); ctx.openCatMenu(cat); });
       } else {
         sprite.on('pointerdown', (e) => ctx.startGrab({
           cat,
@@ -352,8 +385,8 @@ export function createIncubator(ctx: UiContext): Room {
     let mom: Sprite | undefined, dad: Sprite | undefined;
     let momGlow: Sprite | undefined, dadGlow: Sprite | undefined;
     let momBase = 1, dadBase = 1;
-    // Отца добавляем первым — он стоит ЗА самкой, поэтому во время вязки
-    // (когда коты сходятся внахлёст) спрайт отца оказывается сзади.
+    // Коты встают друг напротив друга. Отца добавляем первым (он рисуется под
+    // самкой) — при лёгком касании мордочек нахлёст так выглядит аккуратнее.
     if (dadCat) {
       dad = catSprite(ctx.app, dadCat, catH);
       dadBase = Math.abs(dad.scale.x);
@@ -485,7 +518,7 @@ export function createIncubator(ctx: UiContext): Room {
       // (см. game.update → collectReady) с эффектом-салютом. Зато есть ускорение:
       // реклама (−N мин, бесплатно, повторяемо) и кристаллы (мгновенно, цена ∝ остатку).
       const remain0 = Math.max(0, slot.readyAt - now);
-      const cost = speedUpCost(remain0);
+      const cost = speedUpCost(remain0, BREED_SPEEDUP_CRYSTAL_PER_MIN);
       const skipMin = Math.round(AD_SKIP_MS / 60_000);
       const bw2 = Math.round((rw - 8) * 0.42);
       const yy = barY + 50;
@@ -705,6 +738,11 @@ export function createIncubator(ctx: UiContext): Room {
       bg.phase += dt;
       bg.halo.alpha = 0.38 + 0.56 * (0.5 + 0.5 * Math.sin(bg.phase * 4));
     }
+    // мигание ярлыка «⚡ готов» — заметнее ровного свечения
+    for (const rp of readyPulses) {
+      rp.phase += dt;
+      rp.view.alpha = 0.55 + 0.45 * Math.sin(rp.phase * 5);
+    }
 
     for (const ls of live) {
       ls.phase += dt;
@@ -721,24 +759,31 @@ export function createIncubator(ctx: UiContext): Room {
       }
 
       if (ls.busy && ls.mom && ls.dad) {
-        // перегородка поднимается, коты сходятся
+        // перегородка поднимается, коты сходятся к центру
         const a = easeOut(clamp01((now - ls.startedAt) / APPROACH_MS));
         ls.partition.y = -a * ls.partRaise;
         ls.partition.alpha = 1 - a;
         const momX = lerp(ls.momHomeX, ls.momMeetX, a);
         const dadX = lerp(ls.dadHomeX, ls.dadMeetX, a);
-        // «трутся»: лёгкое покачивание навстречу, когда уже рядом
-        const s = Math.sin(ls.phase * 7);
-        ls.mom.x = momX + s * ls.catH * 0.05 * a;
-        ls.dad.x = dadX - s * ls.catH * 0.05 * a;
-        ls.mom.scale.y = ls.momBase * (1 + s * 0.04 * a);
-        ls.dad.scale.y = ls.dadBase * (1 - s * 0.04 * a);
-        ls.mom.rotation = s * 0.06 * a;
-        ls.dad.rotation = -s * 0.06 * a;
-        // сердечки, когда коты сошлись
-        if (a > 0.7) {
+        // Романтическая подача: коты стоят рядышком и ласково тянутся друг к другу
+        // мордочками. Медленное покачивание навстречу + мягкое «дыхание» — никакой
+        // ритмичной тряски, чтобы сцена читалась как нежность, а не как садка.
+        const nuzzle = (0.5 + 0.5 * Math.sin(ls.phase * 1.7)) * a; // 0..1, плавно
+        const breath = 1 + Math.sin(ls.phase * 2.1) * 0.03;
+        ls.mom.x = momX - nuzzle * ls.catH * 0.05;   // мягко тянется к центру
+        ls.dad.x = dadX + nuzzle * ls.catH * 0.05;
+        ls.mom.scale.y = ls.momBase * breath;
+        ls.dad.scale.y = ls.dadBase * breath;
+        // головы чуть склоняются друг к другу — «трутся мордочками»
+        ls.mom.rotation = -nuzzle * 0.09;
+        ls.dad.rotation = nuzzle * 0.09;
+        // сердечки — весь процесс, гуще в момент, когда прижались
+        if (a > 0.55) {
           ls.heartTimer -= dt;
-          if (ls.heartTimer <= 0) { spawnHeart(ls); ls.heartTimer = 0.35 + Math.random() * 0.3; }
+          if (ls.heartTimer <= 0) {
+            spawnHeart(ls);
+            ls.heartTimer = (0.5 - nuzzle * 0.22) + Math.random() * 0.3;
+          }
         }
       } else {
         // покой / ожидание пары: каждый поставленный кот мягко дышит и слегка

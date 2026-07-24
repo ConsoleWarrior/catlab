@@ -24,6 +24,7 @@ import type { UiContext } from './context.js';
 import type { FloorPlane } from './rooms/shell.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT, catSizeFactor } from './catTextures.js';
 import { attachBlink, type Blinker } from './eyeBlink.js';
+import { sfxMeow, sfxPurrSync } from './sound.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
 
 type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch';
@@ -89,6 +90,18 @@ const ZONE_RANDOM_CHANCE = 0.2;
 // рассыпал котов по новым случайным местам.
 const posMemory = new Map<string, { u: number; z: number; facing: 1 | -1; phase: number }>();
 
+/** Подсадить позу кота в память пола извне: кот, вынутый из корзины заказов
+ * перетаскиванием, приземляется в точке сброса, а не на прежнем месте. */
+export function rememberFloorPos(catId: string, u: number, z: number): void {
+  const mem = posMemory.get(catId);
+  posMemory.set(catId, {
+    u: Math.max(-1, Math.min(1, u)),
+    z: Math.max(0, Math.min(1, z)),
+    facing: mem?.facing ?? 1,
+    phase: mem?.phase ?? Math.random() * 6,
+  });
+}
+
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 export function createLivingFloor(
@@ -142,7 +155,7 @@ export function createLivingFloor(
     if (a.state === 'walk') {
       const r = Math.random();
       if (r < 0.5) {
-        enterState(a, 'sleep', 6 + Math.random() * 9);
+        enterState(a, 'sleep', 10 + Math.random() * 20); // дремлют подолгу, 10–30 с
         spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * depthScale(a.z) * 0.9, 'Zz..'); // сразу как заснул
       }
       else if (r < 0.7) enterState(a, 'groom', 1.6 + Math.random() * 1.8);
@@ -153,6 +166,14 @@ export function createLivingFloor(
     } else {
       startWalk(a);
     }
+  }
+
+  /** Реакция на руки игрока (тап/взятие): «❓» над головой, спящий просыпается
+   * сразу — без потягивания (оно только после сна «по своей воле») — и секунд
+   * 5–8 стоит на месте, приходя в себя. Мурчание погаснет само на сверке тика. */
+  function poke(a: Actor): void {
+    spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * depthScale(a.z) * 0.9, '❓');
+    if (!a.busy) enterState(a, 'idle', 5 + Math.random() * 3);
   }
 
   function makeActor(cat: Cat, savedOx?: number, savedZ?: number, savedFacing?: 1 | -1, savedPhase?: number): Actor {
@@ -250,9 +271,9 @@ export function createLivingFloor(
     };
 
     if (busy) {
-      view.on('pointertap', () => ctx.openCatMenu(cat));
+      view.on('pointertap', () => { sfxMeow(); poke(actor); ctx.openCatMenu(cat); });
     } else {
-      view.on('pointerdown', (e) => ctx.startGrab({
+      view.on('pointerdown', (e) => { poke(actor); ctx.startGrab({
         cat,
         // «на весу» кот того же размера, что и на полу (с учётом роста и глубины)
         displayH: catH * growthScale(cat, ctx.now()) * depthScale(actor.z),
@@ -274,7 +295,7 @@ export function createLivingFloor(
           view.position.set(centerX + actor.ox, yAt(nz));
           view.zIndex = Math.round(yAt(nz));
         },
-      }, e));
+      }, e); });
     }
     return actor;
   }
@@ -324,6 +345,7 @@ export function createLivingFloor(
     const now = ctx.now();
     const focus = ctx.infoFocus();
     const matured: Actor[] = [];
+    const sleepy: string[] = []; // кто мурчит во сне — сверка хора в конце тика
     for (const a of actors) {
       a.phase += dt;
       a.blink?.update(dt); // моргание глаз
@@ -352,6 +374,9 @@ export function createLivingFloor(
         a.infoIcon.destroy();
         a.infoIcon = null;
       }
+
+      // спящий видимый кот тихо мурчит (взятый за шкирку — visible=false — молчит)
+      if (a.state === 'sleep' && a.view.visible) sleepy.push(a.cat.id);
 
       if (a.busy || !a.view.visible || (focused && focus!.frozen)) continue;
 
@@ -469,7 +494,7 @@ export function createLivingFloor(
         let emoji: string | null = null;
         if (a.state === 'sleep' && Math.random() < 0.5) emoji = 'Zz..';
         else if (a.state === 'groom' && Math.random() < 0.5) emoji = '🧶';
-        else if (a.state === 'lookaround' && Math.random() < 0.5) emoji = '❓';
+        // «❓» больше не случайный — он теперь реакция на тап игрока (см. poke)
         else if (a.state !== 'sleep' && Math.random() < 0.35) emoji = Math.random() < 0.5 ? '❤️' : '🐟';
         if (emoji) spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * ds * 0.9, emoji);
       }
@@ -557,6 +582,8 @@ export function createLivingFloor(
       m.view.scale.set(0.8 + t * 0.3);
       if (m.life >= m.ttl) { m.view.destroy(); moodFx.splice(k, 1); }
     }
+
+    sfxPurrSync(sleepy); // хор мурлыканья = ровно те, кто сейчас спит на этом полу
   }
 
   return { refresh, tick };

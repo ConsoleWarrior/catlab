@@ -348,6 +348,54 @@ function mixedKitten(rng: Rng): string {
   return r < 0.8 ? 'domestic_shorthair' : 'domestic_longhair';
 }
 
+/** Подходящие паре рецепты: редкие результаты первыми (старший тир, внутри — маловероятные). */
+function matchedRecipes(ctx: BreedingContext): Recipe[] {
+  return RECIPES.filter((r) => recipeMatches(r, ctx))
+    .sort((x, y) => (TIER_LEVEL[tierOfBreed(y.result)] - TIER_LEVEL[tierOfBreed(x.result)])
+      || (x.chance - y.chance));
+}
+
+/** Тир старшего родителя пары. */
+function maxParentTier(ctx: BreedingContext): number {
+  return Math.max(
+    TIER_LEVEL[tierOfBreed(ctx.mother.breed)],
+    TIER_LEVEL[tierOfBreed(ctx.father.breed)],
+  );
+}
+
+/**
+ * Порода, которую 🔼 Активатор гарантирует этой паре (или undefined — гарантии нет).
+ * Та же выборка, что в resolveBreeding: первый подходящий рецепт тира ВЫШЕ родителей
+ * (сортировка отдаёт самый старший и редкий). Чистая функция — для превью 🔮 и чипов.
+ */
+export function tierUpTarget(ctx: BreedingContext): string | undefined {
+  const top = maxParentTier(ctx);
+  return matchedRecipes(ctx).find((r) => TIER_LEVEL[tierOfBreed(r.result)] > top)?.result;
+}
+
+/**
+ * «Выстрелит» ли усилитель на этой паре — подсказка ⚡ на чипах Инкубатора (UI,
+ * механику не меняет): 🔼 — есть цель для гарантии; 🍀 — есть рецепт, которому
+ * реально достанется ×2 (инбридинг-бонус не занял множитель, см. recipeChance);
+ * 🛡 — фолбэк способен опустить котёнка ниже старшего родителя.
+ */
+export function boostCanFire(id: keyof BreedBoosts, ctx: BreedingContext): boolean {
+  if (id === 'tierUp') return tierUpTarget(ctx) !== undefined;
+  if (id === 'luckyUp') {
+    return matchedRecipes(ctx).some((r) => {
+      const inbreedRecipe = isPedigreeRecipe(r) || !!r.kinshipBoost || !!r.minKinship;
+      return !(inbreedRecipe && KINSHIP_RECIPE_MULT[ctx.kinship] > 1);
+    });
+  }
+  // noDown: одинаковая пара рискует только «метисом-сюрпризом» (базовые породы его
+  // не бросают); разные породы — младшим родителем или метисом. Дворовым (T1,
+  // TIER_LEVEL 0) терять нечего — ниже фолбэк не роняет.
+  if (ctx.mother.breed === ctx.father.breed) {
+    return !isBaseBreed(ctx.mother.breed) && maxParentTier(ctx) > TIER_LEVEL.common;
+  }
+  return maxParentTier(ctx) > TIER_LEVEL.common;
+}
+
 /**
  * Порода котёнка от пары родителей — главная точка входа (заменяет прежнюю
  * «лестницу тиров» breedKitten). `used` заполняется флагами реально сработавших
@@ -360,22 +408,14 @@ export function resolveBreeding(
   used?: BreedBoosts,
   chanceMult = 1,
 ): string {
-  const matched = RECIPES.filter((r) => recipeMatches(r, ctx))
-    // редкие результаты пробуем первыми; при равном тире — сначала маловероятные
-    .sort((x, y) => (TIER_LEVEL[tierOfBreed(y.result)] - TIER_LEVEL[tierOfBreed(x.result)])
-      || (x.chance - y.chance));
-
-  const maxParentTier = Math.max(
-    TIER_LEVEL[tierOfBreed(ctx.mother.breed)],
-    TIER_LEVEL[tierOfBreed(ctx.father.breed)],
-  );
+  const matched = matchedRecipes(ctx);
 
   // 🔼 Активатор: гарантируем первый подходящий рецепт тира ВЫШЕ родителей.
   if (boosts.tierUp) {
-    const up = matched.find((r) => TIER_LEVEL[tierOfBreed(r.result)] > maxParentTier);
+    const up = tierUpTarget(ctx);
     if (up) {
       if (used) used.tierUp = true;
-      return up.result;
+      return up;
     }
   }
 
@@ -398,7 +438,7 @@ export function resolveBreeding(
       : mixedKitten(rng);
   }
   // 🛡 Стабилизатор: котёнок не опускается ниже старшего родителя.
-  if (boosts.noDown && TIER_LEVEL[tierOfBreed(out)] < maxParentTier) {
+  if (boosts.noDown && TIER_LEVEL[tierOfBreed(out)] < maxParentTier(ctx)) {
     out = TIER_LEVEL[tierOfBreed(ctx.mother.breed)] >= TIER_LEVEL[tierOfBreed(ctx.father.breed)]
       ? ctx.mother.breed
       : ctx.father.breed;
@@ -426,9 +466,7 @@ export interface BreedingOutcome {
 export function breedingOutcomes(
   ctx: BreedingContext, luckyUp = false, chanceMult = 1,
 ): BreedingOutcome[] {
-  const matched = RECIPES.filter((r) => recipeMatches(r, ctx))
-    .sort((x, y) => (TIER_LEVEL[tierOfBreed(y.result)] - TIER_LEVEL[tierOfBreed(x.result)])
-      || (x.chance - y.chance));
+  const matched = matchedRecipes(ctx);
 
   const out: BreedingOutcome[] = [];
   let rest = 1; // масса «ни один из предыдущих рецептов не сработал»

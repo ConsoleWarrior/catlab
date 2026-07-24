@@ -19,7 +19,7 @@ export type { BreedDef, BreedKind, BreedBoosts } from './catalog.js';
 export { BREED_DESC, breedDescription } from './breedInfo.js';
 export {
   RECIPES, recipesFor, recipeKey, isPedigreeRecipe, pairMatches, recipeMatches, recipeChance,
-  resolveBreeding, breedingOutcomes, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
+  resolveBreeding, breedingOutcomes, tierUpTarget, boostCanFire, KINSHIP_RANK, KINSHIP_RECIPE_MULT,
 } from './recipes.js';
 export type { Recipe, SideSpec, BreedSide, BreedingContext, KinshipLevel, BreedingOutcome } from './recipes.js';
 export {

@@ -11,8 +11,9 @@ import {
   basketCat, adRefreshOrder, msUntilOrderExpiry, canAdRefreshOrder, msUntilAdRefresh,
   isAdult, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
   roomCount, nurseryCapacity, shelterCapacity, makeCatInstance,
-  catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, toggleBoost, boostCharges, activeBoostId,
-  adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, AD_SKIP_MS,
+  catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, adChargeBoost, toggleBoost, boostCharges, activeBoostId,
+  BOOST_AD_COOLDOWN_MS,
+  adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, GROWTH_SPEEDUP_CRYSTAL_PER_MIN,
   sendToLab, labReward, shelterTotals, adoptAll, sendAllToLab,
   healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cryoCount, cryoCapacity,
@@ -23,7 +24,7 @@ import {
   RESEARCH, unlockResearch, researchLevel, researchNext, researchExtraCoins, canAffordResearch,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
-import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, dormantTraits, traitTag } from '../genetics/index.js';
+import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, tierUpTarget, dormantTraits, traitTag } from '../genetics/index.js';
 import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
@@ -335,8 +336,9 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
 
 /**
  * Всплывающее меню усилителя вязки («Генная инженерия», кнопки у названия
- * Инкубатора): описание буста + две кнопки активации — за 🧬 гены или 💎
- * кристаллы. После активации усилитель «горит» и сработает на первой же
+ * Инкубатора): описание буста + три способа зарядки — за 🧬 гены, 💎 кристаллы
+ * или 📺 рекламу (бесплатно, глобальный кулдаун BOOST_AD_COOLDOWN_MS на все три
+ * усилителя). После активации усилитель «горит» и сработает на первой же
  * следующей вязке (в любом слоте). Перерисовывается на месте после оплаты.
  */
 export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => void): Container {
@@ -416,6 +418,35 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     crysBtn.position.set(pad + bw + gap + bw / 2, y + 27);
     items.push(geneBtn, crysBtn);
     y += 66;
+
+    // 📺-зарядка — бесплатный третий способ, но только у 🛡/🍀 (adCharge): Активатор
+    // слишком силён для бесплатного крана. Кулдаун глобальный (один на оба,
+    // 0 = ещё не смотрели), поэтому кнопка гаснет сразу в обоих меню.
+    if (def.adCharge) {
+      const adLeft = ctx.state.lastBoostAdAt > 0
+        ? BOOST_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastBoostAdAt) : 0;
+      const adReady = adLeft <= 0;
+      const adBtn = new Button({
+        text: adReady ? '📺 Заряд за рекламу · бесплатно' : `📺 Заряд за рекламу · через ${Math.ceil(adLeft / 60_000)} мин`,
+        w: W - pad * 2, h: 40,
+        color: adReady ? COLORS.good : COLORS.cardEdge,
+        textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 13.5,
+      });
+      adBtn.enabled = adReady;
+      adBtn.position.set(W / 2, y + 20);
+      adBtn.onTap = () => {
+        const r = adChargeBoost(ctx.state, def.id, ctx.now());
+        if (r.ok) { ctx.commit(); ctx.toast(`📺 ${def.glyph} ${def.label}: +1 заряд`); render(); }
+        else ctx.toast(r.reason);
+      };
+      items.push(adBtn);
+      y += 50;
+    } else {
+      const noAd = label('📺-зарядка недоступна — только за 🧬/💎', 11, COLORS.inkSoft, '600');
+      noAd.position.set(W / 2, y + 8);
+      items.push(noAd);
+      y += 24;
+    }
 
     // Переключатель активности (заряды НЕ тратит). Активировать можно только при
     // наличии зарядов; активный — выключить. Включение снимает активность с другого.
@@ -602,19 +633,8 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
     addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
-  // Ускорение роста: реклама (−N мин, бесплатно) и кристаллы (вырастить мгновенно).
-  const gcost = speedUpCost(growthRemainingMs(cat, ctx.now()));
-  const skipMin = Math.round(AD_SKIP_MS / 60_000);
-  addBtn(`📺 Ускорить рост (−${skipMin} мин)`, COLORS.secondary, true, () => {
-    const r = adSkipGrowth(ctx.state, cat.id, ctx.now());
-    if (!r.ok) { ctx.toast(r.reason); return; }
-    ctx.commit(); close(); ctx.openCatMenu(cat);
-  });
-  addBtn(`💎 Вырастить сразу (${gcost})`, COLORS.primary, true, () => {
-    const r = speedUpGrowth(ctx.state, cat.id, ctx.now());
-    if (!r.ok) { ctx.toast(r.reason); return; }
-    ctx.commit(); close(); ctx.openCatMenu(cat);
-  });
+  // Ускорение роста: одно подменю «Вырастить сейчас» — там выбор 📺 реклама или 💎 кристаллы.
+  addBtn('🌱 Вырастить сейчас', COLORS.primary, true, () => ctx.openGrowConfirm(cat));
 
   addMoveButtons(ctx, cat, close, addBtn);
 
@@ -644,6 +664,71 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   };
   ctx.app.ticker.add(fn);
 
+  return root;
+}
+
+/**
+ * Подменю «Вырастить сейчас» котёнка (из инфо-меню). Два пути ускорения роста:
+ * 📺 реклама (−N мин, бесплатно, повторяемо) и 💎 кристаллы (мгновенно, цена ∝ остатку
+ * роста, ставка GROWTH_SPEEDUP_CRYSTAL_PER_MIN). После действия переоткрываем меню кота:
+ * если ещё котёнок — снова его карточка, если вырос — меню взрослого.
+ */
+export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+  const W = 320;
+  const root = new Container();
+
+  const title = label('🌱 Вырастить сейчас', 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+
+  const sp = catSprite(ctx.app, cat, 84);
+  sp.position.set(W / 2, 118);
+
+  const remain = growthRemainingMs(cat, ctx.now());
+  const mm = Math.max(0, Math.ceil(remain / 60_000));
+  const sub = label(`до взросления ≈ ${mm} мин`, 13, COLORS.inkSoft, '700');
+  sub.position.set(W / 2, 162);
+
+  let y = 186;
+  root.addChild(title, sp, sub);
+
+  const btnW = W - 48;
+  const adBtn = new Button({
+    text: '📺 Бесплатно', w: btnW, h: 44,
+    color: COLORS.good, textColor: 0xffffff, fontSize: 15,
+  });
+  adBtn.position.set(W / 2, y + 22);
+  adBtn.onTap = () => {
+    const r = adSkipGrowth(ctx.state, cat.id, ctx.now());
+    if (!r.ok) { ctx.toast(r.reason); return; }
+    ctx.commit(); close(); ctx.openCatMenu(cat);
+  };
+  root.addChild(adBtn);
+  y += 52;
+
+  const gcost = speedUpCost(remain, GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
+  const afford = ctx.state.crystals >= gcost;
+  const crysBtn = new Button({
+    text: `💎 Вырастить сразу · ${gcost}`, w: btnW, h: 44,
+    color: afford ? COLORS.secondary : COLORS.cardEdge,
+    textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+  });
+  crysBtn.enabled = afford;
+  crysBtn.position.set(W / 2, y + 22);
+  crysBtn.onTap = () => {
+    const r = speedUpGrowth(ctx.state, cat.id, ctx.now());
+    if (!r.ok) { ctx.toast(r.reason); return; }
+    ctx.commit(); close(); ctx.openCatMenu(cat);
+  };
+  root.addChild(crysBtn);
+  y += 52;
+
+  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.position.set(W / 2, y + 20);
+  closeBtn.onTap = close;
+  root.addChild(closeBtn);
+  y += 50;
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
   return root;
 }
 
@@ -997,7 +1082,9 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
   const root = new Container();
 
   const bctx = buildBreedingContext(mother, father);
-  const lucky = boostCharges(ctx.state, 'luckyUp') > 0;
+  // ×2 Катализатора учитываем только когда он АКТИВЕН (склад ≠ активность): заряд
+  // на складе при другом активном усилителе на вязку не влияет — превью не должно врать.
+  const lucky = activeBoostId(ctx.state) === 'luckyUp';
   const outcomes = breedingOutcomes(bctx, lucky, breedChanceMult(ctx.state));
 
   const title = label('🔮 Прогноз пары', 18, COLORS.ink, '800');
@@ -1022,9 +1109,25 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
     y += 20;
   }
   if (lucky) {
-    const lk = label('🍀 Катализатор заряжен — шансы учтены (×2)', 11.5, COLORS.good, '800');
+    const lk = label('🍀 Катализатор активен — шансы учтены (×2)', 11.5, COLORS.good, '800');
     lk.position.set(W / 2, y);
     root.addChild(lk);
+    y += 20;
+  }
+  // 🔼 Активатор активен и у пары есть цель — гарантия вместо броска шансов.
+  // Название породы уважает туман знаний: нераскрытый рецепт покажет только тир.
+  const guaranteed = activeBoostId(ctx.state) === 'tierUp' ? tierUpTarget(bctx) : undefined;
+  if (guaranteed) {
+    const gOutcome = outcomes.find((o) => o.recipe && o.breed === guaranteed);
+    const gRevealed = !gOutcome?.recipe || outcomeRevealed(ctx.state, mother, father, gOutcome.recipe);
+    const gl = label(
+      gRevealed
+        ? `🔼 Активатор гарантирует: ${breedName(guaranteed)}`
+        : `🔼 Активатор гарантирует: ❓ ${TIER_RU[tierOfBreed(guaranteed)]}`,
+      11.5, COLORS.good, '800',
+    );
+    gl.position.set(W / 2, y);
+    root.addChild(gl);
     y += 20;
   }
   y += 6;

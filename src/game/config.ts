@@ -60,8 +60,10 @@ export const LAB_COIN_RATE = 0.05;            // немного 💰 сверх�
 export const FOOD_CAP_BASE = 200;             // ёмкость кормушки (ед.); расширение — узлом исследований (этап C)
 // Аппетит по тиру: чем породистее кот, тем дороже его содержать (0.1 → 0.5 ед./мин).
 // Это делает «свалку» дворовых дешёвой, а коллекцию легендарных — статьёй расходов.
+// Аппетит удвоен относительно прошлого прохода (0.05→0.25 стало 0.1→0.5): содержание
+// котов теперь заметнее давит на казну.
 export const FOOD_PER_MIN_BY_TIER: Record<RarityTier, number> = {
-  common: 0.05, uncommon: 0.1, rare: 0.15, epic: 0.2, legendary: 0.25,
+  common: 0.1, uncommon: 0.2, rare: 0.3, epic: 0.4, legendary: 0.5,
 };
 export const FOOD_PACK_UNITS = 50;            // размер пакета корма (кнопка «＋50»)
 export const FOOD_PACK_COST = 25;             // 💰 за пакет (цена «до полного» — пропорциональна)
@@ -74,10 +76,16 @@ export const CHAMPION_SLOTS_BASE = 1;
 export const CHAMPION_INCOME_RATE = 0.002;    // 💰/мин = catMarketValue × rate
 
 // --- Ускорение таймеров ---
-// Кристаллы завершают таймер МГНОВЕННО (цена ∝ остатку). Реклама сокращает
-// остаток на фикс. величину AD_SKIP_MS (бесплатно, можно смотреть повторно).
-export const SPEEDUP_CRYSTAL_PER_MIN = 1;     // 💎 за каждую начатую минуту остатка
+// Кристаллы завершают таймер МГНОВЕННО (цена ∝ остатку, итог округляется, не ниже
+// SPEEDUP_CRYSTAL_MIN). Реклама сокращает остаток на фикс. величину AD_SKIP_MS
+// (бесплатно, можно смотреть повторно). Ставка 💎/мин задаётся ОТДЕЛЬНО по фичам —
+// speedUpCost(remaining, rate) принимает нужную ставку (см. economy.speedUpCost).
+export const SPEEDUP_CRYSTAL_PER_MIN = 1;     // базовая ставка 💎/мин (дефолт speedUpCost)
 export const SPEEDUP_CRYSTAL_MIN = 1;         // но минимум 1 💎
+// Ставки ускорения по фичам (💎 за минуту остатка):
+export const BREED_SPEEDUP_CRYSTAL_PER_MIN = 0.6;  // вязка (5 мин) → 3 💎 при полном остатке (было 5)
+export const GROWTH_SPEEDUP_CRYSTAL_PER_MIN = 0.5; // рост котёнка — вдвое дешевле базовой
+export const RECIPE_SPEEDUP_CRYSTAL_PER_MIN = 0.5; // стол рецептов — вдвое дешевле базовой
 export const AD_SKIP_MS = 5 * 60_000;         // −5 мин за просмотр рекламы (вязка/стол рецептов)
 
 // --- Заказы (продажа котов клиентам) ---
@@ -226,7 +234,7 @@ export const CRYO_BASE_CAP = 6;               // стартовые капсул
 export const CLONE_LAB_MULT = 3;
 // Заморозка через drag-станцию «Криокапсула» (по образцу клиники): три пути оплаты —
 // 📺 реклама (бесплатно, глобальный кулдаун), 💰 монеты или 💎 кристаллы (мгновенно).
-export const FREEZE_COIN_COST = 150;
+export const FREEZE_COIN_COST = 1000;
 export const FREEZE_CRYSTAL_COST = 3;
 export const FREEZE_AD_COOLDOWN_MS = 10 * 60_000;
 
@@ -257,10 +265,11 @@ export function analyzeCoinCost(tier: RarityTier): number {
 // Ускорение — 📺 (−AD_SKIP_MS) или 💎 (мгновенно).
 // ЦЕНА И ВРЕМЯ РАСТУТ ЛИНЕЙНО С УРОВНЕМ ЛАБОРАТОРИИ L (1..10): чем выше игрок, тем дороже
 // и дольше новое знание (компенсирует растущий доход). На уровне L:
-//   цена = 150×L 💰 + 5×L 🧬,   время = 5×L минут
-// (L1 → 150💰+5🧬 / 5 мин … L10 → 1500💰+50🧬 / 50 мин).
+//   цена = 150×L 💰 + 10×L 🧬,   время = 5×L минут
+// (L1 → 150💰+10🧬 / 5 мин … L10 → 1500💰+100🧬 / 50 мин).
+// Цена в 🧬 удвоена (было 5×L): исследование рецептов стало дороже по генам.
 export const RECIPE_RESEARCH_COINS_PER_LEVEL = 150;
-export const RECIPE_RESEARCH_DNA_PER_LEVEL = 5;
+export const RECIPE_RESEARCH_DNA_PER_LEVEL = 10;
 export const RECIPE_RESEARCH_MS_PER_LEVEL = 5 * 60_000;
 
 /** Стоимость запуска стола рецептов на данном уровне лаборатории (💰 + 🧬). */
@@ -284,13 +293,18 @@ export interface BoostDef {
   desc: string;
   dna: number;      // цена активации за 🧬 гены
   crystals: number; // цена активации за 💎 кристаллы (премиум-альтернатива)
+  adCharge: boolean; // можно ли зарядить за 📺 (самый сильный Активатор — только за валюту)
 }
 /** Усилители следующей вязки. Заряд тратится при рождении из инкубатора. */
 export const BOOSTS: readonly BoostDef[] = [
-  { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не ниже старшего родителя', dna: 15, crystals: 2 },
-  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Шансы всех рецептов ×2 (не суммируется с инбридингом)', dna: 30, crystals: 3 },
-  { id: 'tierUp', glyph: '🔼', label: 'Активатор', desc: 'Гарантия рецепта тира выше (если условия выполнены)', dna: 60, crystals: 5 },
+  { id: 'noDown', glyph: '🛡', label: 'Стабилизатор', desc: 'Котёнок не ниже старшего родителя; пока активен — риск ❤ от родства на ступень мягче', dna: 15, crystals: 2, adCharge: true },
+  { id: 'luckyUp', glyph: '🍀', label: 'Катализатор', desc: 'Шансы всех рецептов ×2 (не суммируется с инбридингом)', dna: 30, crystals: 3, adCharge: true },
+  { id: 'tierUp', glyph: '🔼', label: 'Активатор', desc: 'Гарантия рецепта тира выше (если условия выполнены)', dna: 60, crystals: 5, adCharge: false },
 ];
+// 📺-зарядка усилителя: +1 заряд бесплатно за просмотр рекламы — только у усилителей с
+// adCharge (🛡/🍀; Активатор слишком силён для бесплатного крана). Кулдаун ГЛОБАЛЬНЫЙ
+// (один на оба): иначе двумя показами подряд собирается комплект.
+export const BOOST_AD_COOLDOWN_MS = 30 * 60_000; // 📺 раз в 30 мин — заряд 🛡 или 🍀
 
 // --- Рост котят ---
 // Продакшн-тайминг: котёнок взрослеет за 15 мин. Реклама сокращает остаток роста на

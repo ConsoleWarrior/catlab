@@ -25,7 +25,7 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(1), 0);
     s.level = 3;
     s.cats = [];
-    for (let i = 0; i < 20; i++) addCat(s, 'moggie'); // 20 × 0.05 → rate 1.0/мин
+    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // 10 × 0.1 → rate 1.0/мин
     expect(foodRatePerMin(s)).toBeCloseTo(1.0);
     s.food = 10;
     expect(consumeFood(s, 4)).toBeCloseTo(4);  // хватило → 4 сытые минуты
@@ -55,7 +55,7 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(3), 0);
     s.level = 3;
     s.cats = [];
-    for (let i = 0; i < 20; i++) addCat(s, 'moggie'); // 20 × 0.05 → rate 1.0
+    for (let i = 0; i < 10; i++) addCat(s, 'moggie'); // 10 × 0.1 → rate 1.0
     s.food = 50;
     expect(foodMinutesLeft(s)).toBeCloseTo(50);
     s.cats = []; // ртов не осталось → расхода нет
@@ -78,10 +78,10 @@ describe('consumeFood и сытые минуты', () => {
     const s = createInitialState(makeRng(5), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'maine_coon'); // T3 → 0.15
+    const champ = addCat(s, 'maine_coon'); // T3 (rare)
     setChampion(s, champ.id, 0, 0);
     expect(feedingCatCount(s)).toBe(1);
-    expect(foodRatePerMin(s)).toBeCloseTo(0.15); // на пьедестале, но с довольствия не снят
+    expect(foodRatePerMin(s)).toBeCloseTo(C.FOOD_PER_MIN_BY_TIER.rare); // на пьедестале, но с довольствия не снят
   });
 });
 
@@ -90,12 +90,12 @@ describe('collectIncome с кормом', () => {
     const s = createInitialState(makeRng(10), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'savannah');             // T5 → 0.25/мин
-    for (let i = 0; i < 7; i++) addCat(s, 'moggie'); // 7 × 0.05 → всего 0.6/мин
+    const champ = addCat(s, 'savannah');             // T5 (legendary)
+    for (let i = 0; i < 7; i++) addCat(s, 'moggie'); // 7 котов T1 (common)
     setChampion(s, champ.id, 0, 0);
     const rate = foodRatePerMin(s);
-    expect(rate).toBeCloseTo(0.6);
-    s.food = 3;          // хватит на 5 минут
+    expect(rate).toBeCloseTo(C.FOOD_PER_MIN_BY_TIER.legendary + 7 * C.FOOD_PER_MIN_BY_TIER.common);
+    s.food = 3;          // сытые минуты = 3 / rate (расход считается динамически ниже)
     s.lastSeenAt = 0;
     const passive = passiveRatePerMin(s);
     const r = collectIncome(s, 10 * 60_000); // отсутствовали 10 минут
@@ -107,7 +107,7 @@ describe('collectIncome с кормом', () => {
     const s = createInitialState(makeRng(11), 0);
     s.level = 3;
     s.cats = [];
-    const champ = addCat(s, 'savannah'); // 0.25/мин — корма (200) хватит на 800 мин
+    const champ = addCat(s, 'savannah'); // 0.5/мин — корма (200) хватит на 400 мин
     setChampion(s, champ.id, 0, 0);
     s.food = C.FOOD_CAP_BASE;
     s.lastSeenAt = 0;

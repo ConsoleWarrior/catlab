@@ -4,9 +4,9 @@ import {
   createInitialState, startBreeding, assignBreeder, clearBreederSlot, isInSlot,
   collectReady, adoptCat, moveCat, keepKittenWithParents,
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
-  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, toggleBoost, activeBoostId, unlockResearch,
+  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, adChargeBoost, toggleBoost, activeBoostId, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
-  revealPedigree, pedigreeHasFog,
+  revealPedigree, pedigreeHasFog, serialize, deserialize, BOOST_AD_COOLDOWN_MS,
 } from './index.js';
 import { STARTER_CAT_COST, MAX_HEARTS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
 import type { GameState } from './index.js';
@@ -318,6 +318,47 @@ describe('генная инженерия', () => {
     expect(s.boosts.tierUp).toBe(1);
     expect(s.activeBoost).toBe('noDown'); // всё ещё первый
     expect(activeBoostId(s)).toBe('noDown');
+  });
+
+  it('adChargeBoost даёт бесплатный заряд за 📺 с глобальным кулдауном (🛡/🍀)', () => {
+    const s = createInitialState(makeRng(40), 0);
+    expect(adChargeBoost(s, 'noDown', 1000).ok).toBe(false); // Генная инженерия ещё заперта
+    s.level = 10; // Генная инженерия открыта уровнем
+    expect(adChargeBoost(s, 'bogus', 1000).ok).toBe(false);  // нет такого усилителя
+    // первый просмотр — бесплатно, без валюты; ничего не было активно → авто-активация
+    expect(adChargeBoost(s, 'noDown', 1000).ok).toBe(true);
+    expect(s.boosts.noDown).toBe(1);
+    expect(s.activeBoost).toBe('noDown');
+    expect(s.dna).toBe(0); // валюта не тронута
+    // кулдаун глобальный: сразу зарядить ДРУГОЙ усилитель тоже нельзя
+    const r = adChargeBoost(s, 'luckyUp', 1000 + BOOST_AD_COOLDOWN_MS - 1);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? undefined : r.reason).toBe('реклама ещё не готова');
+    // кулдаун вышел → можно снова (другой adCharge-усилитель)
+    expect(adChargeBoost(s, 'luckyUp', 1000 + BOOST_AD_COOLDOWN_MS).ok).toBe(true);
+    expect(s.boosts.luckyUp).toBe(1);
+    expect(s.activeBoost).toBe('noDown'); // активность не переключается, если уже есть активный
+  });
+
+  it('🔼 Активатор за 📺 не заряжается — только за валюту (adCharge: false)', () => {
+    const s = createInitialState(makeRng(40), 0);
+    s.level = 10; // Генная инженерия открыта уровнем
+    const r = adChargeBoost(s, 'tierUp', 1000);
+    expect(r.ok).toBe(false);
+    expect(r.ok ? undefined : r.reason).toBe('заряжается только за валюту');
+    expect(s.boosts.tierUp).toBeUndefined();
+    expect(s.lastBoostAdAt).toBe(0); // отказ не сжигает кулдаун
+    // за валюту — по-прежнему можно
+    s.dna = 100;
+    expect(buyBoost(s, 'tierUp').ok).toBe(true);
+  });
+
+  it('старый сейв без lastBoostAdAt → 0 (📺-зарядка сразу доступна)', () => {
+    const s = createInitialState(makeRng(40), 0);
+    const raw = JSON.parse(serialize(s)) as Record<string, unknown>;
+    delete raw.lastBoostAdAt;
+    const restored = deserialize(JSON.stringify(raw));
+    expect(restored.lastBoostAdAt).toBe(0);
   });
 
   it('toggleBoost переключает активность без траты зарядов; активен только один', () => {

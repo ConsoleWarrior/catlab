@@ -93,6 +93,8 @@ export interface UiContext {
   openCryoMenu(cat: Cat): void;
   /** Диалог заморозки в криокапсулу (🧊 📺/💰/💎): станция-криокапсула в Питомнике. */
   openFreezeConfirm(cat: Cat): void;
+  /** Подменю «Вырастить сейчас» котёнка: выбор 📺 реклама или 💎 кристаллы. */
+  openGrowConfirm(cat: Cat): void;
   /** Дерево родословной кота (до прадедов; неизвестные узлы — «???», туман). */
   openPedigree(cat: Cat): void;
   /** Подтверждение Генетического анализа (💰/📺): вскрыть родословную и скрытые гены. */
@@ -110,4 +112,10 @@ export interface UiContext {
   openOrders(): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;
+  /**
+   * Кот «в руках» прямо сейчас (перетаскивание) и его позиция в координатах
+   * виртуальной сцены (uiRoot), иначе null. Комнаты читают в tick, чтобы
+   * подсвечивать зоны дропа под курсором (например, ауру пьедестала).
+   */
+  carrying(): { cat: Cat; x: number; y: number } | null;
 }

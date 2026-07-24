@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { makeRng, randomCat } from '../genetics/index.js';
 import {
   createInitialState, makeCatInstance, buildPedigree, attachHiddenPedigree,
-  relatedness, kinshipLevel, rollKittenHearts, buildBreedingContext,
+  relatedness, kinshipLevel, rollKittenHearts, softenKinship, buildBreedingContext,
   startBreeding, collectReady, incubationDuration,
 } from './index.js';
 import type { Cat } from './index.js';
@@ -116,6 +116,15 @@ describe('rollKittenHearts (цена инбридинга)', () => {
     expect(rollKittenHearts('high', fixed(0.31))).toBe(MAX_HEARTS);
     expect(rollKittenHearts('moderate', fixed(0.09))).toBe(4);
     expect(rollKittenHearts('moderate', fixed(0.11))).toBe(MAX_HEARTS);
+  });
+
+  it('softenKinship (перк активного 🛡): родство для броска ❤ на ступень мягче', () => {
+    expect(softenKinship('critical')).toBe('high');
+    expect(softenKinship('high')).toBe('moderate');
+    expect(softenKinship('moderate')).toBe('none');
+    expect(softenKinship('none')).toBe('none');
+    // связка: critical-пара с активным 🛡 бросает сердца по таблице high
+    expect(rollKittenHearts(softenKinship('critical'), fixed(0.05))).toBe(3); // не «Бесплодный», а 3 ❤
   });
 });
 

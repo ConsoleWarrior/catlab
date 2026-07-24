@@ -22,6 +22,7 @@
     "@fontsource/fredoka": "^5.2.10",
     "@fontsource/rubik": "^5.2.8",
     "@fontsource/short-stack": "^5.2.8",
+    "@pixi/sound": "^6.0.1",
     "pixi.js": "^8.19.0"
   }
 }

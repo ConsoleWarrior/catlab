@@ -595,11 +595,15 @@ export function isInBasket(state: GameState, catId: string): boolean {
   return state.orderBasket === catId;
 }
 
-/** Стоимость мгновенного завершения таймера (💎) по остатку времени. */
-export function speedUpCost(remainingMs: number): number {
+/**
+ * Стоимость мгновенного завершения таймера (💎) по остатку времени.
+ * ratePerMin — ставка 💎 за минуту остатка (по фиче: вязка/рост/рецепты, см. config);
+ * по умолчанию базовая. Итог округляется и не опускается ниже SPEEDUP_CRYSTAL_MIN.
+ */
+export function speedUpCost(remainingMs: number, ratePerMin: number = C.SPEEDUP_CRYSTAL_PER_MIN): number {
   if (remainingMs <= 0) return 0;
   const mins = Math.ceil(remainingMs / 60_000);
-  return Math.max(C.SPEEDUP_CRYSTAL_MIN, mins * C.SPEEDUP_CRYSTAL_PER_MIN);
+  return Math.max(C.SPEEDUP_CRYSTAL_MIN, Math.round(mins * ratePerMin));
 }
 
 /** Стоимость следующего уровня апгрейда (или null, если апгрейда нет). */

@@ -1,15 +1,18 @@
 /**
  * Комната «Питомник»: ценные коты ХОДЯТ по полу (можно взять за шкирку и
- * таскать, тап — меню) и служат племфондом для вязки. Вверху — 5 пьедесталов
- * ВЫСТАВКИ: поставленный на пьедестал кот становится чемпионом и приносит
- * пассивный доход (∝ своей ценности); число дохода подписано над ним.
- * Перетащил кота на пьедестал → на выставку; стащил на пол → снял с выставки.
+ * таскать, тап — меню) и служат племфондом для вязки. У задней стены — ДУГА
+ * из 5 пьедесталов ВЫСТАВКИ (центральный выше — подиум победителя): кот на
+ * пьедестале — чемпион, приносит пассивный доход (∝ ценности), доход подписан.
+ * Пьедесталы заданы в НОРМАЛИЗОВАННЫХ координатах комнаты (та же система, что
+ * фон и декор) и живут в y-сортируемом слое декора — на любой пропорции экрана
+ * они «приклеены» к стене, а перекрытия с декором корректны по глубине.
+ * Перетащил кота в зону НАД пьедесталом (корпус тумбы не ловит — зона подсвечена
+ * золотой аурой, пока кот «в руках» над ней) → на выставку; стащил на пол → снял.
  * У левой стены — ветеринар-шприц (💉): перетащил кота → диалог лечения вязок.
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
-import { Container, Graphics } from 'pixi.js';
-import type { Sprite } from 'pixi.js';
+import { Container, Graphics, Sprite } from 'pixi.js';
 import {
   catsIn, roomCount, nurseryCapacity, buyCat, buyCatCost, isInSlot, moveCat,
   championSlots, championAt, championIncomePerMin, isChampion,
@@ -23,6 +26,7 @@ import {
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
+import { decorTexture } from '../decorArt.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 import { catSprite, aiSitSpriteFor, rarityGlow } from '../catTextures.js';
@@ -34,9 +38,26 @@ function pedCountFor(_ctx: UiContext): number {
 }
 
 // Правая колонка шапки: кормушка + кнопка «Купить котика» (одна ширина на обе).
-// Ряд пьедесталов считает её как занятую зону и под неё не заезжает.
 const COL_W = 256;
-const COL_PAD = 18; // отступ оболочки комнаты (shell PAD) — от него живёт body
+
+/**
+ * Дуга пьедесталов у задней стены — в долях ширины/высоты комнаты (как декор):
+ * центральный подиум дальше и ВЫШЕ (место победителя), края ближе к зрителю и
+ * ниже. Базы ≤ 0.715·h — гуляющие коты (ноги от 0.72·h, FLOOR_BACK_FRAC) всегда
+ * ПЕРЕД пьедесталами, поэтому слой декора можно держать под «живым полом».
+ *   xN/baseYN — точка касания пола (низ-центр спрайта); hN — высота тумбы;
+ *   tex — ключ текстуры декора (спрайт из assets/decor, фолбэк — Graphics).
+ */
+const PED_ARC = [
+  { xN: 0.29, baseYN: 0.715, hN: 0.13, tex: 'ped_side' },
+  { xN: 0.395, baseYN: 0.703, hN: 0.145, tex: 'ped_side' },
+  { xN: 0.5, baseYN: 0.69, hN: 0.22, tex: 'ped_center' },
+  { xN: 0.605, baseYN: 0.703, hN: 0.145, tex: 'ped_side' },
+  { xN: 0.71, baseYN: 0.715, hN: 0.13, tex: 'ped_side' },
+] as const;
+// Доля высоты тумбы от верхней кромки спрайта до центра площадки (перспектива
+// крышки-эллипса): ноги чемпиона ставим чуть НИЖЕ верха спрайта.
+const PED_TOP_INSET = 0.06;
 
 export function createNursery(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'nursery', '🏆 Питомник');
@@ -46,12 +67,17 @@ export function createNursery(ctx: UiContext): Room {
   let feederAcc = 0;
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
-  // слой пьедесталов выставки — поверх пола (пьедесталы стоят у задней стены)
-  const champLayer = new Container();
-  shell.container.addChild(champLayer);
+  // Пьедесталы выставки живут в СЛОЕ ДЕКОРА (под «живым полом»): он y-сортируемый,
+  // поэтому тумбы, шкафы и тележки перекрываются корректно по «дальше/ближе»,
+  // а гуляющие коты (ноги всегда ниже баз дуги) рисуются перед пьедесталами.
+  shell.decor.sortableChildren = true;
+  let pedNodes: Container[] = [];
 
-  // экранные прямоугольники пьедесталов (в локальных координатах комнаты) — для дропа
+  // экранные прямоугольники зон дропа НАД пьедесталами (в локальных координатах комнаты)
   let pedRects: { x: number; y: number; w: number; h: number }[] = [];
+  // золотые ауры зон дропа (по одной на пьедестал): видима, пока таскаемый кот над зоной
+  let pedAuras: Graphics[] = [];
+  let auraT = 0; // время для «дыхания» ауры
 
   // Две drag-станции по нижним углам (общий образец cornerStation — короб жмётся в
   // угол с отступом ≈ полосе навигации): клиника-шприц в левом углу (лечение),
@@ -129,22 +155,42 @@ export function createNursery(ctx: UiContext): Room {
   function buildPedestal(i: number, cx: number, standY: number, pedW: number, catSize: number): Container {
     const c = new Container();
     const unlocked = i < championSlots(ctx.state);
-    const podW = pedW * 0.84;
-    const podH = Math.round(pedW * 0.5);
+    const slot = PED_ARC[i]!;
+    const baseY = slot.baseYN * ctx.roomH;
+    const pedH = slot.hN * ctx.roomH;
     const champ = championAt(ctx.state, i);
     const gold = 0xe7b24c;
     const col = unlocked ? gold : 0xc7bdb2;
 
-    // тумба: тело + светлая «крышка»-эллипс сверху
-    const pod = new Graphics();
-    pod.roundRect(cx - podW / 2, standY, podW, podH, 9)
-      .fill({ color: col })
-      .stroke({ width: 2, color: darken(col, 0.28) });
-    pod.ellipse(cx, standY, podW / 2, podW * 0.11).fill(lighten(col, 0.12));
+    const tex = decorTexture(slot.tex);
+    if (tex) {
+      // контактная тень, чтобы тумба не «парила» над кафелем
+      const shadow = new Graphics();
+      shadow.ellipse(cx, baseY - 2, pedW * 0.56, pedW * 0.13)
+        .fill({ color: 0x000000, alpha: 0.1 });
+      c.addChild(shadow);
+      // ИИ-спрайт тумбы (мрамор с золотом); запертая — приглушена серым
+      const sp = new Sprite(tex);
+      sp.anchor.set(0.5, 1);
+      sp.scale.set(pedH / tex.height);
+      sp.position.set(cx, baseY);
+      if (!unlocked) sp.tint = 0x9fa4a6;
+      c.addChild(sp);
+    } else {
+      // фолбэк: процедурная тумба (текстура не подгрузилась)
+      const podW = pedW * 0.84;
+      const podH = baseY - standY;
+      const pod = new Graphics();
+      pod.roundRect(cx - podW / 2, standY, podW, podH, 9)
+        .fill({ color: col })
+        .stroke({ width: 2, color: darken(col, 0.28) });
+      pod.ellipse(cx, standY, podW / 2, podW * 0.11).fill(lighten(col, 0.12));
+      c.addChild(pod);
+    }
     // номер места на фронтоне тумбы
-    const num = label(String(i + 1), podH * 0.34, unlocked ? 0x6b4a12 : COLORS.inkSoft, '800');
-    num.position.set(cx, standY + podH * 0.58);
-    c.addChild(pod, num);
+    const num = label(String(i + 1), Math.max(13, pedH * 0.16), unlocked ? 0x6b4a12 : COLORS.inkSoft, '800');
+    num.position.set(cx, baseY - pedH * 0.3);
+    c.addChild(num);
 
     if (!unlocked) {
       // запертый пьедестал: замок. На «следующем» — либо кнопка «Открыть» за 💰 (если
@@ -218,30 +264,78 @@ export function createNursery(ctx: UiContext): Room {
     return c;
   }
 
+  /** Лёгкая золотая аура зоны дропа: мягкое свечение + кольцо-посадка на площадке. */
+  function buildAura(cx: number, standY: number, pedW: number,
+    zone: { x: number; y: number; w: number; h: number }): Graphics {
+    const a = new Graphics();
+    // мягкое свечение: концентрические эллипсы, прозрачность копится к центру
+    const ecy = zone.y + zone.h / 2 - 4;
+    for (let k = 4; k >= 1; k--) {
+      a.ellipse(cx, ecy, zone.w * 0.62 * (k / 4), zone.h * 0.56 * (k / 4))
+        .fill({ color: 0xf6d98a, alpha: 0.084 });
+    }
+    // кольцо на площадке — куда встанут лапы чемпиона
+    a.ellipse(cx, standY, pedW * 0.4, pedW * 0.1)
+      .stroke({ width: 2.5, color: 0xe7b24c, alpha: 0.95 });
+    a.visible = false;
+    a.zIndex = 2000; // подсказка-подсветка — поверх всех тумб слоя декора
+    return a;
+  }
+
+  /** Пока кот «в руках» над зоной дропа — показать ауру этого пьедестала. */
+  function updateAuras(dt: number): void {
+    auraT += dt;
+    const carry = ctx.carrying();
+    let hover = -1;
+    if (carry) {
+      const lp = shell.container.toLocal({ x: carry.x, y: carry.y }, ctx.uiRoot);
+      hover = pedestalAt(lp.x, lp.y);
+      if (hover >= championSlots(ctx.state)) hover = -1; // запертый не манит
+    }
+    for (let i = 0; i < pedAuras.length; i++) {
+      const a = pedAuras[i]!;
+      a.visible = i === hover;
+      if (a.visible) a.alpha = 0.8 + Math.sin(auraT * 5) * 0.2; // лёгкое «дыхание»
+    }
+  }
+
   function refreshChampions(): void {
-    champLayer.removeChildren();
+    for (const n of pedNodes) n.destroy();
+    pedNodes = [];
+    for (const a of pedAuras) a.destroy();
+    pedAuras = [];
     pedRects = [];
     const pedCount = pedCountFor(ctx); // всегда 5 (открытые + запертые с замком)
     const w = ctx.roomW, h = ctx.roomH;
-    const usable = h - ctx.topInset;
-    const gap = Math.min(22, w * 0.03);
-    // Полоса, доступная ряду: от левого поля до правой колонки (кормушка + покупка).
-    // Ряд стоит по центру комнаты, но при нехватке ширины (узкий экран, 4:3)
-    // сначала съезжает влево и лишь потом ужимает тумбы — иначе колонка накрывает
-    // 5-й пьедестал (его замок/кнопку «Открыть»).
-    const bandL = COL_PAD;
-    const bandR = w - COL_PAD - COL_W - 12;
-    const pedW = Math.min(122, (w * 0.84) / pedCount, (bandR - bandL - gap * (pedCount - 1)) / pedCount);
-    const totalW = pedW * pedCount + gap * (pedCount - 1);
-    const startX = Math.max(bandL, Math.min((w - totalW) / 2, bandR - totalW));
-    const catSize = Math.min(90, pedW * 0.82);
-    const standY = ctx.topInset + Math.round(usable * 0.32); // линия «ног» чемпиона на тумбе
 
     for (let i = 0; i < pedCount; i++) {
-      const cx = startX + i * (pedW + gap) + pedW / 2;
-      champLayer.addChild(buildPedestal(i, cx, standY, pedW, catSize));
-      // зона дропа: покрывает кота над тумбой + саму тумбу
-      pedRects.push({ x: cx - pedW / 2, y: standY - catSize - 14, w: pedW, h: catSize + pedW * 0.5 + 24 });
+      const slot = PED_ARC[i]!;
+      const cx = slot.xN * w;
+      const baseY = slot.baseYN * h;
+      const pedH = slot.hN * h;
+      const standY = baseY - pedH * (1 - PED_TOP_INSET); // ноги чемпиона на площадке
+      // ширина тумбы — от реального спрайта (или фолбэк-пропорция 0.62 от высоты)
+      const tex = decorTexture(slot.tex);
+      const pedW = tex ? (pedH / tex.height) * tex.width : pedH * 0.62;
+      // чемпион крупнее на высоком центральном подиуме, мельче на крайних
+      const catSize = Math.round(Math.min(92, Math.max(56, pedH * 0.68)));
+
+      const node = buildPedestal(i, cx, standY, pedW, catSize);
+      node.zIndex = slot.baseYN * 1000; // глубина в y-сортируемом слое декора
+      shell.decor.addChild(node);
+      pedNodes.push(node);
+      // Зона дропа — ТОЛЬКО место над площадкой (низ ≈ уровень площадки standY):
+      // корпус тумбы кота не ловит, иначе при обычном переносе по комнате котов
+      // случайно «забрасывало» на выставку — тумбы начинаются от самого пола.
+      const dropW = Math.max(pedW, catSize) + 10;
+      const zone = {
+        x: cx - dropW / 2, y: standY - catSize - 16,
+        w: dropW, h: catSize + 26,
+      };
+      pedRects.push(zone);
+      const aura = buildAura(cx, standY, pedW, zone);
+      shell.decor.addChild(aura);
+      pedAuras.push(aura);
     }
   }
 
@@ -437,6 +531,7 @@ export function createNursery(ctx: UiContext): Room {
     refresh,
     tick: (dt) => {
       floor.tick(dt);
+      updateAuras(dt); // золотая аура зоны дропа под котом «в руках»
       feederAcc += dt;
       if (feederAcc >= FEEDER_UPDATE_S) { feederAcc = 0; feederUpdate?.(); }
     }, tryDropCat,

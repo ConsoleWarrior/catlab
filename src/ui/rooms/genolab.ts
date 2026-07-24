@@ -24,7 +24,7 @@ import {
   breedDiscovered, breedStudied, researchableRecipes,
   startRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
   recipeResearchCost, recipeResearchMs,
-  speedUpCost, AD_SKIP_MS,
+  speedUpCost, AD_SKIP_MS, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
 import type { ResearchDef } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
@@ -546,7 +546,7 @@ export function createGenolab(ctx: UiContext): Room {
       shell.body.addChild(barBg, recipeBar, recipeTime);
 
       const remain = Math.max(0, rr.readyAt - ctx.now());
-      const cost = speedUpCost(remain);
+      const cost = speedUpCost(remain, RECIPE_SPEEDUP_CRYSTAL_PER_MIN);
       const skipMin = Math.round(AD_SKIP_MS / 60_000);
       const bw = Math.min(200, Math.round(viewW * 0.3));
       const yy = barY + 58;

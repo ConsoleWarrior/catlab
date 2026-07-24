@@ -17,7 +17,7 @@ import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
-import { createLivingFloor } from '../livingFloor.js';
+import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
 import { catArtTexture } from '../catTextures.js';
 
 /** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
@@ -129,13 +129,16 @@ export function createShelter(ctx: UiContext): Room {
   // кот в корзине), а таймер тикает отдельно в tick() — без пересборки сцены.
   const ordersLayer = new Container();
   shell.container.addChild(ordersLayer);
-  const BASKET_W = 104, BASKET_H = 96;
+  // корзина — во всю ширину кнопки «📋 Заказы» (выровнена ровно под ней),
+  // повыше прежней — кот в ней читается крупно
+  const ORDERS_BW = 168, ORDERS_BH = 44;
+  const BASKET_W = ORDERS_BW, BASKET_H = 140;
   let basketZone = new Rectangle(0, 0, 0, 0);
   let ordersBtn: Button | null = null;
 
   function refreshOrdersDesk(titleW: number): void {
     ordersLayer.removeChildren();
-    const BW = 168, BH = 44;
+    const BW = ORDERS_BW, BH = ORDERS_BH;
     const cx = 18 + titleW + 10 + BW / 2;      // сразу справа от плашки названия
     const cy = ctx.topInset + 8 + 22;
 
@@ -146,8 +149,8 @@ export function createShelter(ctx: UiContext): Room {
     ordersLayer.addChild(btn);
     updateOrdersBtn();
 
-    // Корзина — «небольшая зона» ровно под кнопкой. Кот в ней рисуется прямо тут,
-    // поэтому визуально понятно, кого именно предъявим клиенту.
+    // Корзина — зона во всю ширину кнопки ровно под ней. Кот в ней рисуется прямо
+    // тут (крупно), поэтому визуально понятно, кого именно предъявим клиенту.
     const bx = cx - BASKET_W / 2;
     const by = cy + BH / 2 + 10;
     basketZone = new Rectangle(bx, by, BASKET_W, BASKET_H);
@@ -161,25 +164,45 @@ export function createShelter(ctx: UiContext): Room {
       .stroke({ width: fits ? 3 : 2, color: fits ? COLORS.good : COLORS.cardEdge });
     ordersLayer.addChild(box);
 
+    // вынуть кота из корзины обратно на пол (тап по корзине/коту)
+    const takeOut = (): void => {
+      if (!basketCat(ctx.state)) { ctx.toast('Перетащи сюда кота — и открой 📋 Заказы'); return; }
+      clearOrderBasket(ctx.state);
+      ctx.commit();
+      ctx.toast('Котик вернулся на пол 🐾');
+    };
+
     if (cat) {
       // арт-спрайт коллекции (тот же вариант, что кот показывает на полу), фолбэк — процедурный
       const sp = new Sprite(catArtTexture(cat) ?? ctx.catTexture(cat));
-      const k = Math.min((BASKET_W - 18) / sp.texture.width, (BASKET_H - 26) / sp.texture.height);
+      const k = Math.min((BASKET_W - 22) / sp.texture.width, (BASKET_H - 30) / sp.texture.height);
       sp.scale.set(k);
       sp.anchor.set(0.5, 1);
-      sp.position.set(bx + BASKET_W / 2, by + BASKET_H - 6);
-      ordersLayer.addChild(sp);
+      sp.position.set(bx + BASKET_W / 2, by + BASKET_H - 8);
       // тонкая рамка на фоне комнаты читается плохо — статус подписываем словами
-      const badge = label(fits ? '✓ подходит' : 'не подходит', 11, COLORS.ink, '800');
+      const badge = label(fits ? '✓ подходит' : 'не подходит', 12, COLORS.ink, '800');
       badge.anchor.set(0.5, 0);
       const pill = new Graphics();
       const pw = badge.width + 14;
       pill.roundRect(bx + BASKET_W / 2 - pw / 2, by + BASKET_H - 2, pw, 20, 10)
         .fill({ color: fits ? COLORS.good : COLORS.cardEdge, alpha: 0.95 });
       badge.position.set(bx + BASKET_W / 2, by + BASKET_H + 1);
-      ordersLayer.addChild(pill, badge);
+      ordersLayer.addChild(sp, pill, badge);
+
+      // кота можно не только тапнуть (вынуть на пол), но и взять за шкирку —
+      // утащить на пол в нужную точку или сразу на станцию (см. tryDropCat)
+      sp.eventMode = 'static';
+      sp.cursor = 'grab';
+      sp.on('pointerdown', (e) => ctx.startGrab({
+        cat,
+        displayH: sp.texture.height * k, // «на весу» — того же размера, что в корзине
+        hide: () => { sp.visible = false; pill.visible = false; badge.visible = false; },
+        show: () => { sp.visible = true; pill.visible = true; badge.visible = true; },
+        onTap: takeOut,
+        onDrop: () => { /* никуда не пристроили — кот остаётся в корзине (show вернул) */ },
+      }, e));
     } else {
-      const hint = label('🧺\nкорзина\nзаказов', 11.5, COLORS.inkSoft, '700');
+      const hint = label('🧺\nкорзина\nзаказов', 13, COLORS.inkSoft, '700');
       hint.anchor.set(0.5);
       hint.position.set(bx + BASKET_W / 2, by + BASKET_H / 2);
       ordersLayer.addChild(hint);
@@ -188,12 +211,7 @@ export function createShelter(ctx: UiContext): Room {
     // тап по корзине: с котом — вынуть обратно на пол, пустая — подсказка
     box.eventMode = 'static';
     box.cursor = cat ? 'pointer' : 'default';
-    box.on('pointertap', () => {
-      if (!basketCat(ctx.state)) { ctx.toast('Перетащи сюда кота — и открой 📋 Заказы'); return; }
-      clearOrderBasket(ctx.state);
-      ctx.commit();
-      ctx.toast('Котик вернулся на пол 🐾');
-    });
+    box.on('pointertap', takeOut);
   }
 
   /** Подпись кнопки: число заказов + остаток до авто-смены ближайшего (все слоты активны). */
@@ -208,9 +226,10 @@ export function createShelter(ctx: UiContext): Room {
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
+  const plane = floorPlane(ctx.roomW, ctx.roomH, ctx.topInset);
   const floor = createLivingFloor(
     ctx, floorLayer,
-    floorPlane(ctx.roomW, ctx.roomH, ctx.topInset),
+    plane,
     // на полу не показываем тех, кто стоит в слоте вязки (физически в инкубаторе)
     // и кто сидит в корзине заказов (его рисует сама корзина)
     () => catsIn(ctx.state, 'shelter')
@@ -224,7 +243,9 @@ export function createShelter(ctx: UiContext): Room {
   function tryDropCat(cat: Cat, gx: number, gy: number): boolean {
     // gx/gy — координаты виртуальной сцены; зоны — в локальных координатах комнаты
     const lp = shell.container.toLocal({ x: gx, y: gy }, ctx.uiRoot);
+    const fromBasket = isInBasket(ctx.state, cat.id); // кота тащат ИЗ корзины
     if (basketZone.contains(lp.x, lp.y)) {
+      if (fromBasket) return false; // вернули на место — endGrab покажет кота в корзине
       const r = putCatInBasket(ctx.state, cat.id);
       if (!r.ok) { ctx.toast(r.reason); return false; }
       ctx.commit();
@@ -244,6 +265,17 @@ export function createShelter(ctx: UiContext): Room {
     if (adoptZone.contains(lp.x, lp.y)) {
       ctx.commit();
       ctx.openAdoptConfirm(cat);   // «Отдать котика в добрые руки?» (Да → adoptCat)
+      return true;
+    }
+    if (fromBasket) {
+      // кота вытащили из корзины перетаскиванием — вынимаем на пол в точку сброса
+      // (глубина по Y сброса, как при обычном дропе на «живом полу»)
+      const nz = Math.max(0, Math.min(1, (plane.yNear - lp.y) / Math.max(1, plane.yNear - plane.yFar)));
+      const half = Math.max(1, plane.nearHalfW + (plane.farHalfW - plane.nearHalfW) * nz);
+      rememberFloorPos(cat.id, (lp.x - plane.centerX) / half, nz);
+      clearOrderBasket(ctx.state);
+      ctx.commit();
+      ctx.toast('Котик вернулся на пол 🐾');
       return true;
     }
     return false;

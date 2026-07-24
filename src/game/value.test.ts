@@ -53,7 +53,9 @@ describe('корм и мягкий голод', () => {
     expect(foodRatePerMin(s)).toBeCloseTo(C.FOOD_PER_MIN_BY_TIER.common);
     addCat(s, 'british_shorthair');    // T2
     addCat(s, 'maine_coon');           // T3
-    expect(foodRatePerMin(s)).toBeCloseTo(0.05 + 0.1 + 0.15);
+    expect(foodRatePerMin(s)).toBeCloseTo(
+      C.FOOD_PER_MIN_BY_TIER.common + C.FOOD_PER_MIN_BY_TIER.uncommon + C.FOOD_PER_MIN_BY_TIER.rare,
+    );
   });
 
   it('ниже гейта кормушки (искусственный ур.0) корм не расходуется и голода нет', () => {
@@ -276,7 +278,7 @@ describe('лаборатория и ускорение', () => {
     const male = s.cats.find((c) => c.genotype.sex === 'male')!;
     const now = 1000; // ненулевое время (readyAt=0 — это «пустой слот»)
     startBreeding(s, 0, female.id, male.id, now);
-    const cost = speedUpCost(incubationDuration(s));
+    const cost = speedUpCost(incubationDuration(s), C.BREED_SPEEDUP_CRYSTAL_PER_MIN);
     s.crystals = cost;
     expect(speedUpBreeding(s, 0, now).ok).toBe(true);
     expect(s.crystals).toBe(0);
@@ -304,7 +306,7 @@ describe('лаборатория и ускорение', () => {
     kitten.bornAt = now; // только родился — растёт
     s.cats.push(kitten);
     expect(isAdult(kitten, now)).toBe(false);
-    s.crystals = speedUpCost(growthRemainingMs(kitten, now));
+    s.crystals = speedUpCost(growthRemainingMs(kitten, now), C.GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
     expect(speedUpGrowth(s, kitten.id, now).ok).toBe(true);
     expect(isAdult(kitten, now)).toBe(true);
     expect(s.crystals).toBe(0);

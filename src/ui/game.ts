@@ -27,6 +27,7 @@ import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { loadEyeData } from './eyeBlink.js';
+import { initSfx, sfxMeow, sfxMusic, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
@@ -37,7 +38,7 @@ import { createCryobank } from './rooms/cryobank.js';
 import {
   buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
-  buildHealConfirm, buildCryoMenu,
+  buildHealConfirm, buildCryoMenu, buildGrowConfirm,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu, buildResearchConfirm,
 } from './overlays.js';
@@ -158,6 +159,8 @@ export class Game implements UiContext {
     this.loadState(reset);
     this.shownLevel = this.state.level; // база для баннера повышения уровня
     this.wasStarving = isStarving(this.state); // не спамить тостом «корм закончился» на первом кадре
+
+    initSfx(); // звуки грузятся в фоне, ждать не нужно — до первого тапа успеют
 
     // Готовый арт коллекции: варианты всех пород `<breed>__<n>.png` (включая
     // базовые T1: moggie и домашних), без привязки к полу. Грузим до сборки комнат;
@@ -484,6 +487,16 @@ export class Game implements UiContext {
     this.currentRoom = Math.max(0, Math.min(this.rooms.length - 1, index));
     this.targetX = -this.currentRoom * this.roomW;
     this.updateNav();
+    // тикает только текущая комната — хор спящих гасим, «пол» новой комнаты
+    // сам восстановит его на первом же тике (если там кто-то спит)
+    sfxPurrSync([]);
+    this.updateMusic();
+  }
+
+  /** Фоновый эмбиент играет в «технических» комнатах и молчит в жилых. */
+  private updateMusic(): void {
+    const id = this.rooms[this.currentRoom]?.id;
+    sfxMusic(id === 'incubator' || id === 'genolab' || id === 'cryobank');
   }
 
   openCatMenu(cat: Cat): void {
@@ -530,6 +543,11 @@ export class Game implements UiContext {
   openFreezeConfirm(cat: Cat): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildFreezeConfirm(this, cat, close));
+  }
+
+  openGrowConfirm(cat: Cat): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildGrowConfirm(this, cat, close));
   }
 
   openPedigree(cat: Cat): void {
@@ -590,9 +608,15 @@ export class Game implements UiContext {
     this.pendingGrab = { opts, sx: p.x, sy: p.y };
   }
 
+  carrying(): { cat: Cat; x: number; y: number } | null {
+    const g = this.grab;
+    return g ? { cat: g.opts.cat, x: g.x, y: g.y } : null;
+  }
+
   /** Начать вис кота «в руках»; gx/gy — виртуальные координаты сцены (root). */
   private beginGrab(gx: number, gy: number): void {
     if (!this.pendingGrab) return;
+    sfxMeow(); // взяли за шкирку — кот отзывается
     const opts = this.pendingGrab.opts;
     opts.hide();
     // «в руках»: спрайт породы (та же текстура, что на полу), иначе процедурный
@@ -772,6 +796,7 @@ export class Game implements UiContext {
     this.world.x = this.targetX;
     this.updateHud();
     this.updateNav();
+    this.updateMusic(); // старт игры / пересборка: включить эмбиент, если мы в «технической» комнате
     this.fitOverlay(); // открытая панель (если есть) — под новый размер экрана
   }
 
@@ -1070,7 +1095,7 @@ export class Game implements UiContext {
     });
     const up = (): void => {
       if (this.grab) { this.endGrab(); this.pendingGrab = null; return; }
-      if (this.pendingGrab) { this.pendingGrab.opts.onTap(); this.pendingGrab = null; return; }
+      if (this.pendingGrab) { sfxMeow(); this.pendingGrab.opts.onTap(); this.pendingGrab = null; return; }
       if (!this.pointerActive) return;
       this.pointerActive = false;
       this.axisLock = 'none';

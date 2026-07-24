@@ -7,7 +7,8 @@ export {
   RECIPE_RESEARCH_COINS_PER_LEVEL, RECIPE_RESEARCH_DNA_PER_LEVEL, RECIPE_RESEARCH_MS_PER_LEVEL,
   recipeResearchCost, recipeResearchMs,
   BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
-  HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, AD_SKIP_MS,
+  HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, AD_SKIP_MS, BOOST_AD_COOLDOWN_MS,
+  BREED_SPEEDUP_CRYSTAL_PER_MIN, GROWTH_SPEEDUP_CRYSTAL_PER_MIN, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, nextLevelRep, unlocksAtLevel, LAB_UNLOCKS,
   SLOT_UNLOCK_LEVELS, PEDESTAL_UNLOCK_LEVELS,
   REP_BIRTH_RATE, REP_NEW_BREED_MULT, REP_ADOPT_MULT, REP_LAB_MULT,
@@ -48,7 +49,7 @@ export {
   researchableRecipes, outcomeRevealed,
 } from './knowledge.js';
 export {
-  relatedness, kinshipLevel, rollKittenHearts, buildBreedingContext,
+  relatedness, kinshipLevel, rollKittenHearts, softenKinship, buildBreedingContext,
   ancestorGens, ancestorBreedList, isPureLine, KINSHIP_RU,
 } from './kinship.js';
 export {
@@ -60,7 +61,7 @@ export {
   keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
   speedUpBreeding, adSkipBreeding, speedUpGrowth, adSkipGrowth,
   putCatInBasket, clearOrderBasket,
-  buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, toggleBoost, unlockResearch,
+  buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
   startRecipeResearch, finishRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
 } from './actions.js';
