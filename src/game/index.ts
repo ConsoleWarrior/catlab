@@ -15,11 +15,14 @@ export {
   FOOD_CAP_BASE, FOOD_PER_MIN_BY_TIER, FOOD_PACK_UNITS, FOOD_PACK_COST,
   CHAMPION_SLOTS_BASE,
   HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
+  CRYSTAL_PACKS, FIRST_PURCHASE_BONUS, PROCESSED_PURCHASES_KEEP, packBonusPct,
   CRYO_BASE_CAP, CLONE_LAB_MULT,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
-  ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS, PEDESTAL_COSTS,
+  ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS, ORDER_SELL_SLOTS, ORDER_CRYSTALS,
+  ORDER_REP_BASE, ORDER_REP_GROWTH, orderRepFor,
+  PEDESTAL_COSTS,
 } from './config.js';
-export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature } from './config.js';
+export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature, CrystalPack } from './config.js';
 export {
   lvl, emptySlot, slotCount, nurseryCapacity, shelterCapacity, capacityOf,
   incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot,
@@ -32,7 +35,7 @@ export {
   boostCharges, activeBoostId, activeBoosts, consumeBoosts, researchBonus,
   researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
   catMarketValue, pedigreeValueMult, healthValueMult, labReward, shelterTotals,
-  cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
+  cryoUnlocked, cryoCapacity, cryoCount, cloneCost, cloneCostCoins,
   championSlots, championIds, championCats, championAt, isChampion, championIncomePerMin,
   basketCat, isInBasket,
   speedUpCost, effGrowthMs,
@@ -64,5 +67,6 @@ export {
   buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
   startRecipeResearch, finishRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
+  grantCrystals, firstPurchaseBonusAvailable, isKnownPack,
 } from './actions.js';
 export type { Result, BirthEvent } from './actions.js';

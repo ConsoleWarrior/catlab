@@ -235,7 +235,8 @@ describe('покупка кота (анти-софт-лок)', () => {
     const r1 = buyCat(s, rng, 0);
     expect(r1.ok).toBe(true);
     expect(s.cats).toHaveLength(1);
-    expect(s.cats[0]!.location).toBe('nursery');
+    expect(s.cats[0]!.location).toBe('shelter');
+    expect(s.cats[0]!.isNew).toBe(true); // бейдж «новый» до первого открытия инфо
     // следующий уже стоит денег
     expect(buyCatCost(s)).toBe(STARTER_CAT_COST);
     expect(buyCat(s, rng, 0).ok).toBe(false); // 0 монет

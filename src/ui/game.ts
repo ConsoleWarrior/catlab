@@ -20,6 +20,7 @@ import {
   nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
   finishRecipeResearch, refreshExpiredOrders,
+  grantCrystals, isKnownPack,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -27,7 +28,7 @@ import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { loadEyeData } from './eyeBlink.js';
-import { initSfx, sfxMeow, sfxMusic, sfxPurrSync } from './sound.js';
+import { initSfx, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
 import { createIncubator } from './rooms/incubator.js';
@@ -40,10 +41,12 @@ import {
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
   buildHealConfirm, buildCryoMenu, buildGrowConfirm,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
-  buildDevMenu, buildResearchConfirm,
+  buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel,
 } from './overlays.js';
-
-const SAVE_KEY = 'catlab:save:v1';
+import { initPlatform, loadingReady, gameplayStart, gameplayStop } from '../platform/ysdk.js';
+import { loadSaveCandidates, writeSave, writeSaveAwait } from '../platform/storage.js';
+import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
+import { interstitialDue, showInterstitial } from '../platform/ads.js';
 
 // --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
 // Сцена всегда DESIGN_H виртуальных пикселей в высоту; ширина = высота × аспект
@@ -66,6 +69,12 @@ const MIN_ASPECT = 4 / 3;
 // (п. 1.6.2.2); на телефонах лимита нет (п. 1.6.1 — полный экран), поэтому на
 // тач-устройствах заполняем экран целиком (современные телефоны ≤ ~2.4:1)
 const MAX_ASPECT = IS_TOUCH ? 2.5 : 2;
+
+// Предупреждение перед межстраничной рекламой: игрок должен понять, что дальше
+// не часть игры (см. GDD §6.7). Секунды отсчёта «Реклама через 3, 2, 1».
+const AD_COUNTDOWN_S = 3;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
 
 export class Game implements UiContext {
   readonly app = new Application();
@@ -95,6 +104,10 @@ export class Game implements UiContext {
   private overlayDim: Graphics | null = null;
   private overlayContent: Container | null = null;
   private readonly toastBox = new Container();
+  // Шторка межстраничной рекламы — поверх всего, включая оверлеи (см. runInterstitial).
+  private readonly adLayer = new Container();
+  private adCurtain: Container | null = null;
+  private adPaused = false;
   private rooms: Room[] = [];
   private hasCryoRoom = false;   // включена ли 5-я комната Крио-банк (по cryoUnlocked)
   private cryoRebuildPending = false; // отложенная пересборка ряда при открытии крио-банка
@@ -129,6 +142,7 @@ export class Game implements UiContext {
   private dnaT!: Text;
   private levelT!: Text;
   private levelBar!: Graphics;   // прогресс опыта до следующего уровня (под ⭐ Ур.)
+  private shopBtn: Button | null = null; // «+» у счётчика 💎 (появляется, когда доступны покупки)
   private shownLevel = 1;        // последний показанный уровень (для баннера повышения)
   private dots: Graphics[] = [];
   private hudPad = 0;            // левый отступ ряда ресурсов
@@ -145,6 +159,10 @@ export class Game implements UiContext {
   now(): number { return Date.now(); }
 
   async start(reset = false): Promise<void> {
+    // SDK платформы поднимаем параллельно со шрифтом и ассетами: его ждёт только
+    // загрузка сейва (облако), всему остальному он не нужен.
+    const platform = initPlatform();
+
     // Ждём готовности Rubik (локальный woff2, @font-face в index.html)
     try { await document.fonts.ready; } catch { /* fallback */ }
 
@@ -156,7 +174,8 @@ export class Game implements UiContext {
     });
     document.getElementById('app')!.appendChild(this.app.canvas);
 
-    this.loadState(reset);
+    await platform;
+    await this.loadState(reset);
     this.shownLevel = this.state.level; // база для баннера повышения уровня
     this.wasStarving = isStarving(this.state); // не спамить тостом «корм закончился» на первом кадре
 
@@ -215,7 +234,7 @@ export class Game implements UiContext {
 
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.root);
-    this.root.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox, this.rootMask);
+    this.root.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox, this.adLayer, this.rootMask);
     this.root.mask = this.rootMask;
     // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер
     // (по центру внизу, roomW/2 × roomH-56) своими границами перехватывал хит-тест и
@@ -232,9 +251,33 @@ export class Game implements UiContext {
     // первый запуск — показываем инструкцию (но не во время скриншотов ?reset)
     if (this.freshGame && !reset) this.openHelp();
 
-    // автосейв при сворачивании/закрытии
-    document.addEventListener('visibilitychange', () => { if (document.hidden) this.save(); });
-    window.addEventListener('beforeunload', () => this.save());
+    // сцена собрана и отвечает на тапы — платформе можно убрать свой лоадер
+    loadingReady();
+    gameplayStart();
+
+    // Магазин поднимаем в фоне: пока каталог не пришёл, кнопка 💎+ просто скрыта
+    // (updateHud проверяет доступность каждый кадр). Здесь же платформа отдаёт
+    // зависшие покупки — их доначисление обязательно для модерации.
+    void initPayments({
+      grant: (productId, token) => {
+        // Товар, которого эта сборка не знает, гасить нельзя — вернём 'unknown'.
+        if (!isKnownPack(productId)) return { status: 'unknown', crystals: 0 };
+        const r = grantCrystals(this.state, productId, token);
+        return r.ok ? { status: 'granted', crystals: r.crystals } : { status: 'already', crystals: 0 };
+      },
+      saveAwait: () => writeSaveAwait(serialize(this.state)),
+    }).then((restored) => {
+      if (!restored) return;
+      this.commit();
+      this.toast(`Покупка зачислена: 💎 +${restored}`);
+    });
+
+    // Автосейв при сворачивании/закрытии — с flush: облачная запись уходит
+    // немедленно, дожидаться её в beforeunload всё равно нельзя.
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { this.save(true); gameplayStop(); } else gameplayStart();
+    });
+    window.addEventListener('beforeunload', () => this.save(true));
     // Канвас привязан к visualViewport — реально видимой области. На мобиле
     // layout-вьюпорт (window.innerHeight) часто больше: низ канваса уходит под
     // адресную строку и под навигацией появляется «пустая полоса». visualViewport
@@ -251,7 +294,12 @@ export class Game implements UiContext {
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
         openHelp: () => this.openHelp(),
+        openSettings: () => this.openSettings(),
+        openShop: () => this.openShop(),
+        shopAvailable: () => shopAvailable(),
+        buyPack: (id: string) => buyPack(id).then((r) => { this.commit(); return r; }),
         openDev: () => this.openDevMenu(),
+        ad: () => this.runInterstitial(), // проверка шторки/паузы без ожидания 8 мин
         openBoostMenu: (id = 'tierUp') => this.openBoostMenu(id),
         openCatMenu: (id?: string) => {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
@@ -397,19 +445,24 @@ export class Game implements UiContext {
 
   // --- состояние ---
 
-  private loadState(reset: boolean): void {
+  /**
+   * Сейв берём из двух источников (облако Яндекса и localStorage) — от самого
+   * свежего к старому, первый пригодный выигрывает. Так переживаются оба
+   * сценария: игра на другом устройстве (свежее облако) и локальная игра без
+   * сети/вне платформы (свежий localStorage).
+   */
+  private async loadState(reset: boolean): Promise<void> {
     if (!reset) {
-      try {
-        const raw = localStorage.getItem(SAVE_KEY);
-        if (raw) {
-          const s = deserialize(raw);
+      for (const rec of await loadSaveCandidates()) {
+        try {
+          const s = deserialize(rec.raw);
           if (s && s.version === SAVE_VERSION) {
             this.state = s;
             this.applyOffline();
             return;
           }
-        }
-      } catch { /* битый сейв — начинаем заново */ }
+        } catch { /* битый сейв — пробуем следующий источник */ }
+      }
     }
     this.state = createInitialState(this.rng, this.now());
     this.freshGame = true;
@@ -438,8 +491,9 @@ export class Game implements UiContext {
     if (parts.length) setTimeout(() => this.toast('С возвращением! ' + parts.join(', ')), 600);
   }
 
-  save(): void {
-    try { localStorage.setItem(SAVE_KEY, serialize(this.state)); } catch { /* квота/приватный режим */ }
+  /** flush=true — облачную запись отправить немедленно (сворачивание/закрытие). */
+  save(flush = false): void {
+    writeSave(serialize(this.state), flush);
   }
 
   // --- UiContext ---
@@ -465,6 +519,12 @@ export class Game implements UiContext {
 
   toast(msg: string): void {
     if (!this.toastT) return;
+    // Единственная подсказка про магазин: отказ «не хватает кристаллов» приходит из
+    // десятка мест ядра — дописываем, куда идти, ровно здесь, ничего не открывая
+    // насильно поверх действия игрока.
+    if (msg.includes('не хватает кристаллов') && shopAvailable()) {
+      msg = 'Не хватает 💎 — пополнить можно кнопкой «+» в шапке';
+    }
     this.toastT.text = msg;
     this.toastUntil = this.now() + 2400;
     this.drawToast();
@@ -493,6 +553,76 @@ export class Game implements UiContext {
     this.updateMusic();
   }
 
+  // --- межстраничная реклама ---
+
+  /**
+   * Смена комнаты жестом игрока (точки навигации, стрелки, свайп) — единственная
+   * логическая пауза в этой игре: уровней и экранов результата тут нет, а
+   * переход между комнатами игрок всегда делает сам и осознанно. Только отсюда
+   * может прийти межстраничная реклама; программные переходы (DEV, перенос кота
+   * у края экрана, «показать Крио-банк») идут через goRoom и её не запускают.
+   */
+  private navRoom(index: number): void {
+    const from = this.currentRoom;
+    this.goRoom(index);
+    if (this.currentRoom !== from) this.maybeInterstitial();
+  }
+
+  private maybeInterstitial(): void {
+    // ни поверх открытой панели, ни с котом в руках, ни поверх другой рекламы
+    if (this.adPaused || this.overlayOpen || this.grab) return;
+    if (!interstitialDue(this.now())) return;
+    void this.runInterstitial();
+  }
+
+  /**
+   * Показ межстраничной по правилам площадки (см. GDD §6.7): игрока
+   * предупреждаем отсчётом, игровой процесс и звук — на паузу, тапы под шторку
+   * не проходят (случайный клик по рекламе = снижение дохода и риск блокировки).
+   */
+  private async runInterstitial(): Promise<void> {
+    this.adPaused = true; // update() замирает: доход, таймеры комнат, анимация
+    // жест, которым переключили комнату, считаем законченным: после рекламы он не
+    // должен «продолжиться» и дёрнуть ленту комнат от старой точки касания
+    this.pointerActive = false;
+    this.dragging = false;
+    this.axisLock = 'none';
+    this.pendingGrab = null;
+    sfxPause(true);
+    for (let n = AD_COUNTDOWN_S; n > 0; n--) {
+      this.drawAdCurtain(`Реклама через ${n}`);
+      await sleep(1000);
+    }
+    this.drawAdCurtain('Реклама…');
+    await showInterstitial();
+    this.hideAdCurtain();
+    sfxPause(false);
+    this.adPaused = false;
+  }
+
+  /** Рисует/обновляет шторку. Без текста — просто перерисовка под новый размер. */
+  private drawAdCurtain(text?: string): void {
+    let box = this.adCurtain;
+    if (!box) {
+      box = new Container();
+      box.eventMode = 'static'; // глотает тапы: под шторкой игра стоит
+      box.addChild(new Graphics(), label('', 22, 0xffffff, '700'));
+      this.adLayer.addChild(box);
+      this.adCurtain = box;
+    }
+    const [bg, t] = box.children as [Graphics, Text];
+    bg.clear();
+    bg.rect(0, 0, this.roomW, this.roomH).fill({ color: COLORS.overlay, alpha: 0.92 });
+    box.hitArea = new Rectangle(0, 0, this.roomW, this.roomH);
+    if (text !== undefined) t.text = text;
+    t.position.set(this.roomW / 2, this.roomH / 2);
+  }
+
+  private hideAdCurtain(): void {
+    this.adCurtain?.destroy({ children: true });
+    this.adCurtain = null;
+  }
+
   /** Фоновый эмбиент играет в «технических» комнатах и молчит в жилых. */
   private updateMusic(): void {
     const id = this.rooms[this.currentRoom]?.id;
@@ -500,6 +630,10 @@ export class Game implements UiContext {
   }
 
   openCatMenu(cat: Cat): void {
+    // первое открытие инфо = кот «изучен»: снимаем бейдж «новый» и сохраняемся
+    // (commit пересоберёт «живой пол» — бейдж исчезнет). Событие тапа приходит со
+    // stage (см. pointerup), а не с контейнера кота — пересборка пола тут безопасна.
+    if (cat.isNew) { cat.isNew = false; this.commit(); }
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildCatMenu(this, cat, close));
     // «замораживаем» кота в комнате, пока меню открыто; значок ℹ️ появляется
@@ -594,6 +728,18 @@ export class Game implements UiContext {
   openHelp(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildHelpPanel(this, close));
+  }
+
+  openSettings(): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildSettingsPanel(this, close));
+  }
+
+  /** Магазин 💎 — только когда покупки реально доступны (без мёртвых кнопок). */
+  openShop(): void {
+    if (!shopAvailable()) return;
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildShopPanel(this, close));
   }
 
   /** ⚠️ ВРЕМЕННОЕ DEV-меню (кнопка 🛠, только import.meta.env.DEV) — убрать перед релизом. */
@@ -798,6 +944,7 @@ export class Game implements UiContext {
     this.updateNav();
     this.updateMusic(); // старт игры / пересборка: включить эмбиент, если мы в «технической» комнате
     this.fitOverlay(); // открытая панель (если есть) — под новый размер экрана
+    if (this.adCurtain) this.drawAdCurtain(); // шторка рекламы переживает ресайз
   }
 
   private buildHud(): void {
@@ -841,27 +988,48 @@ export class Game implements UiContext {
     this.coinsT = mk(0xc9912a);
     this.rateT = mk(0x4f9d63, Math.max(11, fs - 3));
     this.crystalsT = mk(0x3a93c9);
+    // «+» сразу за счётчиком 💎 — вход в магазин. Создаём всегда, показываем только
+    // когда покупки подключены (см. updateHud): каталог приходит уже после сборки HUD.
+    const shopSize = Math.round(ti * 0.5);
+    this.shopBtn = new Button({
+      text: '+', w: shopSize, h: shopSize, color: COLORS.crystals, fontSize: Math.round(fs * 0.95),
+    });
+    this.shopBtn.visible = false;
+    this.shopBtn.position.set(pad, ti / 2);
+    this.shopBtn.onTap = () => this.openShop();
+    this.hud.addChild(this.shopBtn);
     this.dnaT = mk(0x7a4fd0);
     this.levelT = mk(COLORS.ink, fs);
     this.levelBar = new Graphics(); // тонкая полоска прогресса опыта под ⭐ Ур.
     this.hud.addChild(this.levelBar);
 
+    // Кнопки справа выкладываются справа налево: справка → шестерёнка → (dev).
     const bh = Math.round(ti * 0.72);
-    const helpW = Math.round(ti * 0.92);
-    const help = new Button({ text: '❓', w: helpW, h: bh, color: COLORS.secondary, fontSize: fs + 3 });
-    help.position.set(w - pad - helpW / 2, ti / 2);
-    help.onTap = () => this.openHelp();
+    const btnW = Math.round(ti * 0.92);
+    const btnGap = 8;
+    let rx = w - pad; // правый край текущей кнопки
 
+    const help = new Button({ text: '❓', w: btnW, h: bh, color: COLORS.secondary, fontSize: fs + 3 });
+    help.position.set(rx - btnW / 2, ti / 2);
+    help.onTap = () => this.openHelp();
     this.hud.addChild(help);
+    rx -= btnW + btnGap;
+
+    // Настройки (громкость и пр.) — всегда доступны.
+    const gear = new Button({ text: '⚙️', w: btnW, h: bh, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: fs + 2 });
+    gear.position.set(rx - btnW / 2, ti / 2);
+    gear.onTap = () => this.openSettings();
+    this.hud.addChild(gear);
+    rx -= btnW + btnGap;
 
     // ⚠️ ВРЕМЕННОЕ: кнопка режима разработчика (валюты/уровень). Только в dev-сборке
     // (в проде для Яндекса не появляется). Удалить вместе с buildDevMenu перед релизом.
     if (import.meta.env.DEV) {
-      const devW = Math.round(ti * 0.92);
-      const dev = new Button({ text: '🛠', w: devW, h: bh, color: COLORS.warn, textColor: COLORS.ink, fontSize: fs + 2 });
-      dev.position.set(w - pad - helpW - 8 - devW / 2, ti / 2);
+      const dev = new Button({ text: '🛠', w: btnW, h: bh, color: COLORS.warn, textColor: COLORS.ink, fontSize: fs + 2 });
+      dev.position.set(rx - btnW / 2, ti / 2);
       dev.onTap = () => this.openDevMenu();
       this.hud.addChild(dev);
+      rx -= btnW + btnGap;
     }
   }
 
@@ -884,7 +1052,16 @@ export class Game implements UiContext {
       this.rateT.position.x = x;
       x += this.rateT.width + this.hudGap;
     }
-    this.crystalsT.position.x = x; x += this.crystalsT.width + this.hudGap;
+    this.crystalsT.position.x = x; x += this.crystalsT.width;
+    if (this.shopBtn) {
+      // кнопка появляется, как только пришёл каталог покупок; нет покупок — нет и места под неё
+      this.shopBtn.visible = shopAvailable();
+      if (this.shopBtn.visible) {
+        this.shopBtn.position.x = x + 6 + this.shopBtn.width / 2;
+        x += 12 + this.shopBtn.width;
+      }
+    }
+    x += this.hudGap;
     this.dnaT.position.x = x; x += this.dnaT.width + this.hudGap;
     this.levelT.position.x = x;
     this.drawLevelBar();
@@ -948,7 +1125,7 @@ export class Game implements UiContext {
       // вверх не вылезает за низ контента (верх зоны = -14, как раньше), рост зоны
       // идёт вширь и вниз в леттербокс — чтобы не перехватывать тапы по контенту.
       d.hitArea = new Rectangle(-24, -14, 48, 30);
-      d.on('pointertap', () => this.goRoom(i));
+      d.on('pointertap', () => this.navRoom(i));
       this.nav.addChild(d);
       this.dots.push(d);
     }
@@ -963,10 +1140,10 @@ export class Game implements UiContext {
     const rightX = Math.min(this.roomW - aw / 2 - 4, startX + totalW + gap + aw / 2);
     const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     left.position.set(leftX, y);
-    left.onTap = () => this.goRoom(this.currentRoom - 1);
+    left.onTap = () => this.navRoom(this.currentRoom - 1);
     const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     right.position.set(rightX, y);
-    right.onTap = () => this.goRoom(this.currentRoom + 1);
+    right.onTap = () => this.navRoom(this.currentRoom + 1);
     this.nav.addChild(left, right);
   }
 
@@ -1059,6 +1236,9 @@ export class Game implements UiContext {
 
   private installInput(): void {
     this.app.stage.on('pointerdown', (e: FederatedPointerEvent) => {
+      // события со сцены доходят сюда всплытием даже от шторки рекламы — на паузе
+      // жесты не обрабатываем вовсе (иначе свайп листал бы комнаты вслепую)
+      if (this.adPaused) return;
       if (this.overlayOpen || this.pendingGrab) return; // котика берём — комнату не свайпим
       this.pointerActive = true;
       this.dragging = false;
@@ -1069,7 +1249,7 @@ export class Game implements UiContext {
       this.startWorldX = this.world.x;
     });
     this.app.stage.on('pointermove', (e: FederatedPointerEvent) => {
-      if (this.overlayOpen) return;
+      if (this.adPaused || this.overlayOpen) return;
       const p = this.root.toLocal(e.global); // окно → виртуальные координаты сцены
       // взятие котика за шкирку (приоритетнее свайпа)
       if (this.pendingGrab && !this.grab) {
@@ -1094,6 +1274,7 @@ export class Game implements UiContext {
       }
     });
     const up = (): void => {
+      if (this.adPaused) return;
       if (this.grab) { this.endGrab(); this.pendingGrab = null; return; }
       if (this.pendingGrab) { sfxMeow(); this.pendingGrab.opts.onTap(); this.pendingGrab = null; return; }
       if (!this.pointerActive) return;
@@ -1101,7 +1282,7 @@ export class Game implements UiContext {
       this.axisLock = 'none';
       if (!this.dragging) return;
       const moved = this.startWorldX - this.world.x; // >0 — свайп влево (к следующей)
-      if (Math.abs(moved) > this.roomW * 0.18) this.goRoom(this.currentRoom + Math.sign(moved));
+      if (Math.abs(moved) > this.roomW * 0.18) this.navRoom(this.currentRoom + Math.sign(moved));
       else this.goRoom(this.currentRoom);
       this.dragging = false;
     };
@@ -1112,6 +1293,10 @@ export class Game implements UiContext {
   // --- цикл ---
 
   private update(dt: number): void {
+    // на время рекламы игра стоит: ни дохода, ни таймеров комнат, ни анимации
+    // (требование площадки — см. runInterstitial)
+    if (this.adPaused) return;
+
     // плавный доезд к выбранной комнате
     if (!this.dragging) {
       const d = this.targetX - this.world.x;

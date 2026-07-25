@@ -24,6 +24,7 @@ import {
   speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS, BREED_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
 import { boostCanFire } from '../../genetics/index.js';
+import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel } from '../theme.js';
@@ -37,6 +38,10 @@ const APPROACH_MS = 900; // за это время перегородка под
 // ИИ-фоны боксов вязки (src/assets/slotbox/*_cut.webp) — вырезки с прозрачностью,
 // используются как полноценный фон всей карточки слота. Один вариант на все слоты.
 const SLOT_BOX_SPRITES = ['slotbox_glass_cut', 'slotbox_glass_cut', 'slotbox_glass_cut'];
+// Спрайт бокса ужат на 4% от «cover», чтобы его края сошлись с полосой кнопок.
+const BOX_FIT = 0.96;
+// Прозрачное поле сверху в самой текстуре (контент начинается с y=45 из 896).
+const BOX_TOP_PAD = 45 / 896;
 
 // Акцент свечения заряженного усилителя — в тон его текстуры (boost_<id>.webp).
 // После перемаппинга: стабилизатор→зелёный, катализатор→синий, активатор→оранжевый.
@@ -85,6 +90,27 @@ function syncGlow(sp?: Sprite, g?: Sprite): void {
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
+
+/**
+ * Подпись-замок поверх пёстрого ИИ-фона комнаты (закрытые слоты, «Усилители —
+ * с ур. N»). Серый текст на полупрозрачной карточке тонул в фоне, поэтому пишем
+ * белым жирным с тёмной обводкой — тем же приёмом, что и названия чипов.
+ */
+const lockHint = (text: string, size = 12): Text =>
+  label(text, size, 0xffffff, '800', { color: 0x2c2438, width: 3.5 });
+
+/**
+ * Насколько видимый верх ИИ-бокса ниже верха карточки слота: спрайт вписан
+ * «cover» ×BOX_FIT (по бокам/сверху остаются поля) плюс прозрачный отступ внутри
+ * самой текстуры. На эту дельту опускаем притушённые карточки закрытых слотов,
+ * чтобы верхние границы всех трёх окон стояли на одной линии при любом размере.
+ */
+function boxTopInset(i: number, w: number, h: number): number {
+  const tex = decorTexture(SLOT_BOX_SPRITES[i % SLOT_BOX_SPRITES.length]!);
+  if (!tex) return 0;
+  const s = Math.max(w / tex.width, h / tex.height) * BOX_FIT;
+  return (h - tex.height * s) / 2 + tex.height * BOX_TOP_PAD * s;
+}
 
 export function createIncubator(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'incubator', '🧬 Инкубатор');
@@ -205,7 +231,7 @@ export function createIncubator(ctx: UiContext): Room {
     const firstCx = plateW + 12 + CHIP_W / 2;
     // Генная инженерия открывается уровнем лаборатории — до этого вместо чипов замок.
     if (!isUnlocked(ctx.state, 'engineering')) {
-      const hint = label(`🧪 Усилители — с ур. ${unlockLevelOf('engineering')} 🔒`, 13, COLORS.inkSoft, '700');
+      const hint = lockHint(`🧪 Усилители — с ур. ${unlockLevelOf('engineering')} 🔒`, 13);
       hint.anchor.set(0, 0.5);
       hint.position.set(firstCx - CHIP_W / 2, shell.titleH / 2);
       boostBar.addChild(hint);
@@ -280,7 +306,7 @@ export function createIncubator(ctx: UiContext): Room {
       const bgSp = new Sprite(boxTex);
       bgSp.anchor.set(0.5);
       // −4%: спрайт слегка ужат, чтобы его края сошлись с расширенной полосой кнопок
-      bgSp.scale.set(Math.max(w / boxTex.width, h / boxTex.height) * 0.96);
+      bgSp.scale.set(Math.max(w / boxTex.width, h / boxTex.height) * BOX_FIT);
       bgSp.position.set(w / 2, h / 2);
       card.addChild(bgSp);
     } else {
@@ -525,8 +551,11 @@ export function createIncubator(ctx: UiContext): Room {
       const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw2, h: 30, color: COLORS.secondary, fontSize: 12 });
       adBtn.position.set(w / 2 - bw2 / 2 - 4, yy);
       adBtn.onTap = () => {
-        const r = adSkipBreeding(ctx.state, i, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+        void showRewarded().then((watched) => {
+          if (!watched) { ctx.toast('Реклама недоступна'); return; }
+          const r = adSkipBreeding(ctx.state, i, ctx.now());
+          if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+        });
       };
       const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
       crBtn.position.set(w / 2 + bw2 / 2 + 4, yy);
@@ -569,8 +598,11 @@ export function createIncubator(ctx: UiContext): Room {
         // родословных рецептов выше, но котёнок рискует здоровьем)
         const kin = kinshipLevel(mother!, father!);
         if (kin !== 'none') {
-          const warn = label(`⚠️ родство: ${KINSHIP_RU[kin]}`, 11.5,
-            kin === 'critical' ? COLORS.warn : COLORS.inkSoft, '800');
+          // На золотисто-розовой полосе кнопок бледный COLORS.warn не читался:
+          // критическое родство — тревожный красный, остальное — тёмная охра,
+          // и обоим белая обводка-ореол, чтобы буквы отделялись от полосы.
+          const warn = label(`⚠️ родство: ${KINSHIP_RU[kin]}`, 12,
+            kin === 'critical' ? 0xd42a2a : 0x8a5a1e, '800', { color: 0xffffff, width: 3 });
           warn.position.set(w / 2, h - 50 + ctrlShift);
           card.addChild(warn);
         }
@@ -644,7 +676,7 @@ export function createIncubator(ctx: UiContext): Room {
       if (!levelAllows) {
         // слот заперт уровнем лаборатории — подсказка «Откроется на ур. N»
         const need = nextSlotUnlockLevel(ctx.state);
-        const hint = label(need ? `Откроется на ур. ${need}` : 'Максимум слотов', 12, COLORS.inkSoft, '700');
+        const hint = lockHint(need ? `Откроется на ур. ${need}` : 'Максимум слотов');
         hint.position.set(w / 2, h - 26);
         card.addChild(hint);
       } else {
@@ -665,7 +697,7 @@ export function createIncubator(ctx: UiContext): Room {
         card.addChild(btn);
       }
     } else {
-      const hint = label('откроется после предыдущего', 11.5, COLORS.inkSoft, '600');
+      const hint = lockHint('откроется после предыдущего', 11.5);
       hint.position.set(w / 2, h - 26);
       card.addChild(hint);
     }
@@ -719,11 +751,11 @@ export function createIncubator(ctx: UiContext): Room {
       }
     }
 
-    const LOCKED_DY = 17; // неактивные слоты опущены до уровня открытых
     for (let i = 0; i < N; i++) {
       const locked = i >= owned;
       const c = locked ? buildLockedSlot(i, slotW, slotH) : buildSlot(i, slotW, slotH);
-      c.position.set(startX + i * (slotW + gap), startY + (locked ? LOCKED_DY : 0));
+      // закрытые слоты опущены ровно до видимого верха бокса открытых
+      c.position.set(startX + i * (slotW + gap), startY + (locked ? boxTopInset(i, slotW, slotH) : 0));
       shell.body.addChild(c);
     }
 

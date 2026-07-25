@@ -98,9 +98,9 @@ describe('C: пристройство — orderReward', () => {
     const s = createInitialState(makeRng(1), 0);
     const cat = s.cats[0]!;
     s.orders = [{
-      id: 'o1', req: { minRarity: 'common' },
+      id: 'o1', req: { minRarity: 'common' }, kind: 'target',
       reward: { coins: 100, crystals: 5, dna: 20, reputation: 10 },
-      createdAt: 0, expiresAt: 6 * 60 * 60_000,
+      createdAt: 0, expiresAt: 6 * 60 * 60_000, adRefreshAt: 0,
     }];
     s.orderBasket = cat.id; // заказ закрывают котом из корзины
     s.research = { r_order_dna: 2 }; // 2×15% = +30% к награде (кроме 💎)

@@ -242,9 +242,11 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     const baseHearts = rollKittenHearts(heartsKinship, rng, E.kinshipSafety(state));
     kitten.maxHearts = E.applyExtraHearts(baseHearts, E.extraHearts(state));
     state.cats.push(kitten);
-    // ⭐ опыт за рождение: доля от рыночной ценности тира котёнка (гринд дворовых даёт
-    // крохи), с ×множителем за первое открытие породы.
-    const rep = Math.round(C.TIER_MARKET_VALUE[kitten.rarityTier] * C.REP_BIRTH_RATE)
+    // ⭐ опыт за рождение: доля от РЫНОЧНОЙ ЦЕННОСТИ котёнка (тир × порода × родословная
+    // × здоровье — гринд дворовых даёт крохи, а трудная порода с чистой линией платит
+    // заметно больше), с ×множителем за первое открытие породы. Считается ПОСЛЕ броска
+    // сердец: инбридинговый котёнок дешевле → и опыта за него меньше.
+    const rep = Math.round(E.catMarketValue(kitten) * C.REP_BIRTH_RATE)
       * (newBreed ? C.REP_NEW_BREED_MULT : 1);
     addReputation(state, rep);
     // Малыш «на руках» в центре слота: родители рядом, перегородка поднята.
@@ -259,14 +261,15 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
   return events;
 }
 
-/** Купить простого кота в питомник (первый бесплатно, если котов нет). */
+/** Купить простого кота в приют (первый бесплатно, если котов нет). */
 export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: Cat }> {
-  if (E.roomCount(state, 'nursery') >= E.nurseryCapacity(state)) {
-    return { ok: false, reason: 'нет места в питомнике' };
+  if (E.roomCount(state, 'shelter') >= E.shelterCapacity(state)) {
+    return { ok: false, reason: 'нет места в приюте' };
   }
   const cost = E.buyCatCost(state);
   if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
-  const cat = E.makeCatInstance(state, simpleCat(rng), now, 'nursery');
+  const cat = E.makeCatInstance(state, simpleCat(rng), now, 'shelter');
+  cat.isNew = true; // бейдж «новый» над котом, пока не откроют его инфо-меню
   attachHiddenPedigree(state, cat, rng); // лотерея скрытых генов у купленного дворового
   state.cats.push(cat);
   return { ok: true, cat };
@@ -556,19 +559,19 @@ export function freezeCat(
 }
 
 /**
- * Клонировать замороженного кота за 🧬 (цена = ×CLONE_LAB_MULT от выхода лаборатории
- * этого экземпляра). Клон = ТОЧНАЯ копия оригинала: генотип/порода/пол/внешность и
- * родословная совпадают; сразу `analyzed` (клонирование = полное секвенирование);
- * `maxHearts` наследуется (бесплодный клонируется бесплодным), `breedCount = 0`.
- * Появляется маленьким котёнком в питомнике и растёт (как настоящий).
- * Оригинал остаётся в капсуле. Анти-эксплойты: у клона та же родословная, что у
+ * Клонировать замороженного кота за 🧬 + 💰 (цена 🧬 = ×CLONE_LAB_MULT от выхода лаборатории
+ * этого экземпляра, цена 💰 = ×10 от цены в 🧬, см. cloneCostCoins). Клон = ТОЧНАЯ копия
+ * оригинала: генотип/порода/пол/внешность и родословная совпадают; сразу `analyzed`
+ * (клонирование = полное секвенирование); `maxHearts` наследуется (бесплодный клонируется
+ * бесплодным), `breedCount = 0`. Появляется маленьким котёнком в питомнике и растёт (как
+ * настоящий). Оригинал остаётся в капсуле. Анти-эксплойты: у клона та же родословная, что у
  * оригинала → они делят всех предков, поэтому клон×оригинал (и клон×клон) даёт
  * критическое родство, «фабрику чистых пар» не собрать; опыта ⭐ за клона нет (не
  * рождение), порода не переоткрывается.
  */
 export function cloneCat(
   state: GameState, cryoId: string, now: number,
-): Result<{ clone: Cat; dna: number }> {
+): Result<{ clone: Cat; dna: number; coins: number }> {
   const original = (state.cryo ?? []).find((c) => c.id === cryoId);
   if (!original) return { ok: false, reason: 'капсула не найдена' };
   if (!E.cryoUnlocked(state)) return { ok: false, reason: 'locked' };
@@ -576,7 +579,11 @@ export function cloneCat(
     return { ok: false, reason: 'нет места в питомнике' };
   }
   const cost = E.cloneCost(original);
-  if (!spend(state, 'dna', cost)) return { ok: false, reason: 'не хватает ДНК' };
+  const coinsCost = E.cloneCostCoins(original);
+  if (state.dna < cost) return { ok: false, reason: 'не хватает ДНК' };
+  if (state.coins < coinsCost) return { ok: false, reason: 'не хватает монет' };
+  spend(state, 'dna', cost);
+  spend(state, 'coins', coinsCost);
   // genotype — глубокая копия (клон не должен делить ссылку с оригиналом в капсуле)
   const genotype = structuredClone(original.genotype);
   const clone = E.makeCatInstance(state, genotype, now, 'nursery', original.breed);
@@ -593,7 +600,7 @@ export function cloneCat(
   clone.fatherBreed = original.fatherBreed;
   revealPedigree(clone); // analyzed → дерево клона без тумана (даже если оригинал не вскрыт)
   state.cats.push(clone);
-  return { ok: true, clone, dna: cost };
+  return { ok: true, clone, dna: cost, coins: coinsCost };
 }
 
 /**
@@ -883,4 +890,50 @@ export function putCatInBasket(state: GameState, catId: string): Result {
 /** Вынуть кота из корзины (вернуть на пол приюта). */
 export function clearOrderBasket(state: GameState): void {
   state.orderBasket = null;
+}
+
+// --- Инап-покупки 💎 ---
+
+/**
+ * Начислить кристаллы за оплаченный пак. Чистая функция над состоянием: сам платёж
+ * живёт в src/platform/payments.ts, сюда приходит уже подтверждённая покупка.
+ *
+ * Идемпотентна по purchaseToken — это ключевое требование: если состояние
+ * сохранилось, а consumePurchase не прошёл (обрыв связи), платформа вернёт ту же
+ * покупку при следующем запуске, и начислить второй раз нельзя (см. GDD.md §6.4).
+ * Неизвестный товар НЕ начисляем и не считаем обработанным: пусть покупка
+ * дождётся версии игры, которая про неё знает, чем пропадёт при консумировании.
+ */
+export function grantCrystals(
+  state: GameState, productId: string, purchaseToken: string,
+): Result<{ crystals: number; bonus: number; pack: C.CrystalPack }> {
+  const pack = C.CRYSTAL_PACKS.find((p) => p.id === productId);
+  if (!pack) return { ok: false, reason: 'неизвестный товар' };
+  if (purchaseToken && state.processedPurchases.includes(purchaseToken)) {
+    return { ok: false, reason: 'покупка уже начислена' };
+  }
+
+  const bonus = state.firstPurchaseDone ? 0 : Math.round(pack.crystals * C.FIRST_PURCHASE_BONUS);
+  state.crystals += pack.crystals + bonus;
+  state.firstPurchaseDone = true;
+  if (purchaseToken) {
+    state.processedPurchases.push(purchaseToken);
+    if (state.processedPurchases.length > C.PROCESSED_PURCHASES_KEEP) {
+      state.processedPurchases = state.processedPurchases.slice(-C.PROCESSED_PURCHASES_KEEP);
+    }
+  }
+  return { ok: true, crystals: pack.crystals + bonus, bonus, pack };
+}
+
+/** Полагается ли игроку бонус первой покупки (+50%) — для витрины магазина. */
+export function firstPurchaseBonusAvailable(state: GameState): boolean {
+  return !state.firstPurchaseDone;
+}
+
+/**
+ * Знает ли эта сборка игры такой товар. Нужно, чтобы отличить «уже начислено»
+ * (покупку можно гасить) от «товар неизвестен» (гасить нельзя — потеряется).
+ */
+export function isKnownPack(productId: string): boolean {
+  return C.CRYSTAL_PACKS.some((p) => p.id === productId);
 }

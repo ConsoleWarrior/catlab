@@ -5,7 +5,10 @@
 import { randomCat } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import type { GameState } from './types.js';
-import { BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, ORDER_REFRESH_MS, levelForReputation } from './config.js';
+import {
+  BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, ORDER_REFRESH_MS, ORDER_SELL_SLOTS,
+  levelForReputation,
+} from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
 import { attachHiddenPedigree, revealPedigree } from './pedigree.js';
 import { initOrders } from './orders.js';
@@ -32,7 +35,6 @@ export function createInitialState(rng: Rng, now: number): GameState {
     cryo: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
-    orderAdRefreshAt: 0, // 📺-обновление заказа сразу доступно
     orderBasket: null,
     champions: [],
     food: FOOD_CAP_BASE, // кормушка стартует полной
@@ -41,6 +43,8 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastAnalyzeAdAt: 0,  // 📺-вариант Генетического анализа сразу доступен
     lastFreezeAdAt: 0,   // 📺-вариант заморозки сразу доступен
     lastBoostAdAt: 0,    // 📺-зарядка усилителя сразу доступна
+    processedPurchases: [],
+    firstPurchaseDone: false,
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -110,13 +114,19 @@ export function deserialize(json: string): GameState {
   if (typeof data.lastAnalyzeAdAt !== 'number') data.lastAnalyzeAdAt = 0;
   if (typeof data.lastFreezeAdAt !== 'number') data.lastFreezeAdAt = 0;
   if (typeof data.lastBoostAdAt !== 'number') data.lastBoostAdAt = 0;
-  // Заказы (v9): у каждого свой таймер жизни (refillAt→expiresAt) + orderAdRefreshAt.
+  // Заказы (v9): у каждого свой таймер жизни (refillAt→expiresAt) и свой кулдаун
+  // 📺-обновления (adRefreshAt, раньше был один глобальный state.orderAdRefreshAt).
   // Старые сейвы и так сбрасываются загрузчиком по SAVE_VERSION; здесь — мягкая страховка.
   if (!Array.isArray(data.orders)) data.orders = [];
-  for (const o of data.orders) {
+  data.orders.forEach((o, i) => {
     if (typeof o.expiresAt !== 'number') o.expiresAt = (o.createdAt ?? 0) + ORDER_REFRESH_MS;
-  }
-  if (typeof data.orderAdRefreshAt !== 'number') data.orderAdRefreshAt = 0;
+    if (typeof o.adRefreshAt !== 'number') o.adRefreshAt = 0; // 📺 сразу доступно
+    if (o.kind !== 'sell' && o.kind !== 'target') o.kind = i < ORDER_SELL_SLOTS ? 'sell' : 'target';
+  });
+  // Инап-покупки: поля добавлены с этапом 5.3. Мягкие дефолты без бампа SAVE_VERSION —
+  // сбрасывать прогресс из-за чисто аддитивных полей нельзя (тем более у платящих).
+  if (!Array.isArray(data.processedPurchases)) data.processedPurchases = [];
+  if (typeof data.firstPurchaseDone !== 'boolean') data.firstPurchaseDone = false;
   // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
   // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;
   // рождённым в инкубаторе (есть motherBreed/fatherBreed) раскрываем родителей —

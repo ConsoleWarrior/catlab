@@ -66,9 +66,57 @@ function normalize(s: Sound, base: number): void {
   s.volume = base * gain;
 }
 
+// --- общая громкость ----------------------------------------------------------
+// Один множитель на все звуки: эффекты (@pixi/sound) идут через sound.volumeAll,
+// музыка (HTMLAudioElement, мимо WebAudio) домножается на него в musicTick и здесь.
+// Хранится в localStorage — это настройка устройства, а не игровой прогресс, в
+// облачный сейв она не попадает.
+const VOL_KEY = 'catlab:volume';
+
+function loadMasterVolume(): number {
+  try {
+    const raw = localStorage.getItem(VOL_KEY);
+    if (raw !== null) {
+      const v = Number(raw);
+      if (Number.isFinite(v)) return Math.min(1, Math.max(0, v));
+    }
+  } catch { /* приватный режим — по умолчанию полная громкость */ }
+  return 1;
+}
+
+let masterVol = loadMasterVolume(); // 0..1
+
+/** Текущая общая громкость (0..1) — для инициализации ползунка настроек. */
+export function getMasterVolume(): number { return masterVol; }
+
+/** Установить общую громкость (0..1): применяется к эффектам и музыке сразу. */
+export function setMasterVolume(v: number): void {
+  masterVol = Math.min(1, Math.max(0, v));
+  sound.volumeAll = masterVol;                                    // мяуканье + мурлыканье (WebAudio)
+  if (musicEl) musicEl.volume = MUSIC_VOL * musicVol * masterVol; // музыка (HTMLAudio)
+  try { localStorage.setItem(VOL_KEY, String(masterVol)); } catch { /* квота/приватный режим */ }
+}
+
+/**
+ * Приглушить весь звук (эффекты, хор мурлыканья, музыку) и вернуть обратно.
+ * Требование площадки: на время полноэкранной рекламы звук и игровой процесс
+ * ставятся на паузу (см. GDD §6.7). Позиции не сбрасываются — после рекламы
+ * мурчание и трек продолжаются с того же места.
+ */
+export function sfxPause(on: boolean): void {
+  if (on) {
+    sound.pauseAll();
+    musicEl?.pause();
+  } else {
+    sound.resumeAll();
+    if (musicOn) tryPlayMusic();
+  }
+}
+
 /** Зарегистрировать и предзагрузить все звуки; вызвать один раз при старте игры. */
 export function initSfx(): void {
   if (meows.length) return; // повторный вызов (resize пересоздаёт комнаты, не игру)
+  sound.volumeAll = masterVol; // применить сохранённую громкость к эффектам
   const reg = (urls: Record<string, string>, prefix: string, into: string[], vol: number): void => {
     Object.entries(urls).forEach(([, url], i) => {
       const alias = `${prefix}${i}`;
@@ -173,7 +221,7 @@ function musicTick(ts: number): void {
   musicPrev = ts;
   musicVol += dt / (musicOn ? MUSIC_FADE_IN : -MUSIC_FADE_OUT);
   musicVol = Math.min(1, Math.max(0, musicVol));
-  if (musicEl) musicEl.volume = MUSIC_VOL * musicVol;
+  if (musicEl) musicEl.volume = MUSIC_VOL * musicVol * masterVol;
   if (!musicOn && musicVol <= 0) { musicEl?.pause(); musicRaf = 0; return; }
   // фейд дошёл до 1 — можно не крутиться; выключение снова запустит цикл
   musicRaf = musicOn && musicVol >= 1 ? 0 : requestAnimationFrame(musicTick);

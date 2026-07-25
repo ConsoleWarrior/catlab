@@ -4,12 +4,14 @@ import {
   createInitialState, matchesOrder, generateOrder, claimOrder, makeCatInstance,
   initOrders, refreshExpiredOrders, adRefreshOrder, canAdRefreshOrder, msUntilAdRefresh,
   msUntilOrderExpiry, ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS,
+  ORDER_SELL_SLOTS, ORDER_CRYSTALS, orderRepFor, MAX_LEVEL,
 } from './index.js';
 import type { Order } from './index.js';
 
 const noReward = { coins: 0, crystals: 0, dna: 0, reputation: 0 };
 const mkOrder = (over: Partial<Order>): Order => ({
-  id: 'o', req: { breed: 'persian' }, reward: noReward, createdAt: 0, expiresAt: ORDER_REFRESH_MS, ...over,
+  id: 'o', req: { breed: 'persian' }, kind: 'target', reward: noReward,
+  createdAt: 0, expiresAt: ORDER_REFRESH_MS, adRefreshAt: 0, ...over,
 });
 
 describe('matchesOrder', () => {
@@ -133,7 +135,7 @@ describe('claimOrder', () => {
     expect(s.coins).toBe(before + 100);
     expect(s.dna).toBe(5);
     expect(s.reputation).toBe(500);
-    expect(s.level).toBe(2); // 500 ≥ порог L2 (480)
+    expect(s.level).toBe(2); // 500 ≥ порог L2 (360)
     expect(s.cats.find((c) => c.id === cat.id)).toBeUndefined();
     // выполненный заказ сменился свежим в том же слоте: id новый, заказ активен
     expect(s.orders.length).toBe(1);
@@ -221,31 +223,122 @@ describe('таймер жизни заказов (6 ч)', () => {
   });
 });
 
-describe('📺-обновление заказа (раз в час)', () => {
-  it('обновляет один заказ и ставит глобальный кулдаун', () => {
+describe('📺-обновление заказа (раз в час у каждого заказа)', () => {
+  it('обновляет заказ и ставит кулдаун только этому слоту', () => {
     const s = createInitialState(makeRng(8), 0);
     const oldId = s.orders[0]!.id;
-    expect(canAdRefreshOrder(s, 0)).toBe(true);
+    expect(canAdRefreshOrder(s.orders[0]!, 0)).toBe(true);
     expect(adRefreshOrder(s, makeRng(60), oldId, 0).ok).toBe(true);
     expect(s.orders[0]!.id).not.toBe(oldId);        // заказ сменился
     expect(s.orders[0]!.expiresAt).toBe(ORDER_REFRESH_MS);
-    // кулдаун встал: сразу второй раз нельзя
-    expect(canAdRefreshOrder(s, 0)).toBe(false);
-    expect(msUntilAdRefresh(s, 0)).toBe(ORDER_AD_REFRESH_COOLDOWN_MS);
-    expect(adRefreshOrder(s, makeRng(61), s.orders[1]!.id, 0))
-      .toMatchObject({ ok: false, reason: 'обновление ещё на кулдауне' });
+    // кулдаун встал этому слоту: сразу второй раз нельзя
+    expect(canAdRefreshOrder(s.orders[0]!, 0)).toBe(false);
+    expect(msUntilAdRefresh(s.orders[0]!, 0)).toBe(ORDER_AD_REFRESH_COOLDOWN_MS);
+    expect(adRefreshOrder(s, makeRng(61), s.orders[0]!.id, 0))
+      .toMatchObject({ ok: false, reason: 'обновление этого заказа ещё на кулдауне' });
+    // остальные заказы не тронуты — их можно обновить в тот же момент
+    for (let i = 1; i < s.orders.length; i++) expect(canAdRefreshOrder(s.orders[i]!, 0)).toBe(true);
+    expect(adRefreshOrder(s, makeRng(62), s.orders[1]!.id, 0).ok).toBe(true);
+    expect(msUntilAdRefresh(s.orders[1]!, 0)).toBe(ORDER_AD_REFRESH_COOLDOWN_MS);
+    expect(msUntilAdRefresh(s.orders[2]!, 0)).toBe(0);
   });
 
-  it('после кулдауна снова доступно', () => {
+  it('после кулдауна слот снова доступен', () => {
     const s = createInitialState(makeRng(11), 0);
     expect(adRefreshOrder(s, makeRng(62), s.orders[0]!.id, 0).ok).toBe(true);
-    expect(canAdRefreshOrder(s, ORDER_AD_REFRESH_COOLDOWN_MS)).toBe(true);
-    expect(adRefreshOrder(s, makeRng(63), s.orders[1]!.id, ORDER_AD_REFRESH_COOLDOWN_MS).ok).toBe(true);
+    expect(canAdRefreshOrder(s.orders[0]!, ORDER_AD_REFRESH_COOLDOWN_MS)).toBe(true);
+    expect(adRefreshOrder(s, makeRng(63), s.orders[0]!.id, ORDER_AD_REFRESH_COOLDOWN_MS).ok).toBe(true);
+  });
+
+  it('кулдаун принадлежит слоту: смена заказа по таймеру его не сбрасывает', () => {
+    const s = createInitialState(makeRng(14), 0);
+    expect(adRefreshOrder(s, makeRng(64), s.orders[0]!.id, 0).ok).toBe(true);
+    s.orders[0]!.expiresAt = 100; // заказ истёк раньше, чем кончился кулдаун 📺
+    refreshExpiredOrders(s, makeRng(65), 1000);
+    expect(canAdRefreshOrder(s.orders[0]!, 1000)).toBe(false);
+    expect(s.orders[0]!.adRefreshAt).toBe(ORDER_AD_REFRESH_COOLDOWN_MS);
   });
 
   it('msUntilOrderExpiry считает остаток до авто-смены', () => {
     const s = createInitialState(makeRng(12), 1000);
     expect(msUntilOrderExpiry(s.orders[0]!, 1000)).toBe(ORDER_REFRESH_MS);
     expect(msUntilOrderExpiry(s.orders[0]!, 1000 + ORDER_REFRESH_MS + 5)).toBe(0);
+  });
+});
+
+describe('⭐ за заказ: плавно по скрытому уровню породы, без ступеней тира', () => {
+  it('опыт заказа = orderRepFor(breedLevel породы), а не доля от цены тира', () => {
+    const s = createInitialState(makeRng(40), 0);
+    s.discoveredBreeds = ['persian'];
+    const o = generateOrder(s, makeRng(41), 0, 'sell');
+    expect(o.req.breed).toBe('persian');
+    expect(o.reward.reputation).toBe(orderRepFor(breedLevel('persian')));
+  });
+
+  it('средний ⭐ по уровням лаборатории растёт плавно: шаг ≤ ×1.5 (раньше на смене тира было ×1.9)', () => {
+    const s = createInitialState(makeRng(42), 0);
+    const rng = makeRng(43);
+    const avg: number[] = [];
+    for (let L = 1; L <= MAX_LEVEL; L++) {
+      s.level = L;
+      let sum = 0;
+      const N = 400;
+      for (let i = 0; i < N; i++) sum += generateOrder(s, rng, 0, 'target').reward.reputation;
+      avg.push(sum / N);
+    }
+    for (let i = 1; i < avg.length; i++) {
+      expect(avg[i]!).toBeGreaterThan(avg[i - 1]!);           // монотонно вверх
+      expect(avg[i]! / avg[i - 1]!).toBeLessThanOrEqual(1.5); // без ступеней
+    }
+  });
+});
+
+describe('💎 за заказ: только «цель», независимо от цены', () => {
+  it('дешёвый заказ-«цель» всё равно даёт 💎 (правила «от 500 ценности» больше нет)', () => {
+    const s = createInitialState(makeRng(20), 0);
+    s.level = 1; // самый дешёвый пул: породы 1-го скрытого уровня
+    const rng = makeRng(21);
+    let sawCheap = false;
+    for (let i = 0; i < 100; i++) {
+      const o = generateOrder(s, rng, 0, 'target');
+      expect(o.kind).toBe('target');
+      expect(o.reward.crystals).toBe(ORDER_CRYSTALS);
+      if (o.reward.coins < 500) sawCheap = true;
+    }
+    expect(sawCheap).toBe(true); // на L1 такие заказы раньше шли без 💎
+  });
+
+  it('заказ-«сбыт» (уже выведенная порода) идёт без 💎', () => {
+    const s = createInitialState(makeRng(22), 0);
+    s.level = 10;                       // дорогой пул: цена заказа заведомо выше 500
+    s.discoveredBreeds = ['persian'];
+    const rng = makeRng(23);
+    for (let i = 0; i < 20; i++) {
+      const o = generateOrder(s, rng, 0, 'sell');
+      expect(o.kind).toBe('sell');
+      expect(o.req.breed).toBe('persian');
+      expect(o.reward.crystals).toBe(0);
+    }
+  });
+
+  it('сбывать нечего → слот «сбыт» падает на «цель» и даёт 💎', () => {
+    const s = createInitialState(makeRng(24), 0);
+    s.discoveredBreeds = [];
+    const o = generateOrder(s, makeRng(25), 0, 'sell');
+    expect(o.kind).toBe('target');
+    expect(o.reward.crystals).toBe(ORDER_CRYSTALS);
+  });
+
+  it('доска: первые ORDER_SELL_SLOTS — «сбыт» без 💎, остальные — «цель» с 💎', () => {
+    const s = createInitialState(makeRng(26), 0);
+    s.discoveredBreeds = ['persian', 'siamese'];
+    initOrders(s, makeRng(27), 0);
+    const kinds = s.orders.map((o) => o.kind);
+    expect(kinds).toEqual(s.orders.map((_, i) => (i < ORDER_SELL_SLOTS ? 'sell' : 'target')));
+    expect(s.orders.filter((o) => o.reward.crystals > 0).length).toBe(ORDER_TARGET - ORDER_SELL_SLOTS);
+    // тип слота держится и после смены заказа по таймеру
+    for (const o of s.orders) o.expiresAt = 1;
+    refreshExpiredOrders(s, makeRng(28), 1000);
+    expect(s.orders.map((o) => o.kind)).toEqual(kinds);
   });
 });

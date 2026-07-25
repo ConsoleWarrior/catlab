@@ -548,6 +548,11 @@ export function cloneCost(cat: Cat): number {
   return C.CLONE_LAB_MULT * labYield;
 }
 
+/** Цена клонирования в 💰 (сверх 🧬) = ×10 от цены в 🧬 (см. cloneCost). */
+export function cloneCostCoins(cat: Cat): number {
+  return cloneCost(cat) * 10;
+}
+
 // --- Выставка / чемпионы ---
 
 /** Сколько котов можно выставить чемпионами (прокачивается championSlots). */

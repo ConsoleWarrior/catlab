@@ -14,7 +14,7 @@
 
 import { Container, Graphics, Sprite } from 'pixi.js';
 import {
-  catsIn, roomCount, nurseryCapacity, buyCat, buyCatCost, isInSlot, moveCat,
+  catsIn, roomCount, nurseryCapacity, isInSlot, moveCat,
   championSlots, championAt, championIncomePerMin, isChampion,
   setChampion, upgradeCost, upgradeMaxed, buyUpgrade,
   maxChampionsForLevel, nextPedestalUnlockLevel, isUnlocked,
@@ -37,7 +37,7 @@ function pedCountFor(_ctx: UiContext): number {
   return CHAMPION_SLOTS_BASE + UPGRADES.championSlots!.max;
 }
 
-// Правая колонка шапки: кормушка + кнопка «Купить котика» (одна ширина на обе).
+// Правая колонка шапки: кормушка (покупка котов переехала в Приют).
 const COL_W = 256;
 
 /**
@@ -492,12 +492,11 @@ export function createNursery(ctx: UiContext): Room {
     // вместимость комнаты — счётчиком справа в плашке названия
     shell.setTitleBadge(`🐱 ${count}/${cap}`);
 
-    // Правая колонка в правом верхнем углу: кормушка сверху, кнопка покупки кота
-    // под ней. Обе прижаты правым краем к contentW и выровнены по общей ширине
-    // COL_W — колонка читается как единый блок (refreshChampions её обходит).
-    // Верх колонки поднят на уровень плашки названия комнаты: body начинается ПОД
-    // плашкой, поэтому отсчитываем вверх на её высоту с зазором (отрицательный y) —
-    // так занимается пустое место под топ-баром, а не поле над пьедесталами.
+    // Правая колонка в правом верхнем углу: только кормушка (покупка котов теперь
+    // в Приюте). Прижата правым краем к contentW, ширина COL_W. Верх поднят на
+    // уровень плашки названия комнаты: body начинается ПОД плашкой, поэтому
+    // отсчитываем вверх на её высоту с зазором (отрицательный y) — так занимается
+    // пустое место под топ-баром, а не поле над пьедесталами.
     const colX = shell.contentW - COL_W;
     const colY = -(shell.titleH + 12);
 
@@ -505,20 +504,6 @@ export function createNursery(ctx: UiContext): Room {
     feeder.view.position.set(colX, colY);
     shell.body.addChild(feeder.view);
     feederUpdate = feeder.update;
-
-    const cost = buyCatCost(ctx.state);
-    const buy = new Button({
-      text: cost === 0 ? '🛒 Котик (бесплатно)' : `🛒 Купить котика (${cost} 💰)`,
-      w: COL_W, h: 40, color: COLORS.good, fontSize: 14,
-    });
-    buy.enabled = count < cap && ctx.state.coins >= cost;
-    buy.position.set(colX + COL_W / 2, colY + feeder.height + 10 + 20);
-    buy.onTap = () => {
-      const r = buyCat(ctx.state, ctx.rng, ctx.now());
-      if (r.ok) { ctx.commit(); ctx.toast('Новый котик в питомнике 🐱'); }
-      else ctx.toast(r.reason);
-    };
-    shell.body.addChild(buy);
 
     refreshChampions();
     refreshClinic(); // замок станции снимается, когда уровень дорастает

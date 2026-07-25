@@ -3,7 +3,7 @@ import { makeRng, makeCat } from '../genetics/index.js';
 import {
   createInitialState, serialize, deserialize, makeCatInstance,
   freezeCat, cloneCat, disposeCryo, analyzeCat,
-  cryoUnlocked, cryoCapacity, cryoCount, cloneCost,
+  cryoUnlocked, cryoCapacity, cryoCount, cloneCost, cloneCostCoins,
   catMarketValue, kinshipLevel, heartsOf, isAdult,
   setChampion, assignBreeder, attachHiddenPedigree, pedigreeHasFog,
 } from './index.js';
@@ -15,6 +15,7 @@ function setup(seed = 1, rank = 3): { s: GameState; cat: Cat } {
   const s = createInitialState(makeRng(seed), 0);
   s.level = 10;
   s.dna = 100_000;
+  s.coins = 1_000_000;
   s.research.r_sel_cryo = rank; // 1-й ранг открывает крио-банк + капсулы
   const cat = makeCatInstance(s, makeCat('female'), 0, 'nursery', 'persian');
   s.cats.push(cat);
@@ -147,18 +148,32 @@ describe('крио-банк: клонирование', () => {
     expect(r.clone.pedigree!.mother!.id).toBe('a_m');         // оригинал НЕ вставлен как родитель
   });
 
-  it('цена = CLONE_LAB_MULT × выход лаборатории того же кота; списывает ДНК', () => {
+  it('цена = CLONE_LAB_MULT × выход лаборатории того же кота; списывает ДНК + 💰 (×10 от цены в ДНК)', () => {
     const { s, cat } = setup(8);
     freezeCat(s, cat.id, 'ad', 0);
     const orig = s.cryo.find((c) => c.id === cat.id)!;
     const expected = C.CLONE_LAB_MULT * Math.max(1, Math.round(catMarketValue(orig) * C.LAB_DNA_RATE));
     expect(cloneCost(orig)).toBe(expected);
+    expect(cloneCostCoins(orig)).toBe(expected * 10);
     const dnaBefore = s.dna;
+    const coinsBefore = s.coins;
     const r = cloneCat(s, cat.id, 0);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.dna).toBe(expected);
+    expect(r.coins).toBe(expected * 10);
     expect(s.dna).toBe(dnaBefore - expected);
+    expect(s.coins).toBe(coinsBefore - expected * 10);
+  });
+
+  it('не хватает 💰 монет — отказ, ДНК не списана, капсула цела', () => {
+    const { s, cat } = setup(22);
+    freezeCat(s, cat.id, 'ad', 0);
+    s.coins = 0;
+    const dnaBefore = s.dna;
+    expect(cloneCat(s, cat.id, 0)).toMatchObject({ ok: false, reason: 'не хватает монет' });
+    expect(s.dna).toBe(dnaBefore);
+    expect(s.cryo.some((c) => c.id === cat.id)).toBe(true);
   });
 
   it('клон × оригинал = критическое родство (готовый kinship, не собрать «чистую пару»)', () => {

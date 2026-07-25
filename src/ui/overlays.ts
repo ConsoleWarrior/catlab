@@ -3,7 +3,8 @@
  * Возвращают Container с панелью; центрирование и затемнение — на Game.
  */
 
-import { Container, Graphics, Sprite, Text } from 'pixi.js';
+import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
+import type { Application, FederatedPointerEvent, Point } from 'pixi.js';
 import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
   isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
@@ -16,20 +17,24 @@ import {
   adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, GROWTH_SPEEDUP_CRYSTAL_PER_MIN,
   sendToLab, labReward, shelterTotals, adoptAll, sendAllToLab,
   healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
-  freezeCat, cloneCat, disposeCryo, cloneCost, cryoCount, cryoCapacity,
+  freezeCat, cloneCat, disposeCryo, cloneCost, cloneCostCoins, cryoCount, cryoCapacity,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
   analyzeCat, analyzeCoinCost, KINSHIP_RU,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
   RESEARCH, unlockResearch, researchLevel, researchNext, researchExtraCoins, canAffordResearch,
+  firstPurchaseBonusAvailable, FIRST_PURCHASE_BONUS,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, levelForReputation, // DEV-меню (временное)
 } from '../game/index.js';
+import { shopItems, buyPack } from '../platform/payments.js';
+import { showRewarded } from '../platform/ads.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, tierUpTarget, dormantTraits, traitTag } from '../genetics/index.js';
 import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
+import { getMasterVolume, setMasterVolume, sfxMeow } from './sound.js';
 
 /**
  * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
@@ -191,6 +196,214 @@ export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
   root.addChild(panel(W, H, COLORS.hud, 18));
   title.position.set(W / 2, 32);
   root.addChild(title, ...texts, closeBtn);
+  return root;
+}
+
+/**
+ * Горизонтальный ползунок 0..1 на Pixi. Перетаскивание отслеживается на stage,
+ * поэтому не срывается, если палец/курсор уходит за пределы кнопки. onChange —
+ * в реальном времени во время перетаскивания; onCommit — по отпусканию.
+ */
+function slider(
+  app: Application, trackW: number, initial: number,
+  onChange: (v: number) => void, onCommit?: (v: number) => void,
+): Container {
+  const c = new Container();
+  const H = 28;
+  const cy = H / 2;
+  const knobR = 11;
+  const x0 = knobR;                 // центр кнопки не вылезает за края трека
+  const x1 = trackW - knobR;
+  const span = Math.max(1, x1 - x0);
+  let value = Math.min(1, Math.max(0, initial));
+
+  const rail = new Graphics();
+  const fill = new Graphics();
+  const knob = new Graphics();
+  c.addChild(rail, fill, knob);
+
+  const draw = (): void => {
+    const kx = x0 + span * value;
+    rail.clear();
+    rail.roundRect(0, cy - 3, trackW, 6, 3).fill({ color: COLORS.cardEdge });
+    fill.clear();
+    fill.roundRect(0, cy - 3, kx, 6, 3).fill({ color: COLORS.primary });
+    knob.clear();
+    knob.circle(kx, cy, knobR).fill({ color: COLORS.hud }).stroke({ width: 3, color: COLORS.primary });
+  };
+  draw();
+
+  c.eventMode = 'static';
+  c.cursor = 'pointer';
+  c.hitArea = new Rectangle(0, 0, trackW, H);
+
+  const applyAt = (global: Point): void => {
+    const local = c.toLocal(global);
+    value = Math.min(1, Math.max(0, (local.x - x0) / span));
+    draw();
+    onChange(value);
+  };
+
+  c.on('pointerdown', (e: FederatedPointerEvent) => {
+    applyAt(e.global);
+    const move = (ev: FederatedPointerEvent): void => applyAt(ev.global);
+    const up = (): void => {
+      app.stage.off('pointermove', move);
+      app.stage.off('pointerup', up);
+      app.stage.off('pointerupoutside', up);
+      onCommit?.(value);
+    };
+    app.stage.on('pointermove', move);
+    app.stage.on('pointerup', up);
+    app.stage.on('pointerupoutside', up);
+  });
+
+  return c;
+}
+
+/** Оверлей настроек. Пока — общая громкость звука (эффекты + музыка). */
+export function buildSettingsPanel(ctx: UiContext, close: () => void): Container {
+  const W = 340;
+  const pad = 24;
+  const root = new Container();
+
+  const title = label('⚙️ Настройки', 20, COLORS.ink, '800');
+  title.position.set(W / 2, 30);
+
+  let y = 66;
+
+  const volCap = label('🔊 Громкость', 15, COLORS.ink, '800');
+  volCap.anchor.set(0, 0.5);
+  volCap.position.set(pad, y);
+  const pctT = label(`${Math.round(getMasterVolume() * 100)}%`, 15, COLORS.inkSoft, '800');
+  pctT.anchor.set(1, 0.5);
+  pctT.position.set(W - pad, y);
+  y += 24;
+
+  const sl = slider(
+    ctx.app, W - pad * 2, getMasterVolume(),
+    (v) => { setMasterVolume(v); pctT.text = `${Math.round(v * 100)}%`; },
+    (v) => { if (v > 0) sfxMeow(); }, // отпустил — коротко мяукнуть на новой громкости
+  );
+  sl.position.set(pad, y);
+  y += 42;
+
+  const closeBtn = new Button({ text: 'Готово', w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
+  closeBtn.position.set(W / 2, y + 23);
+  closeBtn.onTap = close;
+  y += 58;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), title, volCap, pctT, sl, closeBtn);
+  return root;
+}
+
+/**
+ * Магазин кристаллов (инап-покупки Яндекс Игр, см. GDD.md §6).
+ *
+ * Цена и портальная валюта берутся строкой из каталога Консоли (ShopItem.priceText)
+ * — рисовать «99 ₽» руками нельзя, это требование модерации. Панель открывается
+ * только когда покупки реально доступны (ctx проверяет shopAvailable), поэтому
+ * состояния «магазин не работает» здесь нет.
+ */
+export function buildShopPanel(ctx: UiContext, close: () => void): Container {
+  const W = 340;
+  const pad = 20;
+  const root = new Container();
+  let busy = false; // идёт оплата — не даём тапнуть второй пак
+
+  const render = (): void => {
+    root.removeChildren();
+    const items = shopItems();
+    const parts: Container[] = [];
+
+    const title = label('💎 Кристаллы', 20, COLORS.ink, '800');
+    title.position.set(W / 2, 30);
+    parts.push(title);
+
+    const sub = label('Ускоряют вязку и рост, лечат котов, заряжают усилители', 11.5, COLORS.inkSoft, '600');
+    sub.position.set(W / 2, 50);
+    parts.push(sub);
+
+    let y = 66;
+
+    if (firstPurchaseBonusAvailable(ctx.state)) {
+      const bonus = Math.round(FIRST_PURCHASE_BONUS * 100);
+      const banner = panel(W - pad * 2, 30, COLORS.warn, 12);
+      banner.position.set(pad, y);
+      const bt = label(`🎁 Первая покупка: +${bonus}% кристаллов`, 13, COLORS.ink, '800');
+      bt.position.set(W / 2, y + 15);
+      parts.push(banner, bt);
+      y += 38;
+    }
+
+    for (const item of items) {
+      const h = 54;
+      const card = panel(W - pad * 2, h, COLORS.card, 12);
+      card.position.set(pad, y);
+      parts.push(card);
+
+      // Точное число, без сокращения fmt: «1k» вместо «1000» в магазине недопустимо —
+      // состав покупки обязан читаться ровно так, как заведён в Консоли.
+      const amount = label(`💎 ${item.crystals}`, 17, COLORS.ink, '800');
+      amount.anchor.set(0, 0.5);
+      amount.position.set(pad + 14, y + h / 2 - (item.bonusPct > 0 ? 9 : 0));
+      parts.push(amount);
+
+      if (item.bonusPct > 0) {
+        const badge = label(`выгоднее на ${item.bonusPct}%`, 11, COLORS.inkSoft, '700');
+        badge.anchor.set(0, 0.5);
+        badge.position.set(pad + 14, y + h / 2 + 11);
+        parts.push(badge);
+      }
+
+      const buy = new Button({
+        text: item.priceText, w: 108, h: 38, color: COLORS.crystals, fontSize: 14,
+      });
+      buy.enabled = !busy;
+      buy.position.set(W - pad - 14 - 54, y + h / 2);
+      buy.onTap = () => {
+        if (busy) return;
+        busy = true;
+        render();
+        void buyPack(item.id).then((r) => {
+          busy = false;
+          if (r.ok) {
+            ctx.commit();
+            ctx.toast(`Спасибо! 💎 +${r.crystals ?? 0}`);
+          } else if (r.reason) {
+            ctx.toast(r.reason);
+          }
+          render();
+        });
+      };
+      parts.push(buy);
+      y += h + 8;
+    }
+
+    if (busy) {
+      const wait = label('Оплата…', 12, COLORS.inkSoft, '700');
+      wait.position.set(W / 2, y + 8);
+      parts.push(wait);
+      y += 22;
+    }
+
+    const note = label('Покупки проходят через Яндекс Игры', 10.5, COLORS.inkSoft, '600');
+    note.position.set(W / 2, y + 8);
+    parts.push(note);
+    y += 24;
+
+    const closeBtn = new Button({ text: 'Закрыть', w: W - pad * 2, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+    closeBtn.enabled = !busy;
+    closeBtn.position.set(W / 2, y + 21);
+    closeBtn.onTap = close;
+    parts.push(closeBtn);
+    y += 52;
+
+    root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+    root.addChild(...parts);
+  };
+
+  render();
   return root;
 }
 
@@ -435,9 +648,12 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
       adBtn.enabled = adReady;
       adBtn.position.set(W / 2, y + 20);
       adBtn.onTap = () => {
-        const r = adChargeBoost(ctx.state, def.id, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast(`📺 ${def.glyph} ${def.label}: +1 заряд`); render(); }
-        else ctx.toast(r.reason);
+        void showRewarded().then((watched) => {
+          if (!watched) { ctx.toast('Реклама недоступна'); return; }
+          const r = adChargeBoost(ctx.state, def.id, ctx.now());
+          if (r.ok) { ctx.commit(); ctx.toast(`📺 ${def.glyph} ${def.label}: +1 заряд`); render(); }
+          else ctx.toast(r.reason);
+        });
       };
       items.push(adBtn);
       y += 50;
@@ -698,9 +914,12 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   });
   adBtn.position.set(W / 2, y + 22);
   adBtn.onTap = () => {
-    const r = adSkipGrowth(ctx.state, cat.id, ctx.now());
-    if (!r.ok) { ctx.toast(r.reason); return; }
-    ctx.commit(); close(); ctx.openCatMenu(cat);
+    void showRewarded().then((watched) => {
+      if (!watched) { ctx.toast('Реклама недоступна'); return; }
+      const r = adSkipGrowth(ctx.state, cat.id, ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      ctx.commit(); close(); ctx.openCatMenu(cat);
+    });
   };
   root.addChild(adBtn);
   y += 52;
@@ -948,9 +1167,12 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   });
   adBtn.position.set(W / 2, y + 22);
   adBtn.onTap = () => {
-    const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
-    if (!r.ok) { ctx.toast(r.reason); return; }
-    done();
+    void showRewarded().then((watched) => {
+      if (!watched) { ctx.toast('Реклама недоступна'); return; }
+      const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      done();
+    });
   };
   root.addChild(adBtn);
   y += 52;
@@ -1527,11 +1749,14 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
     });
     adBtn.position.set(W / 2, y + 22);
     adBtn.onTap = () => {
-      const r = healCat(ctx.state, cat.id, 'ad', ctx.now());
-      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
-      ctx.commit();
-      ctx.toast(`Кот подлечен 💉 +${r.healed} ❤`);
-      close();
+      void showRewarded().then((watched) => {
+        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        const r = healCat(ctx.state, cat.id, 'ad', ctx.now());
+        if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
+        ctx.commit();
+        ctx.toast(`Кот подлечен 💉 +${r.healed} ❤`);
+        close();
+      });
     };
     root.addChild(adBtn);
     y += 52;
@@ -1629,7 +1854,14 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
     });
     adBtn.enabled = adReady;
     adBtn.position.set(W / 2, y + 22);
-    adBtn.onTap = () => { const r = freezeCat(ctx.state, cat.id, 'ad', ctx.now()); if (!r.ok) { fail(r.reason); return; } done(r); };
+    adBtn.onTap = () => {
+      void showRewarded().then((watched) => {
+        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        const r = freezeCat(ctx.state, cat.id, 'ad', ctx.now());
+        if (!r.ok) { fail(r.reason); return; }
+        done(r);
+      });
+    };
     root.addChild(adBtn);
     y += 52;
 
@@ -1738,23 +1970,25 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
       root.addChild(noBtn, yesBtn);
       y += 54;
     } else {
-      // клонирование: цена ∝ ценности особи; нужно место в питомнике
+      // клонирование: цена ∝ ценности особи (🧬 + 💰 = 🧬×10); нужно место в питомнике
       const cost = cloneCost(cat);
+      const coinsCost = cloneCostCoins(cat);
       const noRoom = roomCount(ctx.state, 'nursery') >= nurseryCapacity(ctx.state);
-      const afford = ctx.state.dna >= cost;
+      const afford = ctx.state.dna >= cost && ctx.state.coins >= coinsCost;
       addBtn(
-        noRoom ? '🧬 Клонировать · нет места' : `🧬 Клонировать · ${cost}`,
+        noRoom ? '🧬 Клонировать · нет места' : `🧬 Клонировать · ${cost} · 💰${coinsCost}`,
         afford && !noRoom ? COLORS.dna : COLORS.cardEdge,
         afford && !noRoom,
         () => {
           const r = cloneCat(ctx.state, cat.id, ctx.now());
           if (!r.ok) {
             ctx.toast(r.reason === 'нет места в питомнике' ? 'Нет места в питомнике 🚫'
-              : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК' : r.reason);
+              : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
+              : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason);
             return;
           }
           ctx.commit();
-          ctx.toast(`Клон в питомнике 🐱  −🧬${r.dna}`);
+          ctx.toast(`Клон в питомнике 🐱  −🧬${r.dna} −💰${r.coins}`);
           close();
         },
       );
@@ -1784,9 +2018,12 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
 /**
  * Доска заказов (кнопка 📋 в Приюте). Каждый слот всегда держит активный заказ со своим
  * 6-часовым таймером жизни: не выполнил вовремя — заказ сам сменится (на строке виден
- * остаток «⏳ обновится через Ч:ММ»). Раз в час ОДИН заказ можно обновить досрочно за 📺.
+ * остаток «⏳ обновится через Ч:ММ»). У каждого заказа свой часовой кулдаун 📺-обновления.
  * Выполнить заказ можно ТОЛЬКО котом из корзины: кнопка «Выполнить» активна лишь у строк,
  * под которые он подходит.
+ *
+ * РАСКЛАДКА строки: «Выполнить» — справа сверху, «📺 обновить» — слева снизу (по разным
+ * углам карточки, чтобы не промахнуться пальцем), таймер жизни — текстом справа снизу.
  */
 export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 620;
@@ -1803,22 +2040,21 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   basket.anchor.set(0.5, 0);
   basket.position.set(W / 2, 46);
 
-  const adAvail = canAdRefreshOrder(ctx.state, ctx.now());
-  // остаток «Ч:ММ» (таймер жизни ≤ 6 ч и кулдаун обновления)
+  // остаток «Ч:ММ» (таймер жизни ≤ 6 ч) и «N мин» (часовой кулдаун 📺)
   const fmtHM = (ms: number): string => {
     const h = Math.floor(ms / 3_600_000);
     const m = Math.floor((ms % 3_600_000) / 60_000);
     return `${h}:${String(m).padStart(2, '0')}`;
   };
+  const fmtMin = (ms: number): string => `${Math.max(1, Math.ceil(ms / 60_000))} мин`;
   const adHelp = label(
-    adAvail
-      ? 'Не выполнил за 6 ч — заказ сменится сам. 📺 обновляет один заказ досрочно.'
-      : `Не выполнил за 6 ч — заказ сменится сам. 📺-обновление снова через ${fmtHM(msUntilAdRefresh(ctx.state, ctx.now()))}.`,
+    'Не выполнил за 6 ч — заказ сменится сам. 📺 обновляет заказ досрочно (раз в час на заказ).',
     11.5, COLORS.inkSoft, '600');
   adHelp.anchor.set(0.5, 0);
   adHelp.position.set(W / 2, 66);
 
-  const rowH = 96;
+  const rowH = 100;
+  const cardW = W - 32;
   const orders = ctx.state.orders;
   let y = 90;
   const rows = new Container();
@@ -1827,24 +2063,25 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     const row = new Container();
     const fits = !!cat && matchesOrder(order, cat);
     const busy = !!cat && isBusy(ctx.state, cat.id);
-    row.addChild(panel(W - 32, rowH - 12, COLORS.card, 12));
+    row.addChild(panel(cardW, rowH - 10, COLORS.card, 12));
 
     const req = label(`«${describeReq(order.req)}»`, 16, COLORS.ink, '800');
     req.anchor.set(0, 0.5);
-    req.position.set(16, 20);
+    req.position.set(16, 22);
     row.addChild(req);
 
     const rew = label('Награда: ' + rewardText(order.reward), 13, COLORS.inkSoft, '700');
     rew.anchor.set(0, 0.5);
-    rew.position.set(16, 44);
+    rew.position.set(16, 46);
     row.addChild(rew);
 
+    // таймер жизни — текстом в правом нижнем углу (под кнопкой «Выполнить»)
     const timer = label(`⏳ обновится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, 11.5, COLORS.inkSoft, '600');
-    timer.anchor.set(0, 0.5);
-    timer.position.set(16, 66);
+    timer.anchor.set(1, 0.5);
+    timer.position.set(cardW - 16, 70);
     row.addChild(timer);
 
-    // главная кнопка «Выполнить» (сверху) + маленькая «📺 обновить» (снизу)
+    // главная кнопка «Выполнить» — правый верхний угол карточки
     const btnText = !cat ? 'нужен кот' : busy ? 'кот занят' : fits ? 'Выполнить' : 'не подходит';
     const btn = new Button({
       text: btnText, w: 150, h: 40,
@@ -1852,7 +2089,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
       textColor: fits && !busy ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
     btn.enabled = fits && !busy;
-    btn.position.set(W - 32 - 88, 26);
+    btn.position.set(cardW - 16 - 75, 26);
     btn.onTap = () => {
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) { ctx.commit(); ctx.toast('Заказ выполнен! ' + rewardText(r.reward)); close(); ctx.openOrders(); }
@@ -1860,19 +2097,25 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     };
     row.addChild(btn);
 
+    // 📺-обновление — левый нижний угол, по диагонали от «Выполнить»: промахнуться нельзя.
+    // Кулдаун свой у каждого заказа, поэтому состояние кнопки считается по строке.
+    const adAvail = canAdRefreshOrder(order, ctx.now());
     const refBtn = new Button({
-      text: adAvail ? '📺 обновить' : '⏳ обновление позже', w: 150, h: 30,
+      text: adAvail ? '📺 обновить' : `⏳ ${fmtMin(msUntilAdRefresh(order, ctx.now()))}`, w: 132, h: 28,
       color: adAvail ? COLORS.secondary : COLORS.cardEdge,
       textColor: adAvail ? 0xffffff : COLORS.inkSoft, fontSize: 12.5,
     });
     refBtn.enabled = adAvail;
-    refBtn.position.set(W - 32 - 88, 60);
+    refBtn.position.set(16 + 66, 70);
     refBtn.onTap = () => {
-      const r = adRefreshOrder(ctx.state, ctx.rng, order.id, ctx.now());
-      if (!r.ok) { ctx.toast(r.reason); return; }
-      ctx.commit();
-      ctx.toast('Заказ обновлён 📺');
-      close(); ctx.openOrders();
+      void showRewarded().then((watched) => {
+        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        const r = adRefreshOrder(ctx.state, ctx.rng, order.id, ctx.now());
+        if (!r.ok) { ctx.toast(r.reason); return; }
+        ctx.commit();
+        ctx.toast('Заказ обновлён 📺');
+        close(); ctx.openOrders();
+      });
     };
     row.addChild(refBtn);
 

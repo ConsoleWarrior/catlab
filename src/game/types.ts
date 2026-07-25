@@ -51,6 +51,10 @@ export interface Cat {
   // умолчанию используется id кота; клон наследует сид оригинала, чтобы выглядеть
   // идентично, несмотря на собственный уникальный id. См. ui/catTextures.breedTexFor.
   artId?: string;
+  // «Новый»: кот только что куплен и ещё не изучен. Над ним висит бейдж «новый»,
+  // пока игрок впервые не откроет его инфо-меню (openCatMenu снимает флаг). После
+  // изучения — undefined/false. Только для покупных котов (в вязке/приюте не ставится).
+  isNew?: boolean;
 }
 
 /** Слот вязки в инкубаторе. readyAt === 0 — слот пуст. */
@@ -81,18 +85,24 @@ export interface OrderReward {
   reputation: number;
 }
 
+/** Пул, из которого взят заказ слота: «сбыт» выведенного (без 💎) или «цель» по уровню лабы (с 💎). */
+export type OrderKind = 'sell' | 'target';
+
 /**
  * Заказ клиента = один слот доски. Слот ВСЕГДА держит активный заказ. У заказа свой
  * таймер жизни: expiresAt = createdAt + ORDER_REFRESH_MS (6 ч). Не выполнил за это время
  * — заказ сам сменяется новым (orders.refreshExpiredOrders). Выполнил — слот сразу
- * получает свежий (claimOrder). Раз в час один заказ можно обновить за 📺 (adRefreshOrder).
+ * получает свежий (claimOrder). У каждого слота свой часовой кулдаун 📺-обновления
+ * (adRefreshAt, adRefreshOrder) — он переезжает на новый заказ вместе со слотом.
  */
 export interface Order {
   id: string;
   req: OrderReq;
+  kind: OrderKind;           // из какого пула взят (определяет 💎 в награде)
   reward: OrderReward;
   createdAt: number;
   expiresAt: number;         // момент авто-смены заказа (createdAt + ORDER_REFRESH_MS)
+  adRefreshAt: number;       // кулдаун 📺-обновления ЭТОГО слота (0 — доступно)
 }
 
 /** Полное игровое состояние. */
@@ -123,7 +133,6 @@ export interface GameState {
   cryo: Cat[];                      // замороженные коты в криокапсулах (крио-банк): не едят/не доход/не вязка
   unlockedRooms: RoomId[];
   orders: Order[];                  // ORDER_TARGET слотов, каждый с активным заказом (см. orders.ts)
-  orderAdRefreshAt: number;         // глобальный кулдаун 📺-обновления заказа (0 — доступно)
   // Корзина заказов (зона в Приюте): кот, которым можно закрыть заказ. Выполнить
   // заказ можно ТОЛЬКО котом из корзины — id, либо null, если корзина пуста.
   orderBasket: string | null;
@@ -134,5 +143,12 @@ export interface GameState {
   lastAnalyzeAdAt: number;          // глобальный кулдаун 📺-варианта Генетического анализа
   lastFreezeAdAt: number;           // глобальный кулдаун 📺-варианта заморозки в крио-банке
   lastBoostAdAt: number;            // глобальный кулдаун 📺-зарядки усилителя вязки (один на все три)
+  // --- Инап-покупки 💎 (Яндекс Игры, см. GDD.md §6.4) ---
+  // Токены уже начисленных покупок (purchaseToken) — ключ идемпотентности: если
+  // сохранение прошло, а consumePurchase не успел, покупка вернётся в getPurchases
+  // при следующем запуске и не должна начислиться второй раз. Храним хвост
+  // последних PROCESSED_PURCHASES_KEEP штук.
+  processedPurchases: string[];
+  firstPurchaseDone: boolean;       // бонус первой покупки (+50%) уже выдан
   nextId: number;                   // счётчик уникальных id
 }

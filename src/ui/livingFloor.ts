@@ -248,6 +248,21 @@ export function createLivingFloor(
       view.addChild(z);
     }
 
+    // Бейдж «новый» над именем: висит у только что купленного кота, пока его не
+    // изучат — первое открытие инфо-меню снимает cat.isNew (см. game.openCatMenu),
+    // а пересборка пола в commit() убирает бейдж. Ставит флаг только покупка (buyCat).
+    if (cat.isNew) {
+      const txt = label('✨ новый', 13, 0xffffff, '800', { color: 0x8a2b26, width: 3 });
+      const pw = txt.width + 16, ph = txt.height + 5;
+      const pill = new Graphics();
+      pill.roundRect(-pw / 2, -ph / 2, pw, ph, ph / 2)
+        .fill({ color: 0xe8564f }).stroke({ width: 2, color: 0xffffff });
+      const badge = new Container();
+      badge.addChild(pill, txt);
+      badge.position.set(0, -(catH * sizeF + (adult ? 46 : 20)));
+      view.addChild(badge);
+    }
+
     const mem = posMemory.get(cat.id);
     const z = savedZ ?? mem?.z ?? Math.random();
     const ox = savedOx ?? (mem ? mem.u * maxOx(z) : (Math.random() * 2 - 1) * maxOx(z));

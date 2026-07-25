@@ -27,6 +27,7 @@ import {
   speedUpCost, AD_SKIP_MS, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
 import type { ResearchDef } from '../../game/index.js';
+import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel, TIER_RU, TIER_COLOR, TIERS } from '../theme.js';
@@ -553,8 +554,11 @@ export function createGenolab(ctx: UiContext): Room {
       const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw, h: 34, color: COLORS.secondary, fontSize: 13 });
       adBtn.position.set(viewW / 2 - bw / 2 - 6, yy);
       adBtn.onTap = () => {
-        const r = adSkipRecipeResearch(ctx.state, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+        void showRewarded().then((watched) => {
+          if (!watched) { ctx.toast('Реклама недоступна'); return; }
+          const r = adSkipRecipeResearch(ctx.state, ctx.now());
+          if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+        });
       };
       const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw, h: 34, color: COLORS.primary, fontSize: 13 });
       crBtn.position.set(viewW / 2 + bw / 2 + 6, yy);

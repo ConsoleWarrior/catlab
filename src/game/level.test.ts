@@ -6,7 +6,7 @@ import {
   isUnlocked, unlockLevelOf, maxSlotsForLevel, maxChampionsForLevel,
   nextSlotUnlockLevel, nextPedestalUnlockLevel,
   buyUpgrade, sendToLab, buyBoost, unlockResearch, adoptCat,
-  startBreeding, collectReady, incubationDuration, makeCatInstance,
+  startBreeding, collectReady, incubationDuration, makeCatInstance, catMarketValue,
 } from './index.js';
 import {
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, TIER_MARKET_VALUE, REP_BIRTH_RATE, REP_NEW_BREED_MULT,
@@ -22,10 +22,10 @@ function pair(s: GameState) {
 describe('уровень лаборатории по опыту', () => {
   it('пороги таблицы дают ровно 10 уровней', () => {
     expect(levelForReputation(0)).toBe(1);
-    expect(levelForReputation(479)).toBe(1);
-    expect(levelForReputation(480)).toBe(2);
-    expect(levelForReputation(1199)).toBe(2);
-    expect(levelForReputation(1200)).toBe(3);
+    expect(levelForReputation(359)).toBe(1);
+    expect(levelForReputation(360)).toBe(2);
+    expect(levelForReputation(999)).toBe(2);
+    expect(levelForReputation(1000)).toBe(3);
     expect(levelForReputation(20000)).toBe(MAX_LEVEL);
     expect(levelForReputation(999_999)).toBe(MAX_LEVEL); // не превышает максимум
     expect(levelForReputation(-50)).toBe(1);             // отрицательный опыт → ур.1
@@ -38,15 +38,15 @@ describe('уровень лаборатории по опыту', () => {
   });
 
   it('nextLevelRep — следующий порог, на максимуме null', () => {
-    expect(nextLevelRep(1)).toBe(480);
-    expect(nextLevelRep(2)).toBe(1200);
+    expect(nextLevelRep(1)).toBe(360);
+    expect(nextLevelRep(2)).toBe(1000);
     expect(nextLevelRep(MAX_LEVEL)).toBeNull();
   });
 
   it('addReputation копит опыт, поднимает уровень и сообщает о повышении', () => {
     const s = createInitialState(makeRng(1), 0);
     expect(s.level).toBe(1);
-    const r1 = addReputation(s, 300); // 300 < порог L2 (480)
+    const r1 = addReputation(s, 300); // 300 < порог L2 (360)
     expect(r1.gained).toBe(300);
     expect(r1.leveledUp).toBe(false);
     expect(s.level).toBe(1);
@@ -165,7 +165,7 @@ describe('гейты уровня блокируют действия', () => {
 });
 
 describe('опыт за важные действия', () => {
-  it('рождение котёнка даёт опыт по тиру; первая порода — с бонусом', () => {
+  it('рождение котёнка даёт опыт от его рыночной ценности; первая порода — с бонусом', () => {
     const rng = makeRng(30);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
@@ -173,11 +173,16 @@ describe('опыт за важные действия', () => {
     startBreeding(s, 0, female.id, male.id, 0);
     const ev = collectReady(s, incubationDuration(s), rng)[0]!;
     expect(ev.kitten).toBeDefined();
-    const tier = ev.kitten!.rarityTier;
-    const expected = Math.round(TIER_MARKET_VALUE[tier] * REP_BIRTH_RATE)
+    // база опыта — та же catMarketValue, что у пристройства/лаборатории (тир × порода
+    // × родословная × здоровье), а не голый TIER_MARKET_VALUE тира.
+    const expected = Math.round(catMarketValue(ev.kitten!) * REP_BIRTH_RATE)
       * (ev.newBreed ? REP_NEW_BREED_MULT : 1);
     expect(ev.rep).toBe(expected);
     expect(s.reputation).toBe(repBefore + expected);
+    // ценность котёнка ≥ базы тира (родословная от родителей), значит и опыт ≥ старой формулы
+    expect(ev.rep).toBeGreaterThanOrEqual(
+      Math.round(TIER_MARKET_VALUE[ev.kitten!.rarityTier] * REP_BIRTH_RATE) * (ev.newBreed ? REP_NEW_BREED_MULT : 1),
+    );
   });
 
   it('пристройство и лаборатория начисляют опыт ∝ ценности', () => {

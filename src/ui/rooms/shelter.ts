@@ -10,7 +10,7 @@
 
 import { Container, Graphics, Rectangle, Sprite } from 'pixi.js';
 import {
-  catsIn, shelterCapacity, isInSlot, isUnlocked, shelterTotals,
+  catsIn, shelterCapacity, roomCount, buyCat, buyCatCost, isInSlot, isUnlocked, shelterTotals,
   isInBasket, basketCat, putCatInBasket, clearOrderBasket, msUntilOrderExpiry, matchesOrder,
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
@@ -85,9 +85,11 @@ export function createShelter(ctx: UiContext): Room {
     adoptLayer.addChild(box, icon, badge);
   }
 
-  // Массовые кнопки вверху справа: «Раздать всех» / «В лабораторию всех» — по
-  // суммарной цене (shelterTotals). Пересобираются в refresh() (суммы/замок/пусто
-  // меняются по ходу игры). Открывают диалог-подтверждение (bulk-действие в ядре).
+  // Кнопки-действия над населением приюта, вверху справа: покупка кота сюда (широкая
+  // кнопка) + под ней массовые «Раздать всех» / «В лабораторию всех» по суммарной
+  // цене (shelterTotals). Пересобираются в refresh() (цена/суммы/замок/вместимость
+  // меняются по ходу игры). Массовые открывают диалог-подтверждение (bulk в ядре),
+  // покупка сразу добавляет кота на пол приюта с бейджем «новый» (buyCat).
   const bulkLayer = new Container();
   shell.container.addChild(bulkLayer);
 
@@ -100,6 +102,22 @@ export function createShelter(ctx: UiContext): Room {
     const cy = ctx.topInset + 8 + 22;              // центр по титульной плашке комнаты
     const rightCx = ctx.roomW - RPAD - BW / 2;
     const leftCx = rightCx - BW - GAP;
+
+    // «Купить котика» — под массовыми кнопками, во всю ширину пары. Покупной кот
+    // (простой дворовый) появляется на полу приюта; первый — бесплатно, если котов нет.
+    const cost = buyCatCost(ctx.state);
+    const full = roomCount(ctx.state, 'shelter') >= shelterCapacity(ctx.state);
+    const buyBtn = new Button({
+      text: cost === 0 ? '🛒 Котик (бесплатно)' : `🛒 Купить котика (${cost} 💰)`,
+      w: BW * 2 + GAP, h: 38, color: COLORS.good, fontSize: 14,
+    });
+    buyBtn.position.set(rightCx - (BW + GAP) / 2, cy + BH / 2 + 8 + 19);
+    buyBtn.enabled = !full && ctx.state.coins >= cost;
+    buyBtn.onTap = () => {
+      const r = buyCat(ctx.state, ctx.rng, ctx.now());
+      if (r.ok) { ctx.commit(); ctx.toast('Новый котик в приюте 🐱'); }
+      else ctx.toast(r.reason);
+    };
 
     const adoptBtn = new Button({
       text: `🤝 Раздать всех\n💰${totals.adopt.coins}  🧬${totals.adopt.dna}`,
@@ -119,7 +137,7 @@ export function createShelter(ctx: UiContext): Room {
     labBtn.enabled = labOpen && totals.count > 0;
     labBtn.onTap = () => ctx.openBulkLabConfirm();
 
-    bulkLayer.addChild(adoptBtn, labBtn);
+    bulkLayer.addChild(buyBtn, adoptBtn, labBtn);
   }
 
   // --- Стойка заказов: кнопка 📋 у названия комнаты + корзина под ней ---
