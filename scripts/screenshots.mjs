@@ -44,9 +44,12 @@ async function shoot(browser, { width, height, prefix }) {
   await page.waitForTimeout(450);
   await page.screenshot({ path: `${OUT}/${prefix}-orders.png` });
 
-  await page.evaluate(() => window.__game.openHelp());
-  await page.waitForTimeout(450);
-  await page.screenshot({ path: `${OUT}/${prefix}-help.png` });
+  // справки комнат (кнопка ℹ️ у названия) — общей инструкции «Как играть» больше нет
+  for (const [name] of ROOMS) {
+    await page.evaluate((id) => { window.__game.closeOverlay(); window.__game.openRoomHelp(id); }, name);
+    await page.waitForTimeout(350);
+    await page.screenshot({ path: `${OUT}/${prefix}-help-${name}.png` });
+  }
 
   // котик «на весу» (взятие за шкирку)
   await page.evaluate(() => { window.__game.closeOverlay(); window.__game.goRoom(1); });

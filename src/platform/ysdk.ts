@@ -7,11 +7,13 @@
  * открыта вне платформы. Поэтому наружу отсюда не летят исключения — только
  * «платформа есть / платформы нет».
  *
- * Лоадер: SDK v1 платформой отключён, живёт только v2. Грузим динамически —
- * сначала относительный `/sdk.js` (рекомендованный путь для игры, залитой
- * архивом в Консоль), затем абсолютный адрес (хостинг на своём домене).
- * В dev-режиме SDK не грузим вообще (на localhost init всё равно не пройдёт и
- * только затянет старт) — принудительно включается через `?ysdk`.
+ * Лоадер сюда НЕ грузится: скрипт `/sdk.js` подключён тегом в заголовке
+ * index.html — как в примере документации (sdk-about#connection-example), этого
+ * требует п. 1.19.1 Требований платформы. Здесь мы только дожидаемся тега и
+ * работаем с готовым `window.YaGames`. Вне фрейма платформы лоадер намеренно не
+ * создаёт `window.YaGames` (пишет в консоль «SDK initialization outside of
+ * frame») — это и есть наш признак «игра открыта не на платформе», своих
+ * условий «грузить / не грузить SDK» тут быть не должно.
  */
 
 export interface YaPlayer {
@@ -77,10 +79,13 @@ interface YaGamesApi {
 }
 
 declare global {
-  interface Window { YaGames?: YaGamesApi }
+  interface Window {
+    YaGames?: YaGamesApi;
+    /** Обещание из index.html: тег `/sdk.js` отработал (true) или упал (false). */
+    __sdkLoaded?: Promise<boolean>;
+  }
 }
 
-const SDK_SOURCES = ['/sdk.js', 'https://sdk.games.s3.yandex.net/sdk.js'];
 const SCRIPT_TIMEOUT_MS = 6000;
 const INIT_TIMEOUT_MS = 8000;
 
@@ -150,10 +155,10 @@ export function gameplayStop(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  if (skipSdk()) return;
+  await waitSdkScript();
 
-  const api = await loadSdkScript();
-  if (!api) return;
+  const api = window.YaGames;
+  if (!api) return; // тег `/sdk.js` не отдал лоадер: не платформа, локалка, оффлайн
 
   try {
     sdk = await withTimeout(api.init());
@@ -172,43 +177,15 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-function skipSdk(): boolean {
-  // `?ysdk` — принудительно пробовать SDK (отладка загрузки лоадера).
-  if (new URLSearchParams(location.search).has('ysdk')) return false;
-  // Лоадер Яндекса определяет window.YaGames ТОЛЬКО внутри фрейма (вне его пишет
-  // в консоль «SDK initialization outside of frame» и молча ничего не создаёт), а
-  // на платформе игра всегда открыта в iframe. Значит, на странице верхнего
-  // уровня грузить лоадер бессмысленно — только задержка старта на таймаутах.
-  if (window === window.top) return true;
-  return import.meta.env.DEV;
-}
-
-async function loadSdkScript(): Promise<YaGamesApi | null> {
-  if (window.YaGames) return window.YaGames;
-  for (const src of SDK_SOURCES) {
-    await loadScript(src);
-    if (window.YaGames) return window.YaGames;
-  }
-  return null;
-}
-
-/** Грузит скрипт, всегда резолвится: успех, ошибка сети и таймаут неразличимы. */
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = (): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(finish, SCRIPT_TIMEOUT_MS);
-    const el = document.createElement('script');
-    el.src = src;
-    el.onload = finish;
-    el.onerror = finish;
-    document.head.appendChild(el);
-  });
+/**
+ * Ждёт тег `<script async src="/sdk.js">` из index.html: при async он может
+ * отработать и до, и после модуля игры. Таймаут — на случай, когда запрос висит
+ * (плохая сеть): без него старт игры залипнет на ожидании платформы.
+ */
+function waitSdkScript(): Promise<unknown> {
+  const loaded = window.__sdkLoaded;
+  if (!loaded) return Promise.resolve(); // страница без тега — просто нет платформы
+  return Promise.race([loaded, new Promise((r) => setTimeout(r, SCRIPT_TIMEOUT_MS))]);
 }
 
 /** Обещания SDK вне платформы умеют висеть вечно — страхуемся таймаутом. */

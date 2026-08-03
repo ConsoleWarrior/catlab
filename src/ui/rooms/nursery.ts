@@ -8,16 +8,19 @@
  * они «приклеены» к стене, а перекрытия с декором корректны по глубине.
  * Перетащил кота в зону НАД пьедесталом (корпус тумбы не ловит — зона подсвечена
  * золотой аурой, пока кот «в руках» над ней) → на выставку; стащил на пол → снял.
+ * Чемпион на тумбе моргает и «красуется» — см. ChampAnim/updateChampions ниже.
  * У левой стены — ветеринар-шприц (💉): перетащил кота → диалог лечения вязок.
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
 import { Container, Graphics, Sprite } from 'pixi.js';
+import type { Text } from 'pixi.js';
 import {
   catsIn, roomCount, nurseryCapacity, isInSlot, moveCat,
   championSlots, championAt, championIncomePerMin, isChampion,
   setChampion, upgradeCost, upgradeMaxed, buyUpgrade,
   maxChampionsForLevel, nextPedestalUnlockLevel, isUnlocked,
+  pedestalPlace, placeIncomeMult,
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
   foodRatePerMin, feedingCatCount, foodBuyQuote,
   cryoUnlocked,
@@ -29,7 +32,8 @@ import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
 import { decorTexture } from '../decorArt.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
-import { catSprite, aiSitSpriteFor, rarityGlow } from '../catTextures.js';
+import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
+import { attachBlink, type Blinker } from '../eyeBlink.js';
 import { darken, lighten } from '../../render/palette.js';
 
 // Всегда показываем все 5 пьедесталов (база 1 + до 4 апгрейдов); запертые — с замком.
@@ -47,17 +51,58 @@ const COL_W = 256;
  * ПЕРЕД пьедесталами, поэтому слой декора можно держать под «живым полом».
  *   xN/baseYN — точка касания пола (низ-центр спрайта); hN — высота тумбы;
  *   tex — ключ текстуры декора (спрайт из assets/decor, фолбэк — Graphics).
+ * Порядок в массиве = порядок ПОКУПКИ и индекс слота champions, а НЕ порядок слева
+ * направо: тумбы открываются от худшего места к лучшему (PEDESTAL_PLACES: V · IV ·
+ * III · II · I), поэтому массив идёт «край слева → край справа → внутренняя слева →
+ * внутренняя справа → центральная колонна». На дуге они всё равно стоят по xN.
  */
 const PED_ARC = [
-  { xN: 0.29, baseYN: 0.715, hN: 0.13, tex: 'ped_side' },
-  { xN: 0.395, baseYN: 0.703, hN: 0.145, tex: 'ped_side' },
-  { xN: 0.5, baseYN: 0.69, hN: 0.22, tex: 'ped_center' },
-  { xN: 0.605, baseYN: 0.703, hN: 0.145, tex: 'ped_side' },
-  { xN: 0.71, baseYN: 0.715, hN: 0.13, tex: 'ped_side' },
+  { xN: 0.29, baseYN: 0.715, hN: 0.13, tex: 'ped_side' },    // V место — стартовая
+  { xN: 0.71, baseYN: 0.715, hN: 0.13, tex: 'ped_side' },    // IV
+  { xN: 0.395, baseYN: 0.703, hN: 0.145, tex: 'ped_side' },  // III
+  { xN: 0.605, baseYN: 0.703, hN: 0.145, tex: 'ped_side' },  // II
+  { xN: 0.5, baseYN: 0.69, hN: 0.22, tex: 'ped_center' },    // I — колонна победителя
 ] as const;
 // Доля высоты тумбы от верхней кромки спрайта до центра площадки (перспектива
 // крышки-эллипса): ноги чемпиона ставим чуть НИЖЕ верха спрайта.
 const PED_TOP_INSET = 0.06;
+// Места выставки подписываем римскими цифрами (крупно, с обводкой — читаются на мраморе).
+const ROMAN = ['I', 'II', 'III', 'IV', 'V'] as const;
+
+/**
+ * Чемпион на тумбе не статуя: он моргает (общий eyeBlink, как коты на полу) и
+ * «красуется» — дышит, изредка прихорашивается, гордо вытягивается и
+ * поворачивается к другой половине зала, а над ним вспыхивает искорка.
+ * Ходить ему некуда, поэтому вся анимация — поза (scale/rotation спрайта).
+ */
+type ChampPose = 'pose' | 'preen' | 'proud';
+
+const CH_TURN_DUR = 0.16;      // с — приседание при повороте к публике
+const CH_TURN_SQUASH_Y = 0.05;
+const CH_TURN_SQUASH_X = 0.08;
+const CH_TURN_CHANCE = 0.35;   // доля смен позы, сопровождаемых поворотом
+const CH_PROUD_DUR = 1.2;      // с — «гордая» потяжка вверх
+const CH_SPARK_TTL = 1.2;      // с — жизнь искорки над чемпионом
+
+interface ChampSpark { view: Text; life: number; vy: number }
+
+interface ChampAnim {
+  node: Container;   // куда сыпать искорки (сам пьедестал)
+  sprite: Sprite;
+  glow: Sprite;
+  blink: Blinker | null;
+  baseScale: number; // |scale| спрайта (знак по facing)
+  glowAlpha: number;
+  standY: number;    // площадка тумбы: ноги чемпиона (спрайт с anchor 0.5,1)
+  catSize: number;
+  phase: number;
+  facing: 1 | -1;
+  turnT: number;     // >0 — доигрывается приседание при развороте
+  pose: ChampPose;
+  poseLeft: number;
+  sparkT: number;
+  sparks: ChampSpark[];
+}
 
 export function createNursery(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'nursery', '🏆 Питомник');
@@ -78,6 +123,8 @@ export function createNursery(ctx: UiContext): Room {
   // золотые ауры зон дропа (по одной на пьедестал): видима, пока таскаемый кот над зоной
   let pedAuras: Graphics[] = [];
   let auraT = 0; // время для «дыхания» ауры
+  // анимация чемпионов на тумбах (моргание + позы), пересобирается вместе с пьедесталами
+  let champAnims: ChampAnim[] = [];
 
   // Две drag-станции по нижним углам (общий образец cornerStation — короб жмётся в
   // угол с отступом ≈ полосе навигации): клиника-шприц в левом углу (лечение),
@@ -187,10 +234,22 @@ export function createNursery(ctx: UiContext): Room {
       pod.ellipse(cx, standY, podW / 2, podW * 0.11).fill(lighten(col, 0.12));
       c.addChild(pod);
     }
-    // номер места на фронтоне тумбы
-    const num = label(String(i + 1), Math.max(13, pedH * 0.16), unlocked ? 0x6b4a12 : COLORS.inkSoft, '800');
-    num.position.set(cx, baseY - pedH * 0.3);
+    // МЕСТО выставки римской цифрой на фронтоне тумбы (чем выше тумба — тем выше
+    // место) + мелкой подписью бонус места к доходу кота: I → +50%, V → +10%.
+    const place = pedestalPlace(i);
+    const numSize = Math.max(17, pedH * 0.21);
+    const num = label(ROMAN[place - 1] ?? String(place), numSize,
+      unlocked ? 0xfff3d4 : 0xe9e9e9, '800',
+      { color: unlocked ? 0x5a3c0c : 0x6f6a63, width: Math.max(3, numSize * 0.2) });
+    // антиква с засечками: «I» без них читается просто как палочка
+    num.style.fontFamily = 'Georgia, "Times New Roman", serif';
+    num.position.set(cx, baseY - pedH * 0.36);
     c.addChild(num);
+    const bonus = label(`+${Math.round((placeIncomeMult(i) - 1) * 100)}%`,
+      Math.max(10, pedH * 0.11), unlocked ? 0xfff3d4 : 0xe9e9e9, '800',
+      { color: unlocked ? 0x5a3c0c : 0x6f6a63, width: 2.5 });
+    bonus.position.set(cx, baseY - pedH * 0.14);
+    c.addChild(bonus);
 
     if (!unlocked) {
       // запертый пьедестал: замок. На «следующем» — либо кнопка «Открыть» за 💰 (если
@@ -220,7 +279,10 @@ export function createNursery(ctx: UiContext): Room {
           btn.position.set(cx, standY - catSize - 8);
           btn.onTap = () => {
             const r = buyUpgrade(ctx.state, 'championSlots');
-            if (r.ok) { ctx.commit(); ctx.toast('Новый пьедестал выставки 🏆'); }
+            if (r.ok) {
+              ctx.commit();
+              ctx.toast(`Открыт пьедестал — ${place} место 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% дохода)`);
+            }
             else ctx.toast(r.reason === 'locked' ? 'Пьедестал ещё заперт 🔒' : r.reason);
           };
           c.addChild(btn);
@@ -231,11 +293,26 @@ export function createNursery(ctx: UiContext): Room {
 
     if (champ) {
       // чемпион стоит на тумбе: спрайт (можно стащить за шкирку) + подпись дохода
-      const sp = aiSitSpriteFor(champ, catSize) ?? catSprite(ctx.app, champ, catSize);
+      const aiSp = aiSitSpriteFor(champ, catSize);
+      const sp = aiSp ?? catSprite(ctx.app, champ, catSize);
       sp.position.set(cx, standY);
       const glow: Sprite = rarityGlow(sp, champ.rarityTier, catSize);
       glow.position.copyFrom(sp.position);
       c.addChild(glow, sp);
+
+      // моргание — только по готовому арту породы (у процедурного фолбэка глаз нет)
+      const anim: ChampAnim = {
+        node: c, sprite: sp, glow,
+        blink: aiSp ? attachBlink(ctx.app, sp) : null,
+        baseScale: sp.scale.x, glowAlpha: glow.alpha,
+        standY, catSize,
+        phase: Math.random() * 6,          // рассинхрон поз между тумбами
+        facing: 1, turnT: 0,
+        pose: 'pose', poseLeft: 1 + Math.random() * 3,
+        sparkT: 3 + Math.random() * 8,
+        sparks: [],
+      };
+      champAnims.push(anim);
 
       sp.eventMode = 'static';
       sp.cursor = 'grab';
@@ -248,7 +325,7 @@ export function createNursery(ctx: UiContext): Room {
         onDrop: () => { /* уронили мимо пьедестала → tryDropCat снимет с выставки */ },
       }, e));
 
-      const rate = championIncomePerMin(ctx.state, champ);
+      const rate = championIncomePerMin(ctx.state, champ, i); // с бонусом места
       const inc = label(
         `+${rate.toFixed(rate < 10 ? 1 : 0)} 💰/мин`, 13, COLORS.good, '800',
         { color: 0x000000, width: 1 },
@@ -299,7 +376,87 @@ export function createNursery(ctx: UiContext): Room {
     }
   }
 
+  /** Следующая поза чемпиона; иногда вместе с поворотом к другой половине зала. */
+  function nextChampPose(a: ChampAnim): void {
+    const r = Math.random();
+    if (r < 0.55) { a.pose = 'pose'; a.poseLeft = 3 + Math.random() * 4; }        // просто стоит и дышит
+    else if (r < 0.8) { a.pose = 'preen'; a.poseLeft = 1.4 + Math.random() * 1.6; } // прихорашивается
+    else { a.pose = 'proud'; a.poseLeft = CH_PROUD_DUR; }                          // гордо вытянулся
+    if (Math.random() < CH_TURN_CHANCE) { a.facing = -a.facing as 1 | -1; a.turnT = CH_TURN_DUR; }
+  }
+
+  /** Искорка над чемпионом: «блеск» победителя, всплывает и гаснет. */
+  function spawnChampSpark(a: ChampAnim): void {
+    const s = label(Math.random() < 0.7 ? '✨' : '⭐', 13 + Math.random() * 6, 0xffe08a, '700',
+      { color: 0x7a5410, width: 2 });
+    s.position.set(
+      a.sprite.x + (Math.random() * 2 - 1) * a.catSize * 0.42,
+      a.standY - a.catSize * (0.8 + Math.random() * 0.25),
+    );
+    a.node.addChild(s);
+    a.sparks.push({ view: s, life: 0, vy: -16 - Math.random() * 10 });
+  }
+
+  /** Чемпионы «красуются»: моргание + смена поз + искорки (спрятанного — в руках — пропускаем). */
+  function updateChampions(dt: number): void {
+    for (const a of champAnims) {
+      const sp = a.sprite;
+      if (!sp.visible) continue; // кота держат за шкирку — на тумбе его сейчас нет
+
+      a.phase += dt;
+      a.blink?.update(dt);
+      a.turnT = Math.max(0, a.turnT - dt);
+      if ((a.poseLeft -= dt) <= 0) nextChampPose(a);
+
+      const turnDip = a.turnT > 0 ? Math.sin((1 - a.turnT / CH_TURN_DUR) * Math.PI) : 0;
+      let sx = 1, sy = 1, rot = 0, lift = 0;
+      switch (a.pose) {
+        case 'preen': // умывается: быстрое покачивание головой
+          sy = 1 + Math.sin(a.phase * 3) * 0.03;
+          rot = Math.sin(a.phase * 8) * 0.07;
+          break;
+        case 'proud': { // потянулся вверх и слегка качнулся — «смотрите на меня»
+          const t = 1 - Math.max(0, Math.min(1, a.poseLeft / CH_PROUD_DUR));
+          const curve = Math.sin(t * Math.PI); // 0 → 1 → 0
+          sy = 1 + curve * 0.1;
+          sx = 1 - curve * 0.05;
+          rot = a.facing * curve * 0.05;
+          lift = curve * a.catSize * 0.05;
+          break;
+        }
+        default: // 'pose' — дыхание + ленивое покачивание
+          sy = 1 + Math.sin(a.phase * 1.6) * 0.022;
+          rot = Math.sin(a.phase * 0.8) * 0.022;
+      }
+      sy *= 1 - turnDip * CH_TURN_SQUASH_Y;
+      sx *= 1 - turnDip * CH_TURN_SQUASH_X;
+
+      sp.scale.x = a.baseScale * a.facing * sx;
+      sp.scale.y = a.baseScale * sy;
+      sp.rotation += (rot - sp.rotation) * Math.min(1, dt * 8);
+      sp.y = a.standY - lift;
+      // ореол редкости повторяет позу и «дышит» вместе с котом — свет рампы
+      a.glow.scale.set(sp.scale.x * GLOW_OUT, sp.scale.y * GLOW_OUT);
+      a.glow.rotation = sp.rotation;
+      a.glow.y = sp.y;
+      a.glow.alpha = a.glowAlpha * (0.85 + Math.sin(a.phase * 1.4) * 0.15);
+
+      if ((a.sparkT -= dt) <= 0) { a.sparkT = 6 + Math.random() * 8; spawnChampSpark(a); }
+      for (let k = a.sparks.length - 1; k >= 0; k--) {
+        const s = a.sparks[k]!;
+        s.life += dt;
+        const t = Math.min(1, s.life / CH_SPARK_TTL);
+        s.view.y += s.vy * dt;
+        s.view.alpha = 1 - t;
+        s.view.scale.set(0.7 + t * 0.4);
+        if (t >= 1) { s.view.destroy(); a.sparks.splice(k, 1); }
+      }
+    }
+  }
+
   function refreshChampions(): void {
+    for (const a of champAnims) a.blink?.destroy();
+    champAnims = [];
     for (const n of pedNodes) n.destroy();
     pedNodes = [];
     for (const a of pedAuras) a.destroy();
@@ -516,9 +673,12 @@ export function createNursery(ctx: UiContext): Room {
     refresh,
     tick: (dt) => {
       floor.tick(dt);
+      updateChampions(dt); // чемпионы моргают и красуются на тумбах
       updateAuras(dt); // золотая аура зоны дропа под котом «в руках»
       feederAcc += dt;
       if (feederAcc >= FEEDER_UPDATE_S) { feederAcc = 0; feederUpdate?.(); }
     }, tryDropCat,
+    // Обучение новичка: подсветить конкретного кота на полу (см. ui/tutorial.ts).
+    anchor: (key) => (key.startsWith('cat:') ? floor.nodeOf(key.slice(4)) : null),
   };
 }

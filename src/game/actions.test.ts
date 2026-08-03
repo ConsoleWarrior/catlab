@@ -4,7 +4,7 @@ import {
   createInitialState, startBreeding, assignBreeder, clearBreederSlot, isInSlot,
   collectReady, adoptCat, moveCat, keepKittenWithParents,
   buyUpgrade, unlockGene, collectIncome, incubationDuration,
-  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, buyBoost, adChargeBoost, toggleBoost, activeBoostId, unlockResearch,
+  passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, isRescuePair, buyBoost, adChargeBoost, toggleBoost, activeBoostId, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
   revealPedigree, pedigreeHasFog, serialize, deserialize, BOOST_AD_COOLDOWN_MS,
 } from './index.js';
@@ -229,20 +229,38 @@ describe('покупка кота (анти-софт-лок)', () => {
   it('первый кот бесплатно, если котов нет; затем платно', () => {
     const rng = makeRng(20);
     const s = createInitialState(rng, 0);
-    s.cats = []; // продал всех — тупик
+    s.cats = [];                    // продал всех — тупик
+    s.coins = STARTER_CAT_COST;     // но деньги есть → пары не будет, выдадут одного
     expect(buyCatCost(s)).toBe(0);
-    s.coins = 0;
     const r1 = buyCat(s, rng, 0);
     expect(r1.ok).toBe(true);
     expect(s.cats).toHaveLength(1);
+    expect(s.coins).toBe(STARTER_CAT_COST); // первый бесплатный, монеты целы
     expect(s.cats[0]!.location).toBe('shelter');
     expect(s.cats[0]!.isNew).toBe(true); // бейдж «новый» до первого открытия инфо
     // следующий уже стоит денег
     expect(buyCatCost(s)).toBe(STARTER_CAT_COST);
-    expect(buyCat(s, rng, 0).ok).toBe(false); // 0 монет
-    s.coins = STARTER_CAT_COST;
     expect(buyCat(s, rng, 0).ok).toBe(true);
     expect(s.coins).toBe(0);
+    expect(buyCat(s, rng, 0).ok).toBe(false); // 0 монет
+  });
+
+  it('ни котов, ни денег → бесплатно выдают пару ♀+♂', () => {
+    const rng = makeRng(22);
+    const s = createInitialState(rng, 0);
+    s.cats = [];
+    s.coins = STARTER_CAT_COST - 1; // не хватает даже на одного
+    expect(isRescuePair(s)).toBe(true);
+    const r = buyCat(s, rng, 0);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.cats).toHaveLength(2);
+    expect(s.cats).toHaveLength(2);
+    expect(s.cats.map((c) => c.genotype.sex).sort()).toEqual(['female', 'male']);
+    expect(s.cats.every((c) => c.location === 'shelter' && c.isNew)).toBe(true);
+    expect(s.coins).toBe(STARTER_CAT_COST - 1); // подарок ничего не стоит
+    // подарок разовый: коты появились → дальше обычная платная покупка
+    expect(isRescuePair(s)).toBe(false);
+    expect(buyCatCost(s)).toBe(STARTER_CAT_COST);
   });
 
   it('купленный кот — простой (без редких генов)', () => {

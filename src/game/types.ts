@@ -150,5 +150,16 @@ export interface GameState {
   // последних PROCESSED_PURCHASES_KEEP штук.
   processedPurchases: string[];
   firstPurchaseDone: boolean;       // бонус первой покупки (+50%) уже выдан
+  tutorial: TutorialState;          // обучение новичка (первая вязка), см. game/tutorial.ts
   nextId: number;                   // счётчик уникальных id
+}
+
+/**
+ * Прогресс обучения новичка. Активный шаг НЕ хранится — он вычисляется из
+ * состояния (`tutorialStep`), поэтому счётчик не может разойтись с реальностью:
+ * игрок, сделавший действие раньше подсказки, просто проскакивает шаг.
+ */
+export interface TutorialState {
+  done: boolean;         // обучение пройдено или пропущено — подсказок больше нет
+  freeSkipUsed: boolean; // подарочный ускоритель первой вязки уже потрачен
 }

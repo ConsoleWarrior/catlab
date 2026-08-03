@@ -4,6 +4,8 @@ import {
   createInitialState, nurseryCapacity, shelterCapacity, incubationDuration,
   mutationRate, offlineCapMin, upgradeCost, upgradeMaxed, passiveRatePerMin,
   adoptReward, labReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue, ORDER_TARGET,
+  freeBreedSlot,
+  pedestalPlace, placeIncomeMult,
 } from './index.js';
 import * as C from './config.js';
 
@@ -85,13 +87,68 @@ describe('стоимость апгрейдов', () => {
   });
 });
 
+describe('freeBreedSlot (кнопка «в свободный слот вязки»)', () => {
+  const s0 = (): ReturnType<typeof createInitialState> => createInitialState(makeRng(11), 0);
+  const addSlot = (s: ReturnType<typeof createInitialState>): void => {
+    s.slots.push({ motherId: null, fatherId: null, startedAt: 0, readyAt: 0, kittenId: null });
+  };
+
+  it('пустой слот подходит любому полу', () => {
+    const s = s0();
+    const she = s.cats.find((c) => c.genotype.sex === 'female')!;
+    const he = s.cats.find((c) => c.genotype.sex === 'male')!;
+    expect(freeBreedSlot(s, she)).toBe(0);
+    expect(freeBreedSlot(s, he)).toBe(0);
+  });
+
+  it('место занято котом своего пола / идёт вязка / сидит малыш — слот не свободен', () => {
+    const s = s0();
+    const she = s.cats.find((c) => c.genotype.sex === 'female')!;
+    s.slots[0]!.motherId = 'кто-то-другой';
+    expect(freeBreedSlot(s, she)).toBe(-1);       // «мамино» место занято
+
+    s.slots[0]!.motherId = null;
+    s.slots[0]!.readyAt = 1;                      // идёт вязка
+    expect(freeBreedSlot(s, she)).toBe(-1);
+
+    s.slots[0]!.readyAt = 0;
+    s.slots[0]!.kittenId = 'малыш';               // «оставленный с роднёй»
+    expect(freeBreedSlot(s, she)).toBe(-1);
+  });
+
+  it('слот с уже стоящим партнёром важнее пустого — пара соберётся сразу', () => {
+    const s = s0();
+    addSlot(s);                                   // 0 — пустой, 1 — с папой
+    const she = s.cats.find((c) => c.genotype.sex === 'female')!;
+    const he = s.cats.find((c) => c.genotype.sex === 'male')!;
+    s.slots[1]!.fatherId = he.id;
+    expect(freeBreedSlot(s, she)).toBe(1);
+  });
+});
+
 describe('доход и пристройство', () => {
   it('пассивный доход считается по чемпионам (без них — ноль)', () => {
     const s = createInitialState(makeRng(9), 0);
     expect(passiveRatePerMin(s)).toBe(0); // чемпионов нет — дохода нет
     const champ = s.cats[0]!;
     s.champions = [champ.id];
-    expect(passiveRatePerMin(s)).toBeCloseTo(catMarketValue(champ) * C.CHAMPION_INCOME_RATE);
+    // 1-й (базовый) пьедестал — V место, множитель места ×1.1
+    expect(passiveRatePerMin(s)).toBeCloseTo(
+      catMarketValue(champ) * C.CHAMPION_INCOME_RATE * placeIncomeMult(0),
+    );
+  });
+
+  it('пьедесталы покупаются от худшего места к лучшему: V → IV → … → I (+10% … +50%)', () => {
+    const s = createInitialState(makeRng(9), 0);
+    s.upgrades.championSlots = 4; // все 5 пьедесталов открыты
+    expect([0, 1, 2, 3, 4].map(pedestalPlace)).toEqual([5, 4, 3, 2, 1]);
+    expect([0, 1, 2, 3, 4].map(placeIncomeMult)).toEqual([1.1, 1.2, 1.3, 1.4, 1.5]);
+
+    const champ = s.cats[0]!;
+    s.champions = [champ.id];                                   // стартовый пьедестал — V место
+    const worst = passiveRatePerMin(s);
+    s.champions = [null, null, null, null, champ.id];           // последний купленный — I место
+    expect(passiveRatePerMin(s)).toBeCloseTo(worst / 1.1 * 1.5);
   });
 
   it('награда за пристройство = доля рыночной цены (легаси-множители удалены)', () => {

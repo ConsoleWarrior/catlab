@@ -33,6 +33,14 @@ export interface Room {
    * Вернуть true, если кот пристроен (состояние изменилось) — иначе он вернётся назад.
    */
   tryDropCat?(cat: Cat, sceneX: number, sceneY: number): boolean;
+  /**
+   * Узел-«якорь» для подсветки обучения (см. src/ui/tutorial.ts): комната
+   * отдаёт свой живой узел по ключу — `cat:<id>`, `slot`, `breed`, `freeSkip`.
+   * Возвращаем сам узел, а не координаты: комнаты пересобираются, а кот на полу
+   * ещё и ходит — подсветка каждый кадр берёт свежий getBounds(). Нет узла
+   * (не та комната, элемента сейчас нет на экране) → null.
+   */
+  anchor?(key: string): Container | null;
 }
 
 export interface UiContext {
@@ -110,6 +118,8 @@ export interface UiContext {
   /** Подтверждение покупки узла дерева «Улучшения» (Генолаб) — защита от случайного тапа. */
   openResearchConfirm(defId: string): void;
   openOrders(): void;
+  /** Справка комнаты (кнопка ℹ️ в титульной плашке) — тексты в src/ui/roomHelp.ts. */
+  openRoomHelp(roomId: string): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;
   /**

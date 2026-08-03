@@ -1,0 +1,302 @@
+/**
+ * Обучение новичка (FTUE) — визуальный слой. Ведёт до первого котёнка: пара в
+ * слот → «Свести» → подарочный ускоритель → Котодекс. Логика шага — чистая
+ * функция ядра (`game/tutorial.ts`), здесь только показ.
+ *
+ * Принцип — МЯГКАЯ подсветка: ничего не блокируется и не затемняется, все тапы
+ * проходят насквозь (`eventMode = 'none'` на всём слое, кроме крестика
+ * «пропустить»). Игрок волен игнорировать подсказку, уйти в другую комнату или
+ * сделать шаг раньше — подсветка просто догонит его на следующем кадре.
+ *
+ * Что рисуем:
+ *  - пульсирующее кольцо вокруг цели (узел берём у комнаты через `Room.anchor`,
+ *    координаты пересчитываем каждый кадр — кот на полу ходит);
+ *  - «руку» 👆, проигрывающую нужный жест (зажать / нести к краю / тапнуть);
+ *  - плашку с текстом внизу (или сверху, если цель в нижней части экрана).
+ */
+
+import { Container, Graphics, Text } from 'pixi.js';
+import type { Cat } from '../game/index.js';
+import { tutorialStep, isInSlot, isAdult, isOld } from '../game/index.js';
+import type { TutorStep } from '../game/index.js';
+import { COLORS, FONT, label } from './theme.js';
+import { NAV_RESERVE } from './rooms/shell.js';
+import type { UiContext } from './context.js';
+
+/** Что нужно классу от Game (всё остальное — приватная кухня контроллера). */
+export interface TutorHost {
+  /**
+   * Живой контекст игры: состояние, геометрия комнаты, кот «в руках». Берём
+   * объект целиком, а не копии полей, — Game заменяет ссылку на state при
+   * загрузке сейва, а roomW/roomH меняются на каждом ресайзе.
+   */
+  readonly ctx: UiContext;
+  /** Индекс комнаты по id ('nursery' / 'incubator' / 'genolab'); -1 — нет такой. */
+  roomIndexById(id: string): number;
+  /** Текущая открытая комната. */
+  currentRoomIndex(): number;
+  /** Узел-якорь внутри комнаты (Room.anchor) или null. */
+  anchorIn(roomIndex: number, key: string): Container | null;
+  /** Точка навигации нужной комнаты — подсказываем, куда идти. */
+  navDot(roomIndex: number): Container | null;
+  /** Открыт ли оверлей (меню кота, панель) — кольцо в этот момент не рисуем. */
+  overlayOpen(): boolean;
+  /** Игрок нажал «пропустить обучение». */
+  skip(): void;
+}
+
+/** Куда указывает подсказка и что написано в плашке. */
+interface Hint {
+  room: string;          // id комнаты, где происходит действие
+  key: string | null;    // ключ якоря внутри комнаты (null — цель не в комнате)
+  text: string;
+  gesture: 'tap' | 'hold' | 'carry'; // какой жест проигрывает рука
+}
+
+const PLATE_MAX_W = 460;
+
+export class Tutorial {
+  readonly layer = new Container();
+
+  private readonly ring = new Graphics();
+  private readonly hand: Text;
+  private readonly plate = new Container();
+  private readonly plateBg = new Graphics();
+  private readonly plateText: Text;
+  private readonly skipBtn: Container;
+
+  private t = 0;                 // общее время (пульс кольца)
+  private gestureT = 0;          // фаза жеста руки
+  private lastStep: TutorStep | null = null;
+
+  constructor(private readonly host: TutorHost) {
+    // 'passive', а не 'none': сам слой и его неинтерактивные дети (кольцо, рука,
+    // подложка плашки) тапы не ловят и пропускают их к игре, но интерактивный
+    // ребёнок — крестик «пропустить» — события получает. С 'none' отключилось бы
+    // всё поддерево вместе с ним.
+    this.layer.eventMode = 'passive';
+    this.layer.visible = false;
+
+    this.hand = label('👆', 30, 0xffffff, '700');
+    this.hand.alpha = 0.95;
+
+    this.plateText = new Text({
+      text: '',
+      style: {
+        fontFamily: FONT, fontSize: 15, fontWeight: '700', fill: COLORS.ink,
+        wordWrap: true, wordWrapWidth: PLATE_MAX_W - 76, lineHeight: 20, align: 'left',
+      },
+    });
+    this.plateText.anchor.set(0, 0.5);
+
+    // Крестик «пропустить» — единственный интерактивный элемент слоя.
+    this.skipBtn = new Container();
+    this.skipBtn.eventMode = 'static';
+    this.skipBtn.cursor = 'pointer';
+    const x = label('✕', 15, COLORS.inkSoft, '800');
+    const hit = new Graphics();
+    hit.circle(0, 0, 17).fill({ color: 0x000000, alpha: 0.001 }); // крупная зона под палец
+    this.skipBtn.addChild(hit, x);
+    this.skipBtn.on('pointertap', () => this.host.skip());
+
+    this.plate.addChild(this.plateBg, this.plateText, this.skipBtn);
+    this.layer.addChild(this.ring, this.hand, this.plate);
+  }
+
+  /** Покадровое обновление. dt — секунды. */
+  update(dt: number): void {
+    const step = tutorialStep(this.host.ctx.state);
+    if (!step) { this.layer.visible = false; return; }
+
+    this.t += dt;
+    if (step !== this.lastStep) { this.gestureT = 0; this.lastStep = step; }
+    this.gestureT += dt;
+
+    const hint = this.hintFor(step);
+    const roomIdx = this.host.roomIndexById(hint.room);
+    const here = this.host.currentRoomIndex() === roomIdx;
+
+    // Игрок ушёл в другую комнату — ведём обратно: подсвечиваем точку навигации.
+    const node = here && hint.key ? this.host.anchorIn(roomIdx, hint.key) : null;
+    const navNode = here ? null : this.host.navDot(roomIdx);
+    const target = node ?? navNode;
+
+    this.layer.visible = true;
+    const overlay = this.host.overlayOpen();
+    // Пока открыт оверлей (например меню кота), кольцо/рука бессмысленны — цель
+    // под панелью. Плашку оставляем: на шаге «второго кота» она и объясняет,
+    // какую кнопку в этом меню нажать.
+    const showPointer = !overlay && !!target;
+
+    this.ring.visible = showPointer;
+    this.hand.visible = showPointer;
+
+    let targetY = this.host.ctx.roomH; // для выбора стороны плашки, если цели нет
+    if (showPointer && target) {
+      const b = target.getBounds();
+      const k = this.scale();
+      const p = this.host.ctx.uiRoot.toLocal({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+      // размеры цели в координатах сцены (getBounds() — пиксели окна)
+      const w = Math.min(this.host.ctx.roomW * 0.8, b.width / k);
+      const h = Math.min(this.host.ctx.roomH * 0.8, b.height / k);
+      targetY = p.y;
+      const r = this.drawRing(p.x, p.y, w, h);
+      this.moveHand(p.x, p.y, r, here ? hint.gesture : 'tap');
+    }
+
+    // Плашка не должна накрывать цель: цель внизу — уводим текст наверх.
+    const bottom = targetY > this.host.ctx.roomH * 0.62;
+    this.layoutPlate(hint.text, bottom ? 'top' : 'bottom');
+  }
+
+  /** Масштаб сцены: getBounds() отдаёт пиксели окна, а рисуем мы в uiRoot. */
+  private scale(): number {
+    return this.host.ctx.uiRoot.scale.x || 1;
+  }
+
+  /**
+   * Подсветка по форме цели: круг для «квадратных» целей (кот, точка навигации),
+   * скруглённая рамка для вытянутых (кнопки, карточка слота) — круг вокруг
+   * широкой кнопки занимал пол-экрана. Возвращает полурадиус для позиции руки.
+   */
+  private drawRing(x: number, y: number, w: number, h: number): number {
+    const pulse = 1 + Math.sin(this.t * 3.4) * 0.06;
+    const pad = 12 * pulse;
+    const outer = { width: 3, color: 0xffffff, alpha: 0.5 };
+    const inner = { width: 4, color: COLORS.primary, alpha: 0.95 };
+    this.ring.clear();
+
+    const ratio = w / Math.max(1, h);
+    if (ratio > 0.7 && ratio < 1.45) {
+      const r = Math.max(24, Math.min(140, Math.max(w, h) / 2 + pad));
+      this.ring.circle(x, y, r + 7).stroke(outer);
+      this.ring.circle(x, y, r).stroke(inner);
+      return r;
+    }
+    const rw = w + pad * 2, rh = h + pad * 2;
+    const rad = Math.min(rh / 2, 18);
+    this.ring.roundRect(x - rw / 2 - 5, y - rh / 2 - 5, rw + 10, rh + 10, rad + 5).stroke(outer);
+    this.ring.roundRect(x - rw / 2, y - rh / 2, rw, rh, rad).stroke(inner);
+    return rh / 2;
+  }
+
+  /**
+   * Рука проигрывает жест шага:
+   *  - `tap`   — короткое постукивание по цели;
+   *  - `hold`  — палец опускается, «зажимает» и тянет чуть в сторону (взять за шкирку);
+   *  - `carry` — едет от кота к левому краю экрана (перенос между комнатами).
+   */
+  private moveHand(x: number, y: number, r: number, gesture: 'tap' | 'hold' | 'carry'): void {
+    const loop = gesture === 'carry' ? 2.2 : 1.4;
+    const k = (this.gestureT % loop) / loop; // 0..1 фаза
+    if (gesture === 'carry') {
+      // от цели к левому краю и обратно (пауза в конце — видно, куда нести)
+      const ease = k < 0.75 ? k / 0.75 : 1;
+      const toX = 26;
+      this.hand.position.set(x + (toX - x) * ease, y + r * 0.5 - 6 * Math.sin(k * Math.PI * 2));
+      this.hand.alpha = k > 0.9 ? 0.3 : 0.95;
+      return;
+    }
+    if (gesture === 'hold') {
+      // прижался и потянул влево-вниз (жест «взял за шкирку и понёс»)
+      const press = Math.min(1, k * 3);
+      const drag = Math.max(0, (k - 0.45) / 0.55);
+      this.hand.position.set(x + r * 0.28 - drag * r * 0.9, y + r * 0.42 + press * 5);
+      this.hand.alpha = 0.55 + press * 0.4;
+      return;
+    }
+    const press = Math.sin(k * Math.PI * 2);
+    this.hand.position.set(x + r * 0.28, y + r * 0.45 + press * 5);
+    this.hand.alpha = 0.75 + Math.abs(press) * 0.25;
+  }
+
+  private layoutPlate(text: string, side: 'top' | 'bottom'): void {
+    const W = Math.min(PLATE_MAX_W, this.host.ctx.roomW - 32);
+    this.plateText.style.wordWrapWidth = W - 76;
+    this.plateText.text = text;
+    const H = Math.max(52, this.plateText.height + 26);
+
+    this.plateBg.clear();
+    this.plateBg.roundRect(0, 0, W, H, 16)
+      .fill({ color: COLORS.hud, alpha: 0.96 })
+      .stroke({ width: 2, color: COLORS.primary, alpha: 0.8 });
+
+    this.plateText.position.set(20, H / 2);
+    this.skipBtn.position.set(W - 26, H / 2);
+
+    const x = (this.host.ctx.roomW - W) / 2;
+    const y = side === 'top'
+      ? this.host.ctx.topInset + 10
+      : this.host.ctx.roomH - NAV_RESERVE - H - 12;
+    this.plate.position.set(x, y);
+  }
+
+  /** Текст и цель шага. Внутри `drag` подшаг выбирается по тому, кот в руках или нет. */
+  private hintFor(step: TutorStep): Hint {
+    switch (step) {
+      case 'drag': {
+        const held = this.host.ctx.carrying();
+        if (held) {
+          // кота уже несут: в Инкубаторе — «отпусти на слот», иначе — «неси к краю»
+          const inIncubator = this.host.currentRoomIndex() === this.host.roomIndexById('incubator');
+          return inIncubator
+            ? { room: 'incubator', key: 'slot', text: 'Отпусти котика прямо на окошко вязки 💞', gesture: 'tap' }
+            : {
+              room: 'nursery', key: null, gesture: 'carry',
+              text: 'Не отпускай! Веди котика к левому краю — лаборатория пролистнётся в Инкубатор',
+            };
+        }
+        const cat = this.firstBreeder();
+        return {
+          room: 'nursery',
+          key: cat ? `cat:${cat.id}` : null,
+          gesture: 'hold',
+          text: 'Возьми котика за шкирку — зажми и тяни к левому краю, в Инкубатор',
+        };
+      }
+      case 'menu': {
+        const cat = this.firstBreeder();
+        return {
+          room: 'nursery',
+          key: cat ? `cat:${cat.id}` : null,
+          gesture: 'tap',
+          text: 'Второго проще: тапни котика → «💞 В свободный слот вязки»',
+        };
+      }
+      case 'breed':
+        return {
+          room: 'incubator', key: 'breed', gesture: 'tap',
+          text: 'Пара готова! Жми «Свести» — порода котёнка зависит от родителей',
+        };
+      case 'skip':
+        return {
+          room: 'incubator', key: 'freeSkip', gesture: 'tap',
+          text: 'Вязка идёт. Держи подарок лаборатории — ускорь её бесплатно ⚡',
+        };
+      case 'wait':
+        return {
+          room: 'incubator', key: 'slot', gesture: 'tap',
+          text: 'Малыш вот-вот появится в окошке вязки 🥚',
+        };
+      case 'codex':
+      default:
+        return {
+          room: 'genolab', key: null, gesture: 'tap',
+          text: 'Первая порода твоя! Загляни в Генолаб → 📖 Котодекс — там вся коллекция и рецепты',
+        };
+    }
+  }
+
+  /** Кот из питомника, которого сейчас логично отправить в слот вязки. */
+  private firstBreeder(): Cat | null {
+    const s = this.host.ctx.state;
+    const now = Date.now();
+    const slot = s.slots[0];
+    // если один уже в слоте — ведём к коту противоположного пола (пара ♀+♂)
+    const need = slot?.motherId ? 'male' : slot?.fatherId ? 'female' : null;
+    const fit = s.cats.filter((c) => c.location === 'nursery'
+      && !isInSlot(s, c.id) && isAdult(c, now) && !isOld(c)
+      && (!need || c.genotype.sex === need));
+    return fit[0] ?? null;
+  }
+}

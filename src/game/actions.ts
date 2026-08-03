@@ -4,7 +4,7 @@
  */
 
 import { breed, isLethal, simpleCat, resolveBreeding, recipeKey } from '../genetics/index.js';
-import type { Rng, BreedBoosts, KinshipLevel, Recipe } from '../genetics/index.js';
+import type { Rng, BreedBoosts, KinshipLevel, Recipe, Sex } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
 import * as E from './economy.js';
@@ -261,18 +261,29 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
   return events;
 }
 
-/** Купить простого кота в приют (первый бесплатно, если котов нет). */
-export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: Cat }> {
-  if (E.roomCount(state, 'shelter') >= E.shelterCapacity(state)) {
+/**
+ * Купить простого кота в приют (первый бесплатно, если котов нет). Если при этом
+ * нет и денег — выдаём сразу пару ♀+♂ (E.isRescuePair), чтобы игрок мог вязать.
+ * `cats` — все выданные коты (1 или 2), `cat` — первый из них.
+ */
+export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: Cat; cats: Cat[] }> {
+  const pair = E.isRescuePair(state);
+  const need = pair ? 2 : 1;
+  if (E.roomCount(state, 'shelter') + need > E.shelterCapacity(state)) {
     return { ok: false, reason: 'нет места в приюте' };
   }
   const cost = E.buyCatCost(state);
   if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
-  const cat = E.makeCatInstance(state, simpleCat(rng), now, 'shelter');
-  cat.isNew = true; // бейдж «новый» над котом, пока не откроют его инфо-меню
-  attachHiddenPedigree(state, cat, rng); // лотерея скрытых генов у купленного дворового
-  state.cats.push(cat);
-  return { ok: true, cat };
+  // обычная покупка — пол случайный; спасательная пара — строго самка и самец
+  const sexes: (Sex | undefined)[] = pair ? ['female', 'male'] : [undefined];
+  const cats = sexes.map((sex) => {
+    const cat = E.makeCatInstance(state, simpleCat(rng, sex), now, 'shelter');
+    cat.isNew = true; // бейдж «новый» над котом, пока не откроют его инфо-меню
+    attachHiddenPedigree(state, cat, rng); // лотерея скрытых генов у купленного дворового
+    state.cats.push(cat);
+    return cat;
+  });
+  return { ok: true, cat: cats[0]!, cats };
 }
 
 // --- Комнаты ---
@@ -418,6 +429,22 @@ export function adSkipBreeding(state: GameState, slotIndex: number, now: number)
   if (!slot) return { ok: false, reason: 'нет такого слота' };
   if (slot.readyAt === 0) return { ok: false, reason: 'слот не занят вязкой' };
   slot.readyAt = Math.max(now, slot.readyAt - C.AD_SKIP_MS);
+  return { ok: true };
+}
+
+/**
+ * Подарочный ускоритель обучения: мгновенно завершает первую вязку бесплатно.
+ * Выдаётся ровно один раз (`tutorial.freeSkipUsed`) — иначе новичок первые пять
+ * минут игры смотрит на таймер, ничего не понимая. Дальше ускорение только
+ * штатное: 📺 реклама или 💎.
+ */
+export function freeSkipBreeding(state: GameState, slotIndex: number, now: number): Result {
+  const slot = state.slots[slotIndex];
+  if (!slot) return { ok: false, reason: 'нет такого слота' };
+  if (slot.readyAt === 0) return { ok: false, reason: 'слот не занят вязкой' };
+  if (state.tutorial.freeSkipUsed) return { ok: false, reason: 'ускоритель уже использован' };
+  state.tutorial.freeSkipUsed = true;
+  slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
   return { ok: true };
 }
 

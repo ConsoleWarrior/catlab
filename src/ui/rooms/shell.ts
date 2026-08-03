@@ -5,7 +5,8 @@
 
 import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { UiContext } from '../context.js';
-import { COLORS, label, ROOM_ACCENT } from '../theme.js';
+import { Button, COLORS, label, ROOM_ACCENT } from '../theme.js';
+import { hasRoomHelp } from '../roomHelp.js';
 import { roomBg } from '../roomArt.js';
 import { buildDecor } from '../decorArt.js';
 import { darken, lighten } from '../../render/palette.js';
@@ -32,6 +33,8 @@ export interface Shell {
 
 const PAD = 18;
 const TITLE_H = 44;
+/** Сторона круглой кнопки справки ℹ️ в титульной плашке. */
+const INFO_D = 28;
 // тонкая полоса под навигацию (точки + стрелки в одном ряду), прижата к самому
 // низу экрана. Контент комнат заканчивается на этой высоте — ниже только панель
 // навигации, без кликабельного контента, чтобы навигация не перехватывала тапы
@@ -175,31 +178,48 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
   const t = label(title, 20, COLORS.ink, '800');
   t.anchor.set(0, 0.5);
   t.position.set(16, TITLE_H / 2);
-  const bw = Math.max(t.width + 32, Math.min(w - PAD * 2, 460) / 2);
   const bg = new Graphics();
-  bg.roundRect(0, 0, bw, TITLE_H, 14).fill({ color: COLORS.hud, alpha: 0.92 });
-  bg.roundRect(0, 0, bw, TITLE_H, 14).stroke({ width: 2, color: COLORS.cardEdge });
   titleBar.addChild(bg, t);
   titleBar.position.set(PAD, topInset + 8);
   container.addChild(titleBar);
 
-  // Счётчик-бейдж справа в плашке: создаётся по первому вызову, при необходимости
-  // расширяет фон плашки, чтобы «название … N/M» помещалось с отступами.
+  // Кнопка справки комнаты (ℹ️) — ПОСЛЕДНЯЯ в плашке, за счётчиком. Живёт внутри
+  // плашки, а не рядом с ней, чтобы не спорить за место с тем, что комнаты сами
+  // вешают правее (чипы усилителей в Инкубаторе, кнопка заказов в Приюте): те
+  // считаются от итоговой ширины плашки, и место под ℹ️ учтено автоматически.
+  const info = hasRoomHelp(id)
+    ? new Button({ text: 'ℹ️', w: INFO_D, h: INFO_D, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 })
+    : null;
+  if (info) {
+    info.onTap = () => ctx.openRoomHelp(id);
+    titleBar.addChild(info);
+  }
+  const infoSpace = info ? INFO_D + 10 : 0;
+
+  // Ширина плашки: название + (счётчик) + (ℹ️). Пересчитывается при смене
+  // счётчика — «название … N/M ℹ️» должно помещаться с отступами.
   let badge: Text | null = null;
+  const relayout = (): number => {
+    const inner = 16 + t.width + (badge ? 16 + badge.width : 0) + infoSpace + 14;
+    const bw = Math.max(inner, Math.min(w - PAD * 2, 460) / 2);
+    bg.clear();
+    bg.roundRect(0, 0, bw, TITLE_H, 14).fill({ color: COLORS.hud, alpha: 0.92 });
+    bg.roundRect(0, 0, bw, TITLE_H, 14).stroke({ width: 2, color: COLORS.cardEdge });
+    if (info) info.position.set(bw - 14 - INFO_D / 2, TITLE_H / 2);
+    if (badge) badge.position.x = bw - 14 - infoSpace;
+    return bw;
+  };
+  const titleW = relayout();
+
   const setTitleBadge = (text: string): number => {
     if (!badge) {
       badge = label(text, 15, COLORS.inkSoft, '800');
       badge.anchor.set(1, 0.5);
-      badge.position.set(bw - 14, TITLE_H / 2);
+      badge.position.set(0, TITLE_H / 2);
       titleBar.addChild(badge);
     }
     badge.text = text;
-    const newW = Math.max(bw, 16 + t.width + 16 + badge.width + 14);
-    bg.clear();
-    bg.roundRect(0, 0, newW, TITLE_H, 14).fill({ color: COLORS.hud, alpha: 0.92 });
-    bg.roundRect(0, 0, newW, TITLE_H, 14).stroke({ width: 2, color: COLORS.cardEdge });
-    badge.position.x = newW - 14;
-    return newW;
+    return relayout();
   };
 
   const body = new Container();
@@ -213,7 +233,7 @@ export function roomShell(ctx: UiContext, id: string, title: string): Shell {
     contentW: w - PAD * 2,
     contentH: h - top - NAV_RESERVE,
     titleBar,
-    titleW: bw,
+    titleW,
     titleH: TITLE_H,
     setTitleBadge,
     decor,

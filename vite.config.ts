@@ -45,6 +45,12 @@ export default defineConfig({
     // /eyes.html перезагружается на каждый клик и список прыгает в начало. Игра
     // перечитывает разметку через /__eyes при перезагрузке вкладки (см. loadEyeData).
     watch: { ignored: ['**/src/assets/eyes.json'] },
+    // Тег `<script src="/sdk.js">` в index.html на локалке ведёт в никуда. Документация
+    // Яндекс Игр предписывает именно проксировать /sdk.js dev-сервером, а не класть
+    // копию файла в проект («Скачивать файл sdk.js не нужно»).
+    proxy: {
+      '/sdk.js': { target: 'https://sdk.games.s3.yandex.net', changeOrigin: true },
+    },
   },
   build: {
     target: 'es2020',

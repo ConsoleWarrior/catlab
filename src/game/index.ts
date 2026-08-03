@@ -20,23 +20,24 @@ export {
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
   ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS, ORDER_SELL_SLOTS, ORDER_CRYSTALS,
   ORDER_REP_BASE, ORDER_REP_GROWTH, orderRepFor,
-  PEDESTAL_COSTS,
+  PEDESTAL_COSTS, PEDESTAL_PLACES, PLACE_INCOME_MULT,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature, CrystalPack } from './config.js';
 export {
   lvl, emptySlot, slotCount, nurseryCapacity, shelterCapacity, capacityOf,
-  incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot,
+  incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot, freeBreedSlot,
   passiveRatePerMin, netIncomePerMin, adoptReward, upgradeCost, upgradeMaxed,
   researchExtraCoins, canAffordResearch,
   foodEnabled, foodCap, foodLevel, foodRatePerMin, isStarving, foodMinutesLeft, consumeFood,
   catFoodPerMin, feedingCatCount, foodBuyQuote,
   feedEfficiency, autoFeedEnabled, autoFeed, breedChanceMult, kinshipSafety, extraHearts, applyExtraHearts,
-  makeCatInstance, buyCatCost, growthScale, growthProgress, growthRemainingMs, isAdult,
+  makeCatInstance, buyCatCost, isRescuePair, growthScale, growthProgress, growthRemainingMs, isAdult,
   boostCharges, activeBoostId, activeBoosts, consumeBoosts, researchBonus,
   researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
   catMarketValue, pedigreeValueMult, healthValueMult, labReward, shelterTotals,
   cryoUnlocked, cryoCapacity, cryoCount, cloneCost, cloneCostCoins,
   championSlots, championIds, championCats, championAt, isChampion, championIncomePerMin,
+  pedestalPlace, placeIncomeMult,
   basketCat, isInBasket,
   speedUpCost, effGrowthMs,
   isUnlocked, unlockLevelOf, maxSlotsForLevel, maxChampionsForLevel,
@@ -62,7 +63,7 @@ export {
 export {
   collectIncome, startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
   keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
-  speedUpBreeding, adSkipBreeding, speedUpGrowth, adSkipGrowth,
+  speedUpBreeding, adSkipBreeding, freeSkipBreeding, speedUpGrowth, adSkipGrowth,
   putCatInBasket, clearOrderBasket,
   buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
@@ -70,3 +71,5 @@ export {
   grantCrystals, firstPurchaseBonusAvailable, isKnownPack,
 } from './actions.js';
 export type { Result, BirthEvent } from './actions.js';
+export { tutorialStep, tutorialActive, finishTutorial, restartTutorial } from './tutorial.js';
+export type { TutorStep } from './tutorial.js';

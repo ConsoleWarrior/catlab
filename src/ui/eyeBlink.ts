@@ -46,6 +46,17 @@ const DEBUG = false;
 const CLOSE = 0.07, HOLD = 0.05, OPEN = 0.09;
 const DUR = CLOSE + HOLD + OPEN;
 
+// Дремота (`setSleep(true)`, пока кот спит на полу): обычное моргание выключается,
+// веки живут медленным циклом — плавно опускаются до конца, лежат закрытыми, потом
+// кот приоткрывает глаза щёлочкой и снова «роняет» веки, будто засыпает.
+const SLEEP_FALL = 1.2;      // с — веки опускаются
+const SLEEP_SHUT = 2.4;      // с — базовое время закрытых глаз (×0.7…1.6 у каждого свой)
+const SLEEP_RISE = 0.8;      // с — приоткрывание
+const SLEEP_PEEK = 0.6;      // с — базовое время «глаза щёлочкой»
+const SLEEP_PEEK_MIN = 0.35; // насколько приоткрывает: 1 — закрыт совсем, 0 — открыт настежь
+const SLEEP_PEEK_MAX = 0.6;
+const WAKE_RISE = 0.4;       // с — проснулся: веки уходят вверх
+
 function darken(c: number, f: number): number {
   const r = Math.round(((c >> 16) & 0xff) * f);
   const g = Math.round(((c >> 8) & 0xff) * f);
@@ -86,7 +97,12 @@ function resolveEyes(app: Application, tex: Texture): Eye[] {
   return eyes;
 }
 
-export interface Blinker { update(dt: number): void; destroy(): void; }
+export interface Blinker {
+  update(dt: number): void;
+  /** Дремота: true — веки медленно опускаются/приоткрываются, false — обычное моргание. */
+  setSleep(on: boolean): void;
+  destroy(): void;
+}
 
 /**
  * Навесить моргание на спрайт кота. Возвращает Blinker (двигать в tick через
@@ -133,11 +149,49 @@ export function attachBlink(app: Application, sprite: Sprite): Blinker | null {
   let t = -1;                       // <0 — пауза; >=0 — идёт моргание
   let doublePending = false;
 
+  // дремота
+  let sleeping = false;
+  let waking = false;                                     // веки уезжают вверх после сна
+  let lidV = 0;                                           // закрытость век в дремоте (0..1)
+  let drowse: 'fall' | 'shut' | 'rise' | 'peek' = 'fall';
+  let drowseT = 0;                                        // остаток фазы 'shut'/'peek'
+  let peekTo = SLEEP_PEEK_MIN;                            // до какой щёлочки приоткроет в этот раз
+
   const setLids = (v: number) => { for (const l of lids) l.scale.y = v; };
+  const smooth = (v: number) => v * v * (3 - 2 * v); // мягкие старт/остановка у медленных фаз
 
   return {
     update(dt: number) {
       if (DEBUG) return;
+      if (sleeping) {
+        switch (drowse) {
+          case 'fall':
+            lidV = Math.min(1, lidV + dt / SLEEP_FALL);
+            if (lidV >= 1) { drowse = 'shut'; drowseT = SLEEP_SHUT * (0.7 + Math.random() * 0.9); }
+            break;
+          case 'shut':
+            if ((drowseT -= dt) <= 0) {
+              drowse = 'rise';
+              peekTo = SLEEP_PEEK_MIN + Math.random() * (SLEEP_PEEK_MAX - SLEEP_PEEK_MIN);
+            }
+            break;
+          case 'rise':
+            lidV = Math.max(peekTo, lidV - dt / SLEEP_RISE);
+            if (lidV <= peekTo) { drowse = 'peek'; drowseT = SLEEP_PEEK * (0.6 + Math.random()); }
+            break;
+          case 'peek':
+            if ((drowseT -= dt) <= 0) drowse = 'fall';
+            break;
+        }
+        setLids(smooth(lidV));
+        return;
+      }
+      if (waking) {
+        lidV -= dt / WAKE_RISE;
+        if (lidV <= 0) { lidV = 0; waking = false; }
+        setLids(smooth(Math.max(0, lidV)));
+        return;
+      }
       if (t < 0) { if ((wait -= dt) <= 0) t = 0; return; }
       t += dt;
       let close: number;
@@ -151,6 +205,20 @@ export function attachBlink(app: Application, sprite: Sprite): Blinker | null {
         t = -1;
         if (doublePending) { doublePending = false; wait = 0.13; }      // быстрый второй «хлоп»
         else { wait = 2.5 + Math.random() * 4; doublePending = Math.random() < 0.18; }
+      }
+    },
+    setSleep(on: boolean) {
+      if (on === sleeping) return;
+      sleeping = on;
+      t = -1; // начатое моргание обрываем — дальше веками рулит дремота/пробуждение
+      if (on) {
+        waking = false;
+        drowse = 'fall';
+        lidV = lids[0]?.scale.y ?? 0; // подхватываем текущее положение век, без скачка
+      } else {
+        waking = lidV > 0;
+        wait = 0.35;          // проснулся — почти сразу проморгается
+        doublePending = true;
       }
     },
     destroy() { layer.destroy({ children: true }); },

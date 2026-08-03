@@ -20,7 +20,7 @@ import {
   nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
   finishRecipeResearch, refreshExpiredOrders,
-  grantCrystals, isKnownPack,
+  grantCrystals, isKnownPack, tutorialActive, tutorialStep, finishTutorial, restartTutorial,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -31,18 +31,20 @@ import { loadEyeData } from './eyeBlink.js';
 import { initSfx, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
+import { Tutorial } from './tutorial.js';
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
 import { createCryobank } from './rooms/cryobank.js';
 import {
-  buildCatMenu, buildOrdersPanel, buildHelpPanel, buildBirthCard, buildPedigreePanel,
+  buildCatMenu, buildOrdersPanel, buildBirthCard, buildPedigreePanel,
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
   buildHealConfirm, buildCryoMenu, buildGrowConfirm,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel,
 } from './overlays.js';
+import { buildRoomHelpPanel } from './roomHelp.js';
 import { initPlatform, loadingReady, gameplayStart, gameplayStop } from '../platform/ysdk.js';
 import { loadSaveCandidates, writeSave, writeSaveAwait } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
@@ -104,6 +106,10 @@ export class Game implements UiContext {
   private overlayDim: Graphics | null = null;
   private overlayContent: Container | null = null;
   private readonly toastBox = new Container();
+  // Обучение новичка (FTUE): мягкая подсветка цели + плашка с подсказкой.
+  // Слой лежит ВЫШЕ оверлеев: на шаге «второго кота» подсказка обязана читаться
+  // поверх открытого меню кота, где и находится нужная кнопка.
+  private tutorial!: Tutorial;
   // Шторка межстраничной рекламы — поверх всего, включая оверлеи (см. runInterstitial).
   private readonly adLayer = new Container();
   private adCurtain: Container | null = null;
@@ -234,7 +240,19 @@ export class Game implements UiContext {
 
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.root);
-    this.root.addChild(this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer, this.toastBox, this.adLayer, this.rootMask);
+    this.tutorial = new Tutorial({
+      ctx: this,
+      roomIndexById: (id) => this.roomIndex(id),
+      currentRoomIndex: () => this.currentRoom,
+      anchorIn: (i, key) => this.rooms[i]?.anchor?.(key) ?? null,
+      navDot: (i) => this.dots[i] ?? null,
+      overlayOpen: () => this.overlayOpen,
+      skip: () => { finishTutorial(this.state); this.commit(); this.toast('Подсказки выключены — справка по кнопке ℹ️ у названия комнаты'); },
+    });
+    this.root.addChild(
+      this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer,
+      this.tutorial.layer, this.toastBox, this.adLayer, this.rootMask,
+    );
     this.root.mask = this.rootMask;
     // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер
     // (по центру внизу, roomW/2 × roomH-56) своими границами перехватывал хит-тест и
@@ -248,8 +266,11 @@ export class Game implements UiContext {
     this.installInput();
     this.app.ticker.add((t) => this.update(Math.min(t.deltaMS / 1000, 0.05)));
 
-    // первый запуск — показываем инструкцию (но не во время скриншотов ?reset)
-    if (this.freshGame && !reset) this.openHelp();
+    // Первый запуск: начинаем в Питомнике — там стартовая пара, с неё и ведёт
+    // обучение (src/ui/tutorial.ts). Инструкции-стены «Как играть» больше нет
+    // вовсе: её заменили пошаговый туториал и справки комнат (ℹ️).
+    // При ?reset (скриншоты) не трогаем ни то, ни другое.
+    if (this.freshGame && !reset) this.goRoom(this.roomIndex('nursery'));
 
     // сцена собрана и отвечает на тапы — платформе можно убрать свой лоадер
     loadingReady();
@@ -293,7 +314,7 @@ export class Game implements UiContext {
         app: this.app, state: this.state,
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
-        openHelp: () => this.openHelp(),
+        openRoomHelp: (id = 'incubator') => this.openRoomHelp(id),
         openSettings: () => this.openSettings(),
         openShop: () => this.openShop(),
         shopAvailable: () => shopAvailable(),
@@ -466,6 +487,9 @@ export class Game implements UiContext {
     }
     this.state = createInitialState(this.rng, this.now());
     this.freshGame = true;
+    // ?reset — это дев-сброс и съёмка скриншотов (scripts/screenshots.mjs):
+    // подсветка обучения не должна лезть в кадр.
+    if (reset) finishTutorial(this.state);
   }
 
   /** Офлайн-прогресс: родившиеся котята + накопленный доход. */
@@ -547,6 +571,12 @@ export class Game implements UiContext {
     this.currentRoom = Math.max(0, Math.min(this.rooms.length - 1, index));
     this.targetX = -this.currentRoom * this.roomW;
     this.updateNav();
+    // Финал обучения: дошёл до Генолаба с первой породой — дальше играем сами.
+    if (this.rooms[this.currentRoom]?.id === 'genolab' && tutorialStep(this.state) === 'codex') {
+      finishTutorial(this.state);
+      this.toast('Обучение пройдено! 🎓 Тапни породу — увидишь её рецепты');
+      this.save();
+    }
     // тикает только текущая комната — хор спящих гасим, «пол» новой комнаты
     // сам восстановит его на первом же тике (если там кто-то спит)
     sfxPurrSync([]);
@@ -571,6 +601,9 @@ export class Game implements UiContext {
   private maybeInterstitial(): void {
     // ни поверх открытой панели, ни с котом в руках, ни поверх другой рекламы
     if (this.adPaused || this.overlayOpen || this.grab) return;
+    // и никогда во время обучения: смена комнаты — это его штатный шаг (несём
+    // кота в Инкубатор), новичок не должен упереться в рекламу на первой минуте
+    if (tutorialActive(this.state)) return;
     if (!interstitialDue(this.now())) return;
     void this.runInterstitial();
   }
@@ -725,9 +758,11 @@ export class Game implements UiContext {
     this.showOverlay(buildOrdersPanel(this, close));
   }
 
-  openHelp(): void {
+  /** Справка комнаты (ℹ️ в титульной плашке). Общей стены «Как играть» больше нет:
+   *  механику объясняем там, где она перед глазами (тексты — src/ui/roomHelp.ts). */
+  openRoomHelp(roomId: string): void {
     const close = (): void => this.closeOverlay();
-    this.showOverlay(buildHelpPanel(this, close));
+    this.showOverlay(buildRoomHelpPanel(this, roomId, close));
   }
 
   openSettings(): void {
@@ -746,6 +781,32 @@ export class Game implements UiContext {
   openDevMenu(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildDevMenu(this, close));
+  }
+
+  /**
+   * ⚠️ ВРЕМЕННОЕ DEV: кнопка 🎓 — прогнать обучение по требованию (убрать перед
+   * релизом вместе с кнопкой). Тумблер: идёт — выключаем, не идёт — включаем
+   * заново и уводим в Питомник, откуда начинается первый шаг. Шаг считается от
+   * состояния, поэтому на отыгранной партии подсветка встанет в конец («codex»):
+   * чтобы увидеть обучение с нуля, нужна новая игра (?reset).
+   */
+  devToggleTutorial(): void {
+    if (tutorialActive(this.state)) {
+      finishTutorial(this.state);
+      this.commit();
+      this.save();
+      this.toast('DEV: обучение выключено');
+      return;
+    }
+    restartTutorial(this.state);
+    this.commit();
+    this.save();
+    if (tutorialStep(this.state) === 'codex') {
+      this.toast('DEV: обучение включено, но котёнок уже есть — с нуля только на новой игре');
+      return;
+    }
+    this.goRoom(this.roomIndex('nursery'));
+    this.toast('DEV: обучение включено 🎓');
   }
 
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void {
@@ -1003,17 +1064,13 @@ export class Game implements UiContext {
     this.levelBar = new Graphics(); // тонкая полоска прогресса опыта под ⭐ Ур.
     this.hud.addChild(this.levelBar);
 
-    // Кнопки справа выкладываются справа налево: справка → шестерёнка → (dev).
+    // Кнопки справа выкладываются справа налево: шестерёнка → (dev). Общей
+    // справки ❓ здесь нет: она разошлась по комнатам (кнопка ℹ️ в титульной
+    // плашке, тексты — src/ui/roomHelp.ts).
     const bh = Math.round(ti * 0.72);
     const btnW = Math.round(ti * 0.92);
     const btnGap = 8;
     let rx = w - pad; // правый край текущей кнопки
-
-    const help = new Button({ text: '❓', w: btnW, h: bh, color: COLORS.secondary, fontSize: fs + 3 });
-    help.position.set(rx - btnW / 2, ti / 2);
-    help.onTap = () => this.openHelp();
-    this.hud.addChild(help);
-    rx -= btnW + btnGap;
 
     // Настройки (громкость и пр.) — всегда доступны.
     const gear = new Button({ text: '⚙️', w: btnW, h: bh, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: fs + 2 });
@@ -1029,6 +1086,13 @@ export class Game implements UiContext {
       dev.position.set(rx - btnW / 2, ti / 2);
       dev.onTap = () => this.openDevMenu();
       this.hud.addChild(dev);
+      rx -= btnW + btnGap;
+
+      // ⚠️ ВРЕМЕННОЕ: включить/выключить обучение (после ?reset оно погашено).
+      const tut = new Button({ text: '🎓', w: btnW, h: bh, color: COLORS.good, fontSize: fs + 2 });
+      tut.position.set(rx - btnW / 2, ti / 2);
+      tut.onTap = () => this.devToggleTutorial();
+      this.hud.addChild(tut);
       rx -= btnW + btnGap;
     }
   }
@@ -1336,6 +1400,9 @@ export class Game implements UiContext {
 
     // таймеры/анимация текущей комнаты
     this.rooms[this.currentRoom]?.tick?.(dt);
+
+    // обучение новичка: подсветка догоняет цель каждый кадр (кот на полу ходит)
+    this.tutorial.update(dt);
 
     // расход корма в реальном времени (dt — секунды; ставка — в минуту)
     const foodRate = foodRatePerMin(this.state);

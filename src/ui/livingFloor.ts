@@ -109,7 +109,7 @@ export function createLivingFloor(
   layer: Container,
   plane: FloorPlane,
   getCats: () => Cat[],
-): { refresh(): void; tick(dt: number): void } {
+): { refresh(): void; tick(dt: number): void; nodeOf(catId: string): Container | null } {
   let actors: Actor[] = [];
   const effects: GrowFx[] = [];
   const moodFx: MoodFx[] = [];
@@ -363,7 +363,8 @@ export function createLivingFloor(
     const sleepy: string[] = []; // кто мурчит во сне — сверка хора в конце тика
     for (const a of actors) {
       a.phase += dt;
-      a.blink?.update(dt); // моргание глаз
+      a.blink?.setSleep(a.state === 'sleep'); // дремлет → веки медленно опускаются
+      a.blink?.update(dt);                    // моргание глаз
       const ds = depthScale(a.z);
       a.view.scale.set(growthScale(a.cat, now) * ds); // котята подрастают + перспектива
       a.view.zIndex = Math.round(yAt(a.z));
@@ -601,5 +602,11 @@ export function createLivingFloor(
     sfxPurrSync(sleepy); // хор мурлыканья = ровно те, кто сейчас спит на этом полу
   }
 
-  return { refresh, tick };
+  /** Узел гуляющего кота — «якорь» подсветки обучения (см. Room.anchor). */
+  function nodeOf(catId: string): Container | null {
+    const a = actors.find((x) => x.cat.id === catId);
+    return a && !a.body.destroyed ? a.body : null;
+  }
+
+  return { refresh, tick, nodeOf };
 }

@@ -23,6 +23,7 @@ import {
   kinshipLevel, KINSHIP_RU, buildBreedingContext,
   speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS, BREED_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
+import { freeSkipBreeding, tutorialActive } from '../../game/index.js';
 import { boostCanFire } from '../../genetics/index.js';
 import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
@@ -118,6 +119,9 @@ export function createIncubator(ctx: UiContext): Room {
   // id малышей, чьё «рождение» уже отпраздновали эффектом — чтобы не повторять
   // вспышку на каждом пересборе. Эффект играет один раз, когда малыш виден.
   const celebrated = new Set<string>();
+  // Узлы-якоря подсветки обучения (см. Room.anchor): первый слот и его кнопки.
+  // Пересобираются вместе с комнатой — карта чистится в refresh().
+  const anchors = new Map<string, Container>();
 
   // --- Усилители вязки (Генная инженерия) у названия комнаты ---
   // Кнопки-чипы справа от заголовка. Заряженный усилитель «горит» (яркая
@@ -548,22 +552,41 @@ export function createIncubator(ctx: UiContext): Room {
       const skipMin = Math.round(AD_SKIP_MS / 60_000);
       const bw2 = Math.round((rw - 8) * 0.42);
       const yy = barY + 50;
-      const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw2, h: 30, color: COLORS.secondary, fontSize: 12 });
-      adBtn.position.set(w / 2 - bw2 / 2 - 4, yy);
-      adBtn.onTap = () => {
-        void showRewarded().then((watched) => {
-          if (!watched) { ctx.toast('Реклама недоступна'); return; }
-          const r = adSkipBreeding(ctx.state, i, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+
+      // Подарок обучения: первую вязку новичок пропускает бесплатно, чтобы не
+      // смотреть пять минут на таймер, не поняв ещё сути игры. Кнопка живёт
+      // только пока подарок цел (freeSkipBreeding), дальше остаются 📺 и 💎.
+      if (tutorialActive(ctx.state) && !ctx.state.tutorial.freeSkipUsed) {
+        const freeBtn = new Button({
+          text: '⚡ Ускорить бесплатно', w: Math.round((rw - 8) * 0.9), h: 30,
+          color: COLORS.warn, fontSize: 12,
         });
-      };
-      const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
-      crBtn.position.set(w / 2 + bw2 / 2 + 4, yy);
-      crBtn.onTap = () => {
-        const r = speedUpBreeding(ctx.state, i, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast('Готово! 🥚'); } else ctx.toast(r.reason);
-      };
-      card.addChild(adBtn, crBtn);
+        freeBtn.position.set(w / 2, yy);
+        freeBtn.onTap = () => {
+          const r = freeSkipBreeding(ctx.state, i, ctx.now());
+          if (r.ok) { ctx.commit(); ctx.toast('Подарок лаборатории: готово! 🥚'); } else ctx.toast(r.reason);
+        };
+        card.addChild(freeBtn);
+        // 📺/💎 пока не показываем: у новичка ровно одно очевидное действие
+        anchors.set('freeSkip', freeBtn);
+      } else {
+        const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw2, h: 30, color: COLORS.secondary, fontSize: 12 });
+        adBtn.position.set(w / 2 - bw2 / 2 - 4, yy);
+        adBtn.onTap = () => {
+          void showRewarded().then((watched) => {
+            if (!watched) { ctx.toast('Реклама недоступна'); return; }
+            const r = adSkipBreeding(ctx.state, i, ctx.now());
+            if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+          });
+        };
+        const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
+        crBtn.position.set(w / 2 + bw2 / 2 + 4, yy);
+        crBtn.onTap = () => {
+          const r = speedUpBreeding(ctx.state, i, ctx.now());
+          if (r.ok) { ctx.commit(); ctx.toast('Готово! 🥚'); } else ctx.toast(r.reason);
+        };
+        card.addChild(adBtn, crBtn);
+      }
     } else if (hasKitten) {
       // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
       // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
@@ -615,6 +638,7 @@ export function createIncubator(ctx: UiContext): Room {
           textColor: 0xffffff, fontSize: 15,
         });
         btn.position.set(w / 2 - (pvW + 8) / 2, h - 22 + ctrlShift);
+        if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
           if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast('Вязка началась 🐾'); }
@@ -630,6 +654,8 @@ export function createIncubator(ctx: UiContext): Room {
         card.addChild(hint);
       }
     }
+
+    if (i === 0) anchors.set('slot', card); // якорь подсветки обучения (первый слот)
 
     live.push({
       index: i,
@@ -707,6 +733,7 @@ export function createIncubator(ctx: UiContext): Room {
   function refresh(): void {
     for (const c of shell.body.removeChildren()) c.destroy({ children: true });
     live = [];
+    anchors.clear(); // узлы уничтожены вместе с телом комнаты
     // Всегда показываем 3 аккуратных окна вязки (триптих по центру). Открытые —
     // рабочие слоты, ещё не купленные — притушённые с замком. Под каждым окном —
     // спрайт-подставка, чтобы окна «стояли на тумбах».
@@ -905,5 +932,13 @@ export function createIncubator(ctx: UiContext): Room {
     return false;
   }
 
-  return { id: 'incubator', title: '🧬 Инкубатор', container: shell.container, refresh, tick, tryDropCat };
+  return {
+    id: 'incubator', title: '🧬 Инкубатор', container: shell.container, refresh, tick, tryDropCat,
+    // Обучение новичка: 'slot' — карточка первого слота, 'breed' — «Свести»,
+    // 'freeSkip' — подарочный ускоритель (см. ui/tutorial.ts).
+    anchor: (key) => {
+      const node = anchors.get(key);
+      return node && !node.destroyed ? node : null;
+    },
+  };
 }

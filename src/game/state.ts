@@ -45,6 +45,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastBoostAdAt: 0,    // 📺-зарядка усилителя сразу доступна
     processedPurchases: [],
     firstPurchaseDone: false,
+    tutorial: { done: false, freeSkipUsed: false }, // новая игра — обучение с нуля
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -127,6 +128,15 @@ export function deserialize(json: string): GameState {
   // сбрасывать прогресс из-за чисто аддитивных полей нельзя (тем более у платящих).
   if (!Array.isArray(data.processedPurchases)) data.processedPurchases = [];
   if (typeof data.firstPurchaseDone !== 'boolean') data.firstPurchaseDone = false;
+  // Обучение новичка: поля нет только у сейвов, сделанных ДО его появления —
+  // а там игра уже началась, и водить игрока за руку по первой вязке поздно.
+  // Такому сейву обучение сразу закрыто (и подарочный ускоритель не положен).
+  if (!data.tutorial || typeof data.tutorial !== 'object') {
+    data.tutorial = { done: true, freeSkipUsed: true };
+  } else {
+    if (typeof data.tutorial.done !== 'boolean') data.tutorial.done = true;
+    if (typeof data.tutorial.freeSkipUsed !== 'boolean') data.tutorial.freeSkipUsed = true;
+  }
   // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
   // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;
   // рождённым в инкубаторе (есть motherBreed/fatherBreed) раскрываем родителей —

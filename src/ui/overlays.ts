@@ -7,7 +7,7 @@ import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { Application, FederatedPointerEvent, Point } from 'pixi.js';
 import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
 import {
-  isBusy, isInSlot, clearBreederSlot, moveCat, keepKittenWithParents,
+  isBusy, isInSlot, freeBreedSlot, assignBreeder, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
   basketCat, adRefreshOrder, msUntilOrderExpiry, canAdRefreshOrder, msUntilAdRefresh,
   isAdult, growthProgress, growthRemainingMs, isOld, breedsLeft, heartsOf, isSterile,
@@ -152,52 +152,8 @@ function rewardText(r: { coins: number; crystals: number; dna: number; reputatio
   return p.join('  ');
 }
 
-/** Оверлей-инструкция «Как играть». */
-export function buildHelpPanel(ctx: UiContext, close: () => void): Container {
-  const W = Math.min(ctx.roomW - 40, 640);
-  const pad = 24;
-  const root = new Container();
-
-  const steps = [
-    '🧬 Вязка. В Питомнике тапни котика → «Выбрать для вязки» (нужны ♀ и ♂). Затем в Инкубаторе нажми «Свести» и дождись таймера — родится котёнок.',
-    '🛡 Усилители. У названия Инкубатора — чипы генной инженерии: активируй за 🧬 гены или 💎 кристаллы. Заряженный усилитель сработает на следующей вязке.',
-    '🏆 Питомник. Ценные коты приносят пассивный доход 💰/мин. Тап по коту открывает меню действий.',
-    '🏠 Приют. Обычных котиков пристраивай «в добрые руки» — получишь 💰 и 🧬 ДНК.',
-    '🔬 Генолаб. Котодекс — рецептурник пород: тапни изученную породу и узнай её рецепты. «Улучшения» — постоянные бонусы, «Исследования» — стол, открывающий новые рецепты.',
-    '🧬 Знания. Родословная скрыта туманом «???» — Генетический анализ вскроет предков и скрытые гены. Кнопка 🔮 в инкубаторе покажет шансы пары.',
-    '📋 Заказы. Приведи кота нужной породы или редкости → 💰, 💎 и опыт ⭐.',
-    '⭐ Опыт и уровень. Опыт дают рождения, продажи по заказам, пристройство и лаборатория. Новый уровень лаборатории открывает слоты вязки, пьедесталы, станции и исследования.',
-    '🛒 Нет котиков? В Питомнике купи простого. Если котов нет совсем — первый бесплатно.',
-    '👆 Листай комнаты свайпом ← → или стрелками по бокам.',
-  ];
-
-  const title = label('🐾 Как играть', 22, COLORS.ink, '800');
-  let y = 58;
-  const texts: Text[] = [];
-  for (const s of steps) {
-    const t = new Text({
-      text: s,
-      style: {
-        fontFamily: FONT, fontSize: 15, fontWeight: '600', fill: COLORS.ink,
-        wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 21, align: 'left',
-      },
-    });
-    t.anchor.set(0, 0);
-    t.position.set(pad, y);
-    texts.push(t);
-    y += t.height + 11;
-  }
-
-  const closeBtn = new Button({ text: 'Понятно!', w: 200, h: 46, color: COLORS.primary, fontSize: 16 });
-  closeBtn.position.set(W / 2, y + 28);
-  closeBtn.onTap = close;
-
-  const H = y + 58;
-  root.addChild(panel(W, H, COLORS.hud, 18));
-  title.position.set(W / 2, 32);
-  root.addChild(title, ...texts, closeBtn);
-  return root;
-}
+// Общая инструкция «Как играть» (buildHelpPanel) убрана 2026-07-28: её заменили
+// пошаговое обучение (src/ui/tutorial.ts) и справки по комнатам (src/ui/roomHelp.ts).
 
 /**
  * Горизонтальный ползунок 0..1 на Pixi. Перетаскивание отслеживается на stage,
@@ -1494,8 +1450,9 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     y += 52;
   };
 
-  // Постановка на вязку — перетаскиванием (взять кота за шкирку → на слот
-  // инкубатора); переезд между комнатами — кнопками ниже.
+  // Постановка на вязку: кнопкой «в свободный слот» (в группе «куда отправить кота»,
+  // ниже) либо перетаскиванием — взять кота за шкирку и уронить на нужный слот
+  // инкубатора. Переезд между комнатами — там же.
   addBtn(named ? '✏️ Переименовать' : '✏️ Дать имя', COLORS.warn, true, () => {
     askText('Имя котика:', cat.name ?? '', 16, (input) => {
       if (input === null) return;               // отмена — ничего не делаем
@@ -1520,6 +1477,22 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // Лечение (ветеринар-шприц) и заморозка (криокапсула) — только перетаскиванием кота
   // на соответствующую станцию в Питомнике (кнопок в меню кота больше нет, чтобы не
   // засорять список и держать действия у станций). См. rooms/nursery.ts.
+
+  // Группа «куда отправить кота»: слот вязки + переезд между комнатами.
+  // Слота нет у тех, кому в нём не место: занятый вязкой, «Старый»/«Бесплодный»
+  // (сердца кончились) и тот, кто уже стоит в слоте.
+  if (!busy && !isOld(cat) && !isInSlot(ctx.state, cat.id)) {
+    addBtn('💞 В свободный слот вязки', COLORS.primary, true, () => {
+      const idx = freeBreedSlot(ctx.state, cat);
+      if (idx < 0) { ctx.toast('Нет свободных слотов вязки 💞 — освободи слот в Инкубаторе'); return; }
+      const r = assignBreeder(ctx.state, idx, cat.id, ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      close();
+      ctx.commit();
+      ctx.toast(cat.genotype.sex === 'female' ? 'Кошка в слоте 💞' : 'Кот в слоте 💞');
+      ctx.goRoom(0); // Инкубатор — всегда первый в ряду комнат (см. Game.layout)
+    });
+  }
 
   // Переезд между комнатами: в слоте вязки — обе кнопки, иначе одна (в комнату,
   // где кота нет). Занятого активной вязкой кота не двигаем — он breeding'ится.

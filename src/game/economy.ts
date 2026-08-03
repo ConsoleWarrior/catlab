@@ -194,6 +194,21 @@ export function isInSlot(state: GameState, catId: string): boolean {
   return state.slots.some((s) => s.motherId === catId || s.fatherId === catId || s.kittenId === catId);
 }
 
+/**
+ * Индекс слота инкубатора, куда кот может встать по своей роли (самка → «мама»,
+ * самец → «папа»): слот без идущей вязки, без «оставленного с роднёй» малыша и со
+ * свободным местом нужного пола. Сначала ищем слот, где партнёр уже стоит — так кот
+ * сразу образует пару и вязку можно запускать; иначе берём первый подходящий.
+ * Возвращает -1, если свободных мест нет (кнопка меню кота покажет предупреждение).
+ */
+export function freeBreedSlot(state: GameState, cat: Cat): number {
+  const female = cat.genotype.sex === 'female';
+  const free = (s: BreedingSlot): boolean =>
+    s.readyAt === 0 && !s.kittenId && !(female ? s.motherId : s.fatherId);
+  const paired = state.slots.findIndex((s) => free(s) && !!(female ? s.fatherId : s.motherId));
+  return paired >= 0 ? paired : state.slots.findIndex(free);
+}
+
 /** Общий множитель дохода пьедесталов: исследования ветки «Обучение» (income). */
 function showMult(state: GameState): number {
   return 1 + researchBonus(state, 'income');
@@ -207,7 +222,11 @@ function showMult(state: GameState): number {
  */
 export function passiveRatePerMin(state: GameState): number {
   let rate = 0;
-  for (const c of championCats(state)) rate += catMarketValue(c) * C.CHAMPION_INCOME_RATE;
+  // считаем ПО СЛОТАМ, а не по множеству котов: доход зависит от МЕСТА пьедестала
+  for (let i = 0; i < championSlots(state); i++) {
+    const c = championAt(state, i);
+    if (c) rate += catMarketValue(c) * C.CHAMPION_INCOME_RATE * placeIncomeMult(i);
+  }
   // «Коллекционер»: +доход за каждую ВЫВЕДЕННУЮ породу. discoveredBreeds наполняет только
   // makeCatInstance (реально полученный кот); рецепт, открытый исследованием в Генолабе,
   // лежит в knownRecipes и дохода не даёт.
@@ -215,9 +234,15 @@ export function passiveRatePerMin(state: GameState): number {
   return rate * showMult(state);
 }
 
-/** Доход одного кота-чемпиона (💰/мин) — для подписи над пьедесталом. */
-export function championIncomePerMin(state: GameState, cat: Cat): number {
-  return catMarketValue(cat) * C.CHAMPION_INCOME_RATE * showMult(state);
+/**
+ * Доход одного кота-чемпиона (💰/мин) — для подписи над пьедесталом. Учитывает
+ * МЕСТО пьедестала (1 место = +50%): slotIndex можно передать явно, иначе ищем
+ * кота среди выставленных (не на пьедестале → без бонуса места).
+ */
+export function championIncomePerMin(state: GameState, cat: Cat, slotIndex?: number): number {
+  const i = slotIndex ?? (state.champions ?? []).indexOf(cat.id);
+  const place = i >= 0 ? placeIncomeMult(i) : 1;
+  return catMarketValue(cat) * C.CHAMPION_INCOME_RATE * place * showMult(state);
 }
 
 // --- Корм (контейнер + мягкий голод) ---
@@ -424,6 +449,17 @@ export function buyCatCost(state: GameState): number {
   return state.cats.length === 0 ? 0 : C.STARTER_CAT_COST;
 }
 
+/**
+ * Спасательная пара (анти-софт-лок): котов нет И монет не хватает даже на одного —
+ * бесплатно выдаём сразу ♀+♂, иначе с одним котом игрок всё равно в тупике (вязать
+ * не с кем и не на что). Если в приюте нет места на двоих — обычная выдача одного.
+ */
+export function isRescuePair(state: GameState): boolean {
+  return state.cats.length === 0
+    && state.coins < C.STARTER_CAT_COST
+    && shelterCapacity(state) - roomCount(state, 'shelter') >= 2;
+}
+
 // --- Рыночная ценность кота (единая шкала для продажи/выставки/лаборатории) ---
 
 /**
@@ -558,6 +594,20 @@ export function cloneCostCoins(cat: Cat): number {
 /** Сколько котов можно выставить чемпионами (прокачивается championSlots). */
 export function championSlots(state: GameState): number {
   return C.CHAMPION_SLOTS_BASE + lvl(state, 'championSlots');
+}
+
+/**
+ * Место выставки (1..5) у пьедестала с этим индексом слота. Слоты открываются по
+ * порядку (слева направо по дуге), а места распределены по ВЫСОТЕ тумб — см.
+ * C.PEDESTAL_PLACES: 5 → 3 → 1 → 2 → 4.
+ */
+export function pedestalPlace(slotIndex: number): number {
+  return C.PEDESTAL_PLACES[slotIndex] ?? slotIndex + 1;
+}
+
+/** Множитель дохода кота на пьедестале по его МЕСТУ (1 место = ×1.5, 5 место = ×1.1). */
+export function placeIncomeMult(slotIndex: number): number {
+  return C.PLACE_INCOME_MULT[pedestalPlace(slotIndex) - 1] ?? 1;
 }
 
 /** Валидные id чемпионов (без пустых слотов и ссылок на уже проданных/уехавших котов). */
