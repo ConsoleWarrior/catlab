@@ -18,7 +18,7 @@ import type { RarityTier } from './types.js';
 export type BreedKind = 'base' | 'breed';
 
 export interface BreedDef {
-  /** Ключ (совпадает с именем файла арта: `<key>__<sex>.png`). */
+  /** Ключ (совпадает с именем файла арта: `<key>__<n>.webp`). */
   key: string;
   /** Отображаемое имя (RU). */
   name: string;
@@ -37,7 +37,7 @@ export const LEVEL_TIER: readonly RarityTier[] = [
 // [key, RU-имя, тир]. 70 записей: T1 (3) — фундамент и «неудачи» вязок;
 // T2 (14) — популярные; T3 (22) — редкие; T4 (21) — эксклюзивные;
 // T5 (10) — легендарные (вершина селекции). Ключ породы — имя файлов арта
-// `src/assets/breeds/<key>__<n>.png` (несколько вариантов, без привязки к полу).
+// `src/assets/breeds/<key>__<n>.webp` (несколько вариантов, без привязки к полу).
 const RAW: ReadonlyArray<readonly [string, string, RarityTier]> = [
   // --- Tier 1 — Обычные ---
   ['moggie', 'Дворовый', 'common'],

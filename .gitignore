@@ -6,3 +6,5 @@ coverage/
 screens/
 .vscode/
 .idea/
+dist-test/
+*.zip

@@ -8,7 +8,7 @@
  * Фон комнаты в игре растянут на весь экран (roomShell), и в редакторе так же —
  * поэтому расстановка переносится один в один.
  *
- * Текстуры грузятся в game.ts (`../assets/decor/*.png`) → `setDecorTexture`.
+ * Текстуры грузятся в game.ts (`../assets/decor/*.webp`) → `setDecorTexture`.
  * Слой декора строит `roomShell` сразу над фоном (под котами и UI комнаты).
  *
  * Интерактивные зоны (пристройство, лаборатория, ветеринар, криокапсула) — это уже
@@ -22,11 +22,11 @@ const texs = new Map<string, Texture>();
 
 export function setDecorTexture(name: string, tex: Texture): void { texs.set(name, tex); }
 
-/** Текстура декор-спрайта по ключу (имя файла без .png) или undefined. */
+/** Текстура декор-спрайта по ключу (имя файла без расширения) или undefined. */
 export function decorTexture(name: string): Texture | undefined { return texs.get(name); }
 
 export interface DecorItem {
-  sprite: string; // имя файла без .png (ключ текстуры)
+  sprite: string; // имя файла без расширения (ключ текстуры)
   xN: number;
   yN: number;
   scale: number;

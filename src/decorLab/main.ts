@@ -3,7 +3,7 @@
  * интерьерных спрайтов в комнате. Доступна по /decor-lab.html на dev-сервере.
  *
  * Что умеет:
- *   • палитра слева — все спрайты из `src/assets/decor/*.png`;
+ *   • палитра слева — все спрайты из `src/assets/decor/*.webp`;
  *   • перетащил спрайт из палитры в комнату → он появляется в точке отпускания;
  *   • тащишь спрайт → меняешь позицию; угловой маркер / колесо мыши → масштаб;
  *   • отражение по горизонтали, порядок слоёв, удаление;
@@ -54,15 +54,15 @@ const ROOMS: Array<{ id: string; label: string }> = [
 
 // ------------------------------------------------------------------ загрузка ассетов
 
-const decorUrls = import.meta.glob('../assets/decor/*.png', {
+const decorUrls = import.meta.glob('../assets/decor/*.webp', {
   eager: true, query: '?url', import: 'default',
 }) as Record<string, string>;
-const roomUrls = import.meta.glob('../assets/rooms/*.png', {
+const roomUrls = import.meta.glob('../assets/rooms/*.webp', {
   eager: true, query: '?url', import: 'default',
 }) as Record<string, string>;
 
 function fileKey(path: string): string {
-  return path.split('/').pop()!.replace('.png', '');
+  return path.split('/').pop()!.replace('.webp', '');
 }
 
 // ------------------------------------------------------------------ состояние редактора

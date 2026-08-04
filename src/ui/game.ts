@@ -32,6 +32,7 @@ import { initSfx, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
 import { Tutorial } from './tutorial.js';
+import { createFpsMeter, type FpsMeter } from './devFps.js'; // ⚠️ ВРЕМЕННОЕ DEV — убрать перед релизом
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
@@ -110,6 +111,8 @@ export class Game implements UiContext {
   // Слой лежит ВЫШЕ оверлеев: на шаге «второго кота» подсказка обязана читаться
   // поверх открытого меню кота, где и находится нужная кнопка.
   private tutorial!: Tutorial;
+  // ⚠️ ВРЕМЕННОЕ DEV: счётчик FPS (кнопка 📊 в топбаре) — см. devFps.ts, убрать перед релизом.
+  private devFps: FpsMeter | null = null;
   // Шторка межстраничной рекламы — поверх всего, включая оверлеи (см. runInterstitial).
   private readonly adLayer = new Container();
   private adCurtain: Container | null = null;
@@ -187,36 +190,36 @@ export class Game implements UiContext {
 
     initSfx(); // звуки грузятся в фоне, ждать не нужно — до первого тапа успеют
 
-    // Готовый арт коллекции: варианты всех пород `<breed>__<n>.png` (включая
+    // Готовый арт коллекции: варианты всех пород `<breed>__<n>.webp` (включая
     // базовые T1: moggie и домашних), без привязки к полу. Грузим до сборки комнат;
     // вис делаем из той же текстуры. Нет ассета → кот рисуется процедурно (фолбэк).
-    const breedAssets = import.meta.glob('../assets/breeds/*.png', {
+    const breedAssets = import.meta.glob('../assets/breeds/*.webp', {
       eager: true, query: '?url', import: 'default',
     }) as Record<string, string>;
 
     await Promise.all(Object.entries(breedAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.png', ''); // <breed>__<n>
+      const name = path.split('/').pop()!.replace('.webp', ''); // <breed>__<n>
       try { setAiBreedTexture(name, await Assets.load(url)); } catch { /* фолбэк */ }
     }));
     await loadEyeData(); // свежая разметка глаз (DEV) до сборки комнат
 
     // Готовые фоны комнат («комната-коробка» в нашей перспективе) — по имени файла
     // = id комнаты. Нет фона → процедурная коробка (фолбэк в roomShell).
-    const roomAssets = import.meta.glob('../assets/rooms/*.png', {
+    const roomAssets = import.meta.glob('../assets/rooms/*.webp', {
       eager: true, query: '?url', import: 'default',
     }) as Record<string, string>;
     await Promise.all(Object.entries(roomAssets).map(async ([path, url]) => {
-      const id = path.split('/').pop()!.replace('.png', '');
+      const id = path.split('/').pop()!.replace('.webp', '');
       try { setRoomBg(id, await Assets.load(url)); } catch { /* фолбэк на коробку */ }
     }));
 
     // Декор комнат (интерьерные спрайты, расставленные в Декор-лабе) — по имени файла
     // = ключ текстуры. Расстановка задана в decorArt.ts; нет текстуры → спрайт пропускается.
-    const decorAssets = import.meta.glob('../assets/decor/*.png', {
+    const decorAssets = import.meta.glob('../assets/decor/*.webp', {
       eager: true, query: '?url', import: 'default',
     }) as Record<string, string>;
     await Promise.all(Object.entries(decorAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.png', '');
+      const name = path.split('/').pop()!.replace('.webp', '');
       try { setDecorTexture(name, await Assets.load(url)); } catch { /* спрайт пропустится */ }
     }));
 
@@ -231,7 +234,7 @@ export class Game implements UiContext {
     }));
 
     // Текстура фона топ-бара HUD (пергамент/винтаж) — заменяет белый procedural fill.
-    const hudAssets = import.meta.glob('../assets/hud/*.png', {
+    const hudAssets = import.meta.glob('../assets/hud/*.webp', {
       eager: true, query: '?url', import: 'default',
     }) as Record<string, string>;
     for (const url of Object.values(hudAssets)) {
@@ -254,6 +257,11 @@ export class Game implements UiContext {
       this.tutorial.layer, this.toastBox, this.adLayer, this.rootMask,
     );
     this.root.mask = this.rootMask;
+    // ⚠️ ВРЕМЕННОЕ DEV: панель FPS поверх всего, кроме маски (кнопка 📊 в топбаре).
+    if (import.meta.env.DEV) {
+      this.devFps = createFpsMeter(this.app);
+      this.root.addChildAt(this.devFps.layer, this.root.children.indexOf(this.rootMask));
+    }
     // Тост и слой «кота в руках» — чисто визуальные. Без этого пустой тост-контейнер
     // (по центру внизу, roomW/2 × roomH-56) своими границами перехватывал хит-тест и
     // не пускал тапы к кнопкам под ним — это и был баг «кнопки над навигацией не
@@ -320,6 +328,7 @@ export class Game implements UiContext {
         shopAvailable: () => shopAvailable(),
         buyPack: (id: string) => buyPack(id).then((r) => { this.commit(); return r; }),
         openDev: () => this.openDevMenu(),
+        fps: () => this.devFps?.toggle(), // панель FPS из консоли (кнопка 📊 в топбаре)
         ad: () => this.runInterstitial(), // проверка шторки/паузы без ожидания 8 мин
         openBoostMenu: (id = 'tierUp') => this.openBoostMenu(id),
         openCatMenu: (id?: string) => {
@@ -997,6 +1006,7 @@ export class Game implements UiContext {
     this.buildHud();
     this.buildNav();
     this.buildToast();
+    this.devFps?.place(this.roomW, this.topInset); // ⚠️ ВРЕМЕННОЕ DEV: панель FPS под топбаром
 
     this.currentRoom = Math.min(this.currentRoom, this.rooms.length - 1);
     this.targetX = -this.currentRoom * this.roomW;
@@ -1093,6 +1103,13 @@ export class Game implements UiContext {
       tut.position.set(rx - btnW / 2, ti / 2);
       tut.onTap = () => this.devToggleTutorial();
       this.hud.addChild(tut);
+      rx -= btnW + btnGap;
+
+      // ⚠️ ВРЕМЕННОЕ: счётчик FPS (для замеров на телефоне) — см. devFps.ts.
+      const fps = new Button({ text: '📊', w: btnW, h: bh, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: fs + 2 });
+      fps.position.set(rx - btnW / 2, ti / 2);
+      fps.onTap = () => this.devFps?.toggle();
+      this.hud.addChild(fps);
       rx -= btnW + btnGap;
     }
   }

@@ -26,7 +26,39 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; font-family: system-ui, sans-serif; background: #fdf3e7; }
+    /*
+      Требования платформы 1.6.1.8 (мобильные) и 1.6.2.7 (десктоп): взаимодействие с
+      полем игры не должно выделять его или открывать контекстное меню. Отсюда весь
+      набор ниже — это не косметика, а условие прохождения модерации:
+        user-select        — ни лонгтап, ни протяжка мышью не выделяют «текст» страницы;
+        -webkit-touch-callout — iOS-меню «Скопировать / Поделиться» + лупа по долгому нажатию
+                             (то самое, что вылезало на айфоне поверх игры);
+        tap-highlight-color — серая вспышка Android/iOS по тапу;
+        touch-action: none  — двойной тап не зумит, свайп не тянет страницу;
+        overscroll-behavior — нет «оттяжки» и pull-to-refresh за краями сцены.
+      Отменять контекстное меню событием тоже нужно (см. скрипт в конце body):
+      одним CSS оно не отключается.
+    */
+    html, body {
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
     #app { position: fixed; inset: 0; touch-action: none; }
+    /* touch-action не наследуется — канвасу задаём явно, тач начинается именно на нём */
+    #app canvas { display: block; touch-action: none; }
+    /*
+      Исключение: поле ввода имени кота (HTML-оверлей поверх канваса, src/ui/overlays.ts).
+      Это не «поле игры», а обычный текстовый ввод — выделение, курсор и системное меню
+      вставки там нужны, иначе игрок не сможет отредактировать или вставить имя.
+    */
+    input, textarea {
+      -webkit-user-select: text; user-select: text;
+      -webkit-touch-callout: default;
+      touch-action: auto;
+    }
     /* шрифт Rubik — для HUD (canvas PixiJS) */
     @font-face {
       font-family: 'Rubik';
@@ -63,6 +95,31 @@
     <div class="emoji">🐱🔄</div>
     <p>Поверни телефон горизонтально</p>
   </div>
+  <script>
+    /*
+      Требования платформы 1.6.1.8 / 1.6.2.7: по полю игры не должно открываться
+      контекстное меню и не должно возникать выделение. CSS (user-select,
+      -webkit-touch-callout) снимает выделение и iOS-callout, но само меню — правая
+      кнопка на десктопе и лонгтап на Android — гасится только отменой события.
+
+      Текстовые поля исключены намеренно: в поле ввода имени кота меню «Вставить»
+      и выделение нужны, требование их не касается. dragstart — чтобы канвас и
+      картинки нельзя было «оторвать» протяжкой мыши, gesture* — чтобы пинч в
+      iOS Safari не масштабировал страницу поверх сцены.
+    */
+    (function () {
+      var isField = function (t) {
+        return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      };
+      var block = function (e) { if (!isField(e.target)) e.preventDefault(); };
+      document.addEventListener('contextmenu', block);
+      document.addEventListener('selectstart', block);
+      document.addEventListener('dragstart', block);
+      ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (n) {
+        document.addEventListener(n, function (e) { e.preventDefault(); });
+      });
+    })();
+  </script>
   <script>
     (function () {
       var btn = document.getElementById('fs');

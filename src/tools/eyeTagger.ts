@@ -16,11 +16,11 @@ type EyeMark = [number, number, number];
 type Entry = { eyes: EyeMark[] };
 
 // --- список спрайтов (базовые дворовые + породы) ---
-const glob = import.meta.glob('../assets/{base,breeds}/*.png', {
+const glob = import.meta.glob('../assets/{base,breeds}/*.webp', {
   eager: true, query: '?url', import: 'default',
 }) as Record<string, string>;
 const sprites = Object.entries(glob)
-  .map(([path, url]) => ({ key: path.split('/').pop()!.replace('.png', ''), url }))
+  .map(([path, url]) => ({ key: path.split('/').pop()!.replace('.webp', ''), url }))
   .sort((a, b) => a.key.localeCompare(b.key));
 
 // --- данные разметки (зеркало eyes.json) ---
