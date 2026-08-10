@@ -200,9 +200,22 @@ export const FEATURE_RESEARCH: Partial<Record<LabFeature, string>> = {
 export const ORDER_DEMAND_SPREAD = 0.5;       // случайный спрос ×(1.0 .. 1.5)
 // Слоты доски фиксированы по типу пула: первые ORDER_SELL_SLOTS — «сбыт» (уже выведенные
 // породы, выполнимо сразу, БЕЗ 💎), остальные — «цель» по уровню лаборатории (дают 💎).
-// Цена заказа на 💎 не влияет: ORDER_CRYSTALS за любой заказ-«цель».
+// Цена заказа на 💎 не влияет — влияет только УРОВЕНЬ ЛАБОРАТОРИИ: 1 💎 на ранних уровнях,
+// 2 с ORDER_CRYSTAL_LEVELS[0] и 3 с ORDER_CRYSTAL_LEVELS[1] (потолок ORDER_CRYSTALS_MAX).
+// Логика: поздние заказы-«цели» требуют куда более сложных пород, а 💎 — самый дефицитный
+// ресурс; фиксированный 1 💎 обесценивал доску к эндгейму.
 export const ORDER_SELL_SLOTS = 2;            // сколько слотов доски отдано под «сбыт»
-export const ORDER_CRYSTALS = 1;              // 💎 за выполненный заказ-«цель» («сбыт» — 0)
+export const ORDER_CRYSTALS = 1;              // 💎 за заказ-«цель» на старте («сбыт» — 0)
+export const ORDER_CRYSTALS_MAX = 3;          // потолок 💎 за заказ-«цель»
+export const ORDER_CRYSTAL_LEVELS: readonly number[] = [4, 8]; // уровни лабы, с которых +1 💎
+
+/** 💎 за заказ-«цель» по уровню лаборатории: 1 (ур. 1-3) → 2 (ур. 4-7) → 3 (ур. 8+). */
+export function orderCrystalsFor(level: number): number {
+  const l = Math.max(1, level);
+  let n = ORDER_CRYSTALS;
+  for (const t of ORDER_CRYSTAL_LEVELS) if (l >= t) n++;
+  return Math.min(ORDER_CRYSTALS_MAX, n);
+}
 
 // --- Инкубатор / здоровье ---
 // Здоровье кота = сердца: одно сердце — одна вязка. Базовый запас MAX_HEARTS;
@@ -213,7 +226,7 @@ export const MAX_HEARTS = 5;
 // --- Клиника (шприц лечения, этап D) ---
 // Лечит ПОТРАЧЕННЫЕ вязки (breedCount), НЕ maxHearts: генетический потолок от
 // инбридинга неизлечим, «Бесплодных» (0 ❤) не лечит. Гейт — LAB_UNLOCKS.clinic.
-export const HEAL_AD_HEARTS = 1;                  // 📺 реклама восстанавливает 1 ❤ (без кулдауна)
+export const HEAL_AD_HEARTS = 2;                  // 📺 реклама восстанавливает 2 ❤ (без кулдауна)
 export const HEAL_CRYSTAL_PER_HEART = 2;          // 💎 полное лечение: цена за каждое потраченное ❤
 
 // Глубина сохраняемой родословной кота: 3 = родители → деды → прадеды.
@@ -284,6 +297,11 @@ export const FREEZE_AD_COOLDOWN_MS = 10 * 60_000;
 // --- Доход ---
 // Потолок офлайн-накопления: база + узел исследований «Ночной смотритель» (offline).
 export const OFFLINE_CAP_BASE_MIN = 120;   // потолок накопления, мин
+// Окно «С возвращением» (отчёт о доходе за отсутствие). Порог отлучки: короче —
+// показываем только тост, иначе окно вылезало бы на каждой перезагрузке вкладки.
+export const OFFLINE_REPORT_MIN_MS = 5 * 60_000;
+// 📺 в этом окне добирает долю от начисленного за отсутствие (сверх потолка тоже).
+export const OFFLINE_AD_BONUS = 0.2;
 
 // --- Покупка котов (анти-софт-лок) ---
 export const STARTER_CAT_COST = 50; // простой кот из питомника; первый (когда котов нет) — бесплатно
@@ -506,14 +524,14 @@ export const RESEARCH: readonly ResearchDef[] = [
     ] },
 
   // ветка 4 — 🔬 Лаборатория (оборудование лабы). Узлы ОТКРЫВАЮТ функции комнат самим
-  // фактом покупки, а не уровнем: станцию «на эксперименты» в Приюте и клинику-ветеринара
-  // в Питомнике (см. FEATURE_RESEARCH), а также крио-банк (r_sel_cryo — 1-й ранг открывает
+  // фактом покупки, а не уровнем: станцию «на эксперименты» в Приюте и шприц-ветеринара
+  // в Инкубаторе (см. FEATURE_RESEARCH), а также крио-банк (r_sel_cryo — 1-й ранг открывает
   // комнату). За 💰, кроме крио (🧬 + 💰). minLevel узлов = прежние LAB_UNLOCKS этих фич.
   { id: 'r_lab_station', glyph: '🧪', title: 'На эксперименты', desc: 'Открывает в Приюте станцию сдачи котов на опыты (🧬)',
     currency: 'coins', effectKind: 'unlockLab', requires: [], col: 0, row: 4, levels: [
       { cost: 300, value: 1, minLevel: 2 },
     ] },
-  { id: 'r_lab_vet', glyph: '💉', title: 'Ветеринар', desc: 'Открывает в Питомнике клинику лечения потраченных вязок',
+  { id: 'r_lab_vet', glyph: '💉', title: 'Ветеринар', desc: 'Открывает в Инкубаторе возможность лечения здоровья',
     currency: 'coins', effectKind: 'unlockLab', requires: ['r_lab_station'], col: 1, row: 4, levels: [
       { cost: 500, value: 1, minLevel: 3 },
     ] },
@@ -624,8 +642,22 @@ export function nextLevelRep(level: number): number | null {
 }
 
 /**
- * Что открывается РОВНО на данном уровне — строки для баннера «Уровень N!».
- * Перечисляем только уже реализованные фичи (клон-банк добавится с бэклогом).
+ * 💎 в подарок за достижение уровня лаборатории. Со 2-го уровня: 6, 9, 12, …, 30
+ * (ровно 3 × уровень). Уровень 1 — старт (подарка нет), выше MAX_LEVEL — 0.
+ * Начисляется в actions.addReputation при пересечении порога; панель повышения
+ * уровня (ui) показывает эту же сумму.
+ */
+export function levelCrystalReward(level: number): number {
+  if (level < 2 || level > MAX_LEVEL) return 0;
+  return 3 * level;
+}
+
+/**
+ * Что открывается РОВНО на данном уровне — строки для панели «Уровень N!».
+ * Перечисляем всё, что гейтит уровень лаборатории: слоты вязки, пьедесталы,
+ * фичи-комнаты (кормушка/усилители/стол рецептов) и узлы дерева «Улучшений»,
+ * чей ПЕРВЫЙ уровень открывается для покупки именно на этом уровне (в т.ч.
+ * «На эксперименты», «Ветеринар», «Криогенетика» — они докупаются в дереве).
  */
 export function unlocksAtLevel(level: number): string[] {
   const out: string[] = [];
@@ -633,8 +665,6 @@ export function unlocksAtLevel(level: number): string[] {
   if (slotIdx >= 0) out.push(`💞 слот вязки №${slotIdx + 2}`);
   const pedIdx = PEDESTAL_UNLOCK_LEVELS.indexOf(level);
   if (pedIdx >= 0) out.push(`🏆 пьедестал №${pedIdx + 2}`);
-  // Станция «на эксперименты» и ветеринар открываются ПОКУПКОЙ узла «Лаборатории»
-  // (FEATURE_RESEARCH), а не уровнем — в баннере уровня их не анонсируем.
   const featNames: Partial<Record<LabFeature, string>> = {
     food: '🍽 кормушка',
     research: '🔬 улучшения',
@@ -643,6 +673,11 @@ export function unlocksAtLevel(level: number): string[] {
   };
   for (const key of Object.keys(featNames) as LabFeature[]) {
     if (LAB_UNLOCKS[key] === level) out.push(featNames[key]!);
+  }
+  // Узлы дерева «Улучшений» (Генолаб): анонсируем узел, когда его ПЕРВЫЙ уровень
+  // становится доступен для покупки на этом уровне лаборатории (levels[0].minLevel).
+  for (const def of RESEARCH) {
+    if (def.levels[0]?.minLevel === level) out.push(`${def.glyph} ${def.title}`);
   }
   return out;
 }

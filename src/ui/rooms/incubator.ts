@@ -14,6 +14,7 @@
  */
 
 import { Container, Graphics, Sprite, Text } from 'pixi.js';
+import type { FederatedPointerEvent } from 'pixi.js';
 import type { Cat, BoostDef } from '../../game/index.js';
 import {
   startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, activeBoostId, growthScale,
@@ -39,10 +40,38 @@ const APPROACH_MS = 900; // за это время перегородка под
 // ИИ-фоны боксов вязки (src/assets/slotbox/*_cut.webp) — вырезки с прозрачностью,
 // используются как полноценный фон всей карточки слота. Один вариант на все слоты.
 const SLOT_BOX_SPRITES = ['slotbox_glass_cut', 'slotbox_glass_cut', 'slotbox_glass_cut'];
-// Спрайт бокса ужат на 4% от «cover», чтобы его края сошлись с полосой кнопок.
-const BOX_FIT = 0.96;
-// Прозрачное поле сверху в самой текстуре (контент начинается с y=45 из 896).
-const BOX_TOP_PAD = 45 / 896;
+
+// --- Геометрия окна вязки --------------------------------------------------
+// Всё внутри слота привязано к ОПОРНЫМ ТОЧКАМ ТЕКСТУРЫ бокса (1024×896), а не к
+// прямоугольнику карточки. Раньше спрайт вписывался в карточку «cover», и на
+// коротких экранах (телефон-ландшафт) он ужимался по высоте: у вырезки по краям
+// прозрачные поля, поэтому видимое стекло оказывалось заметно уже полосы кнопок,
+// а коты повисали над подстилками — линия пола считалась от карточки, а не от
+// матраса на картинке. Теперь карточка слота — это РОВНО видимое стекло: полоса
+// кнопок всегда по ширине окна, а пол/места/перегородка при любом размере
+// попадают в свои места на картинке.
+// Координаты — в пикселях авторской текстуры; в код идут только их ОТНОШЕНИЯ,
+// поэтому пережатие ассетов в другое разрешение ничего не ломает (пропорции те же).
+const TEX_W = 1024, TEX_H = 896;
+const BOX_L = 89, BOX_R = 941, BOX_T = 45, BOX_B = 843; // видимое стекло в текстуре
+const BOX_FLOOR = 624;                   // линия лап: верх матраса (подушки прикрывают лапы спереди)
+const BOX_DAD_X = 344, BOX_MOM_X = 680;  // центры мест ♂ (слева) и ♀ (справа)
+const BOX_ROLE_Y = 184;                  // подписи «Отец ♂ / Мать ♀»
+const BOX_PART_T = 98, BOX_PART_B = 760; // перегородка между половинами бокса
+/** Высота видимого стекла относительно его ширины. */
+const GLASS_RATIO = (BOX_B - BOX_T) / (BOX_R - BOX_L);
+/** Высота кота относительно ширины стекла. */
+const CAT_FRAC = 0.36;
+
+// --- Раскладка триптиха ----------------------------------------------------
+const CTRL_H = 86;             // высота полосы кнопок под окном
+const CTRL_OVERLAP = 0.15;     // насколько полоса наезжает на низ окна (прячет перед матраса)
+const SLOT_MAX_W = 315;        // потолок ширины окна — чтобы на ПК не разъезжалось
+const STAND_W_FRAC = 0.78;     // ширина тумбы от ширины окна
+const STAND_SEAT = 0.34;       // верх тумбы утоплен под окно/полосу кнопок
+const STAND_SQUASH_MIN = 0.72; // на коротких экранах тумбу можно приплюснуть до этой доли
+const STAND_MIN_FRAC = 0.26;   // минимум видимой тумбы (доля ширины окна) — под неё ужимаем окно
+const STAND_NAV_OVERHANG = 18; // тумбе можно чуть зайти на полосу навигации
 
 // Акцент свечения заряженного усилителя — в тон его текстуры (boost_<id>.webp).
 // После перемаппинга: стабилизатор→зелёный, катализатор→синий, активатор→оранжевый.
@@ -56,12 +85,14 @@ interface Spark { view: Text; life: number; ttl: number; vx: number; vy: number;
 interface LiveSlot {
   index: number;
   card: Container;            // карточка слота — для попадания при перетаскивании
+  cardW: number; cardH: number; // её габарит (окно + полоса кнопок) для хит-теста
   total: number;
   bar?: Graphics; barX: number; barY: number; barW: number; time?: Text;
   busy: boolean;
   startedAt: number;
   partition: Graphics; partRaise: number;
   mom?: Sprite; dad?: Sprite;
+  momCat?: Cat; dadCat?: Cat;  // коты в слоте — цель для шприца-ветеринара
   momGlow?: Sprite; dadGlow?: Sprite; kitGlow?: Sprite;  // ореолы редкости (под спрайтами)
   kitten?: Sprite; kittenBase: number; kittenCat?: Cat;  // «оставленный с роднёй» малыш в центре
   momHomeX: number; momMeetX: number; dadHomeX: number; dadMeetX: number;
@@ -100,17 +131,9 @@ const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
 const lockHint = (text: string, size = 12): Text =>
   label(text, size, 0xffffff, '800', { color: 0x2c2438, width: 3.5 });
 
-/**
- * Насколько видимый верх ИИ-бокса ниже верха карточки слота: спрайт вписан
- * «cover» ×BOX_FIT (по бокам/сверху остаются поля) плюс прозрачный отступ внутри
- * самой текстуры. На эту дельту опускаем притушённые карточки закрытых слотов,
- * чтобы верхние границы всех трёх окон стояли на одной линии при любом размере.
- */
-function boxTopInset(i: number, w: number, h: number): number {
-  const tex = decorTexture(SLOT_BOX_SPRITES[i % SLOT_BOX_SPRITES.length]!);
-  if (!tex) return 0;
-  const s = Math.max(w / tex.width, h / tex.height) * BOX_FIT;
-  return (h - tex.height * s) / 2 + tex.height * BOX_TOP_PAD * s;
+/** Ужимает подпись под ширину полосы кнопок (на узком экране слот уже текста). */
+function fitLabel(t: Text, maxW: number): void {
+  if (t.width > maxW) t.scale.set(maxW / t.width);
 }
 
 export function createIncubator(ctx: UiContext): Room {
@@ -299,22 +322,32 @@ export function createIncubator(ctx: UiContext): Room {
     }
   }
 
-  function buildSlot(i: number, w: number, h: number): Container {
+  /**
+   * Окно вязки. `w` — ширина ВИДИМОГО стекла бокса; высота стекла из неё же
+   * (GLASS_RATIO), полоса кнопок — сразу под ним, той же ширины.
+   */
+  function buildSlot(i: number, w: number): Container {
     const card = new Container();
-    // ИИ-бокс слота (вырезка с прозрачностью): полный фон всей карточки.
-    // Нет текстуры → процедурный panel-фолбэк.
+    // ИИ-бокс слота (вырезка с прозрачностью) — фон окна. Масштаб такой, чтобы
+    // видимое стекло (BOX_L..BOX_R × BOX_T..BOX_B) легло ровно в (0,0,w,glassH).
     const boxTex = decorTexture(SLOT_BOX_SPRITES[i % SLOT_BOX_SPRITES.length]!);
     const hasBoxTex = !!boxTex;
+    const s = w / (BOX_R - BOX_L);
+    const tx = (x: number): number => (x - BOX_L) * s; // текстура → карточка
+    const ty = (y: number): number => (y - BOX_T) * s;
+    const glassH = ty(BOX_B);
+    // верх полосы кнопок: чуть заходит на низ окна (прячет перед матраса)
+    const stripY = glassH * (1 - CTRL_OVERLAP);
+    const h = stripY + CTRL_H;             // полный габарит карточки
 
     if (hasBoxTex) {
       const bgSp = new Sprite(boxTex);
       bgSp.anchor.set(0.5);
-      // −4%: спрайт слегка ужат, чтобы его края сошлись с расширенной полосой кнопок
-      bgSp.scale.set(Math.max(w / boxTex.width, h / boxTex.height) * BOX_FIT);
-      bgSp.position.set(w / 2, h / 2);
+      bgSp.scale.set(w / ((BOX_R - BOX_L) * (boxTex.width / TEX_W)));
+      bgSp.position.set(tx(TEX_W / 2), ty(TEX_H / 2));
       card.addChild(bgSp);
     } else {
-      card.addChild(panel(w, h, COLORS.card, 16));
+      card.addChild(panel(w, glassH, COLORS.card, 16));
     }
 
     const slot = ctx.state.slots[i]!;
@@ -325,26 +358,15 @@ export function createIncubator(ctx: UiContext): Room {
     const heldKitten = slot.kittenId ? ctx.state.cats.find((c) => c.id === slot.kittenId) : undefined;
     const hasKitten = !!heldKitten && !busy;
 
-    // --- геометрия мини-комнаты ---
-    const titleH = 24;
-    const ctrlH = 80;                       // под комнатой: прогресс + кнопка
-    const ctrlShift = hasBoxTex ? Math.round((ctrlH + 6) / 2) - 7 : 0; // сдвиг панели вниз (≈36px), −7px подняли полосу к ужатому спрайту
-    const rx = 9, ry = titleH;
-    const rw = w - 18;
-    const rh = Math.max(70, h - titleH - ctrlH);
-    const cx = rx + 6, cy = ry + 4;         // внутренняя камера
-    const cw = rw - 12, ch = rh - 8;
-    const centerX = cx + cw / 2;
-    // линия пола (низ лап): на ИИ-фоне чуть выше — лапы встают на подстилки
-    const floorY = hasBoxTex ? cy + ch * 0.9 : cy + ch - 6;
-    const catH = Math.min(ch * 0.8, cw * 0.42);
+    // --- геометрия мини-комнаты (всё от опорных точек картинки бокса) ---
+    const centerX = tx(TEX_W / 2);
+    const floorY = ty(BOX_FLOOR);   // линия пола = низ лап котов
+    const catH = w * CAT_FRAC;
 
-    // камера с маской: всё внутри обрезается (коты не вылезают за края)
+    // камера с маской: всё внутри обрезается (коты не вылезают за края стекла)
     const chamber = new Container();
     const mask = new Graphics();
-    // На ИИ-боксе маска чуть выше, чтобы лапки котёнка на подстилках не срезались
-    const maskBotExt = hasBoxTex ? catH * 0.3 : 0;
-    mask.roundRect(cx, cy, cw, ch + maskBotExt, 10).fill(0xffffff);
+    mask.roundRect(0, 0, w, glassH, 14).fill(0xffffff);
     card.addChild(chamber, mask);
     chamber.mask = mask;
 
@@ -352,30 +374,28 @@ export function createIncubator(ctx: UiContext): Room {
       // задняя стена + пол (процедурный фолбэк)
       const wallCol = 0xffeaf1;
       const bg = new Graphics();
-      bg.roundRect(cx, cy, cw, ch, 10).fill(wallCol);
-      bg.rect(cx, floorY - 2, cw, cy + ch - (floorY - 2)).fill(darken(wallCol, 0.12));
-      bg.rect(cx, floorY - 2, cw, 3).fill({ color: 0x000000, alpha: 0.06 });
+      bg.roundRect(0, 0, w, glassH, 14).fill(wallCol);
+      bg.rect(0, floorY - 2, w, glassH - (floorY - 2)).fill(darken(wallCol, 0.12));
+      bg.rect(0, floorY - 2, w, 3).fill({ color: 0x000000, alpha: 0.06 });
       chamber.addChild(bg);
     }
 
     // позиции котов: по сторонам (покой) ↔ рядышком у центра (вязка).
     // Самец (Отец) — слева, самка (Мать) — справа; при встрече стоят бок о бок,
     // повёрнутые друг к другу, и тянутся мордочками (без «один за другим»).
-    const dadHomeX = cx + cw * 0.27;
-    const momHomeX = cx + cw * 0.73;
+    const dadHomeX = tx(BOX_DAD_X);
+    const momHomeX = tx(BOX_MOM_X);
     const lean = catH * 0.2;             // насколько отходят от центра при встрече
     const dadMeetX = centerX - lean;
     const momMeetX = centerX + lean;
 
     // подписи ролей сторон: куда нести самца, куда самку. Под ними — белые
     // плашки, чтобы надписи «Отец/Мать» читались на любом ИИ-фоне бокса.
-    const roleY = cy + 16;
+    const roleY = ty(BOX_ROLE_Y);
     const dadRole = label('Отец ♂', 11, COLORS.ink, '700');
     const momRole = label('Мать ♀', 11, COLORS.ink, '700');
-    // опускаем подписи ниже на 2/3 их ширины — чтобы не липли к верхнему краю бокса
-    const roleDrop = Math.round(Math.max(dadRole.width, momRole.width) * 2 / 3);
-    dadRole.position.set(dadHomeX, roleY + roleDrop);
-    momRole.position.set(momHomeX, roleY + roleDrop);
+    dadRole.position.set(dadHomeX, roleY);
+    momRole.position.set(momHomeX, roleY);
     const rolePlate = new Graphics();
     for (const r of [dadRole, momRole]) {
       rolePlate.roundRect(r.x - r.width / 2 - 7, r.y - r.height / 2 - 2, r.width + 14, r.height + 4, 8)
@@ -422,7 +442,7 @@ export function createIncubator(ctx: UiContext): Room {
       dadBase = Math.abs(dad.scale.x);
       dad.scale.x = dadBase;              // слева — смотрит вправо, к центру
       dad.position.set(busy ? dadMeetX : dadHomeX, floorY + catH * 0.03);
-      dadGlow = rarityGlow(dad, dadCat.rarityTier, catH);
+      dadGlow = rarityGlow(ctx.app, dad, dadCat.rarityTier, catH);
       dadGlow.position.copyFrom(dad.position);
       chamber.addChild(dadGlow, dad);
       wireSlotCat(dad, dadCat, dadGlow);
@@ -432,19 +452,17 @@ export function createIncubator(ctx: UiContext): Room {
       momBase = Math.abs(mom.scale.x);
       mom.scale.x = -momBase;             // справа — смотрит влево, к центру
       mom.position.set(busy ? momMeetX : momHomeX, floorY + catH * 0.03);
-      momGlow = rarityGlow(mom, momCat.rarityTier, catH);
+      momGlow = rarityGlow(ctx.app, mom, momCat.rarityTier, catH);
       momGlow.position.copyFrom(mom.position);
       chamber.addChild(momGlow, mom);
       wireSlotCat(mom, momCat, momGlow);
     }
 
     // перегородка по центру (поднимается при старте вязки)
-    const partW = Math.max(7, cw * 0.05);
-    const partTop = cy + 15;        // +9px ниже — верх перегородки опущен
+    const partW = Math.max(7, w * 0.045);
+    const partTop = ty(BOX_PART_T);
     const partR = Math.max(3, partW * 0.5);        // пилюля: полукруглый верх и низ
-    const maskBot = cy + ch + (hasBoxTex ? catH * 0.3 : 0);
-    // полная длина (множитель нравится пользователю) но не вылезаем за маску минус радиус
-    const partH = Math.min((floorY - partTop) * 1.375, maskBot - partTop - partR);
+    const partH = ty(BOX_PART_B) - partTop;
     const partCol = 0xcdb6a3;
     const partition = new Graphics();
     partition.roundRect(centerX - partW / 2, partTop, partW, partH, partR).fill(partCol);
@@ -478,7 +496,7 @@ export function createIncubator(ctx: UiContext): Room {
       kittenBase = Math.abs(kitten.scale.x);
       kitten.scale.set(kittenBase * growthScale(heldKitten, now));
       kitten.position.set(centerX, floorY + catH * 0.15);
-      kitGlow = rarityGlow(kitten, heldKitten.rarityTier, catH);
+      kitGlow = rarityGlow(ctx.app, kitten, heldKitten.rarityTier, catH);
       kitGlow.position.copyFrom(kitten.position);
       chamber.addChild(kitGlow, kitten);
       const kCat = heldKitten;
@@ -498,7 +516,7 @@ export function createIncubator(ctx: UiContext): Room {
     // Рамка камеры — только в процедурном фолбэке (на ИИ-боксе нет лишних рамок)
     if (!hasBoxTex) {
       const frame = new Graphics();
-      frame.roundRect(cx, cy, cw, ch, 10).stroke({ width: 2, color: COLORS.cardEdge });
+      frame.roundRect(0, 0, w, glassH, 14).stroke({ width: 2, color: COLORS.cardEdge });
       card.addChild(frame);
     }
 
@@ -506,27 +524,23 @@ export function createIncubator(ctx: UiContext): Room {
     const fx = new Container();
     card.addChild(fx);
 
-    // --- контролы под комнатой ---
-    const barW = Math.round((rw - 8) * 0.85);
-    const barX = rx + 4 + Math.round(((rw - 8) - barW) / 2);
-    const barY = ry + rh + 12 + ctrlShift;
+    // --- контролы под окном (полоса ровно по ширине видимого стекла) ---
+    const barW = Math.round(w * 0.78);
+    const barX = Math.round((w - barW) / 2);
+    const barY = stripY + 18;
 
     // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
     if (hasBoxTex) {
-      const stripH = ctrlH + 6;
-      const stripW = Math.round(w * 0.92 * 1.1) + 2; // ≈+10%: края полосы совпадают с ужатым спрайтом
-      const stripX = Math.round((w - stripW) / 2);
-      const stripY = h - ctrlH - 6 + ctrlShift;
       const GOLDEN_ROSE = 0xedc8b0; // золотисто-розовый, в тон краёв слота
       const R = 12;
       const ctrlBg = new Graphics();
       // путь: верх прямой (без скруглений), низ скруглён
-      ctrlBg.moveTo(stripX, stripY);
-      ctrlBg.lineTo(stripX + stripW, stripY);
-      ctrlBg.lineTo(stripX + stripW, stripY + stripH - R);
-      ctrlBg.quadraticCurveTo(stripX + stripW, stripY + stripH, stripX + stripW - R, stripY + stripH);
-      ctrlBg.lineTo(stripX + R, stripY + stripH);
-      ctrlBg.quadraticCurveTo(stripX, stripY + stripH, stripX, stripY + stripH - R);
+      ctrlBg.moveTo(0, stripY);
+      ctrlBg.lineTo(w, stripY);
+      ctrlBg.lineTo(w, h - R);
+      ctrlBg.quadraticCurveTo(w, h, w - R, h);
+      ctrlBg.lineTo(R, h);
+      ctrlBg.quadraticCurveTo(0, h, 0, h - R);
       ctrlBg.closePath();
       ctrlBg.fill({ color: GOLDEN_ROSE })
          .stroke({ width: 2, color: COLORS.cardEdge, alpha: 0.85 });
@@ -550,7 +564,7 @@ export function createIncubator(ctx: UiContext): Room {
       const remain0 = Math.max(0, slot.readyAt - now);
       const cost = speedUpCost(remain0, BREED_SPEEDUP_CRYSTAL_PER_MIN);
       const skipMin = Math.round(AD_SKIP_MS / 60_000);
-      const bw2 = Math.round((rw - 8) * 0.42);
+      const bw2 = Math.round(w * 0.38);
       const yy = barY + 50;
 
       // Подарок обучения: первую вязку новичок пропускает бесплатно, чтобы не
@@ -558,7 +572,7 @@ export function createIncubator(ctx: UiContext): Room {
       // только пока подарок цел (freeSkipBreeding), дальше остаются 📺 и 💎.
       if (tutorialActive(ctx.state) && !ctx.state.tutorial.freeSkipUsed) {
         const freeBtn = new Button({
-          text: '⚡ Ускорить бесплатно', w: Math.round((rw - 8) * 0.9), h: 30,
+          text: '⚡ Ускорить бесплатно', w: Math.round(w * 0.86), h: 30,
           color: COLORS.warn, fontSize: 12,
         });
         freeBtn.position.set(w / 2, yy);
@@ -590,13 +604,13 @@ export function createIncubator(ctx: UiContext): Room {
     } else if (hasKitten) {
       // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
       // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
-      const stripTop = h - ctrlH - 6 + ctrlShift;
       const hint = label('🐾 малыш с роднёй — пристрой его', 12, COLORS.inkSoft, '700');
-      hint.position.set(w / 2, stripTop + 14);
+      fitLabel(hint, w - 12);
+      hint.position.set(w / 2, stripY + 14);
       card.addChild(hint);
 
       const placeBtn = (text: string, room: 'nursery' | 'shelter', color: number, yy: number): void => {
-        const b = new Button({ text, w: Math.round((w - 24) * 0.85), h: 28, color, fontSize: 12.5 });
+        const b = new Button({ text, w: Math.round(w * 0.78), h: 28, color, fontSize: 12.5 });
         b.position.set(w / 2, yy);
         b.onTap = () => {
           if (!heldKitten) return;
@@ -606,11 +620,13 @@ export function createIncubator(ctx: UiContext): Room {
           ctx.toast(room === 'shelter' ? 'Малыш в приюте 🏠' : 'Малыш в питомнике 🏆');
         };
         card.addChild(b);
+        // якорь подсветки обучения: шаг «унеси малыша в Приют»
+        if (i === 0 && room === 'shelter') anchors.set('toShelter', b);
       };
       placeBtn(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
-        'nursery', COLORS.primary, stripTop + 38);
+        'nursery', COLORS.primary, stripY + 38);
       placeBtn(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
-        'shelter', COLORS.secondary, stripTop + 70);
+        'shelter', COLORS.secondary, stripY + 70);
     } else {
       // пара = поставленные в слот коты (или превью глобального выбора)
       const mother = momCat;
@@ -626,18 +642,19 @@ export function createIncubator(ctx: UiContext): Room {
           // и обоим белая обводка-ореол, чтобы буквы отделялись от полосы.
           const warn = label(`⚠️ родство: ${KINSHIP_RU[kin]}`, 12,
             kin === 'critical' ? 0xd42a2a : 0x8a5a1e, '800', { color: 0xffffff, width: 3 });
-          warn.position.set(w / 2, h - 50 + ctrlShift);
+          fitLabel(warn, w - 12);
+          warn.position.set(w / 2, stripY + 36);
           card.addChild(warn);
         }
         // «Свести» + 🔮 прогноз пары (превью исходов — breedingOutcomes, система знаний)
-        const rowW = Math.round((w - 24) * 0.85);
+        const rowW = Math.round(w * 0.78);
         const pvW = 46;
         const btn = new Button({
           text: 'Свести 🐾',
           w: rowW - pvW - 8, h: 38, color: COLORS.primary,
           textColor: 0xffffff, fontSize: 15,
         });
-        btn.position.set(w / 2 - (pvW + 8) / 2, h - 22 + ctrlShift);
+        btn.position.set(w / 2 - (pvW + 8) / 2, stripY + 64);
         if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
@@ -645,12 +662,14 @@ export function createIncubator(ctx: UiContext): Room {
           else ctx.toast(r.reason);
         };
         const pv = new Button({ text: '🔮', w: pvW, h: 38, color: COLORS.secondary, fontSize: 17 });
-        pv.position.set(w / 2 + rowW / 2 - pvW / 2, h - 22 + ctrlShift);
+        pv.position.set(w / 2 + rowW / 2 - pvW / 2, stripY + 64);
+        if (i === 0) anchors.set('preview', pv); // якорь подсветки обучения
         pv.onTap = () => ctx.openPairPreview(mother!, father!);
         card.addChild(btn, pv);
       } else {
         const hint = label('Добавь котов для скрещивания', 13, COLORS.inkSoft, '600');
-        hint.position.set(w / 2, h - 22 + ctrlShift);
+        fitLabel(hint, w - 12);
+        hint.position.set(w / 2, stripY + 64);
         card.addChild(hint);
       }
     }
@@ -659,12 +678,13 @@ export function createIncubator(ctx: UiContext): Room {
 
     live.push({
       index: i,
-      card,
+      card, cardW: w, cardH: h,
       total: busy ? Math.max(1, slot.readyAt - slot.startedAt) : incubationDuration(ctx.state),
       bar, barX, barY, barW, time,
       busy, startedAt: slot.startedAt,
       partition, partRaise,
       mom, dad,
+      momCat, dadCat,
       momGlow, dadGlow, kitGlow,
       kitten, kittenBase, kittenCat: heldKitten,
       momHomeX, momMeetX, dadHomeX, dadMeetX,
@@ -730,6 +750,152 @@ export function createIncubator(ctx: UiContext): Room {
     return card;
   }
 
+  // ============ Шприц-ветеринар ============
+  // Механика ветеринара переехала сюда из Питомника: плавающий шприц в правом
+  // верхнем углу Инкубатора. Тащишь его на кота в слоте вязки → «рабочее меню»
+  // лечения (ctx.openHealConfirm): 📺 восполняет HEAL_AD_HEARTS ❤, 💎 — полностью.
+  // Гейт прежний — узел «💉 Ветеринар» (LAB_UNLOCKS.clinic): пока не куплен, шприц
+  // притушён и на попытку тащить подсказывает открыть его в Генолабе.
+  const SYRINGE_H = 40;
+  const syringeLayer = new Container();   // «домашний» шприц (пересобирается в refresh)
+  shell.container.addChild(syringeLayer);
+  const dragOverlay = new Container();    // призрак-шприц + подсветка цели во время виса
+  dragOverlay.eventMode = 'none';
+  shell.container.addChild(dragOverlay);
+
+  let syrArtNode: Container | null = null; // тело шприца дома (для «дыхания» в tick)
+  let syrPhase = 0;
+  let syrGhost: Container | null = null;   // призрак, что летит за курсором
+  let syrHover: Graphics | null = null;    // кольцо-подсветка кота под курсором
+
+  /** Рисуем шприц (иглой вниз-влево, «на котов»). h — высота иконки. */
+  function syringeArt(h: number, locked: boolean): Container {
+    const c = new Container();
+    const g = new Graphics();
+    const L = h * 2.15;              // длина по оси шприца
+    const bt = h * 0.46;            // толщина колбы
+    const x0 = -L / 2;              // остриё иглы (слева)
+    const metal = locked ? 0x9aa3ab : 0xc2ccd6;
+    const glass = locked ? 0xcfd4d9 : 0xffffff;
+    const edge = locked ? 0x9aa3ab : 0x8fa6c4;
+    const liquid = locked ? 0xa8aeb4 : 0xff6b8a; // «здоровье» в тон сердечек
+
+    const xHub = x0 + L * 0.22;
+    const bx = xHub + h * 0.14;      // начало колбы
+    const xBarrelR = x0 + L * 0.66;  // конец колбы = фланец
+    const xRodEnd = x0 + L * 0.9;
+    const xThumb = x0 + L * 0.98;
+
+    // игла + хаб-конус
+    g.moveTo(x0, 0).lineTo(xHub, 0).stroke({ width: Math.max(2, h * 0.06), color: metal, cap: 'round' });
+    g.moveTo(xHub, -bt * 0.26).lineTo(bx, -bt * 0.4).lineTo(bx, bt * 0.4).lineTo(xHub, bt * 0.26).closePath().fill(metal);
+    // колба (стекло) + жидкость + деления
+    g.roundRect(bx, -bt / 2, xBarrelR - bx, bt, bt * 0.18).fill({ color: glass, alpha: 0.92 }).stroke({ width: Math.max(1.5, h * 0.03), color: edge });
+    g.roundRect(bx + 2, -bt / 2 + 3, (xBarrelR - bx) * 0.6, bt - 6, bt * 0.14).fill({ color: liquid, alpha: 0.92 });
+    for (let i = 1; i <= 3; i++) {
+      const tx = bx + (xBarrelR - bx) * (i / 4);
+      g.moveTo(tx, -bt * 0.3).lineTo(tx, -bt * 0.1).stroke({ width: 1.2, color: edge, alpha: 0.7 });
+    }
+    // фланец, шток поршня, упор большого пальца
+    g.roundRect(xBarrelR - h * 0.04, -bt * 0.62, h * 0.12, bt * 1.24, 3).fill(metal);
+    g.moveTo(xBarrelR, 0).lineTo(xRodEnd, 0).stroke({ width: Math.max(2.5, h * 0.09), color: locked ? 0x8a9096 : 0xd7dde3, cap: 'round' });
+    g.roundRect(xThumb - h * 0.05, -bt * 0.5, h * 0.14, bt, 4).fill(metal);
+    if (!locked) g.roundRect(bx + 3, -bt / 2 + 3, xBarrelR - bx - 6, bt * 0.16, 4).fill({ color: 0xffffff, alpha: 0.5 });
+
+    c.addChild(g);
+    c.rotation = -0.5; // остриё смотрит вниз-вправо (наклон «/»)
+    return c;
+  }
+
+  /** Кот под точкой (координаты сцены uiRoot) в одном из слотов — цель лечения. */
+  function healTargetAt(gx: number, gy: number): { cat: Cat; sprite: Sprite; catH: number } | null {
+    for (const ls of live) {
+      const p = ls.card.toLocal({ x: gx, y: gy }, ctx.uiRoot);
+      if (p.x < 0 || p.x > ls.cardW || p.y < 0 || p.y > ls.cardH) continue;
+      // выбираем ближайшего по X из стоящих в слоте родителей (chamber без смещения,
+      // поэтому sprite.x сопоставим с p.x — координаты карточки)
+      const cands: { cat: Cat; sprite: Sprite }[] = [];
+      if (ls.dad && ls.dadCat) cands.push({ cat: ls.dadCat, sprite: ls.dad });
+      if (ls.mom && ls.momCat) cands.push({ cat: ls.momCat, sprite: ls.mom });
+      if (!cands.length) continue;
+      let best = cands[0]!, bestD = Infinity;
+      for (const cd of cands) { const d = Math.abs(cd.sprite.x - p.x); if (d < bestD) { bestD = d; best = cd; } }
+      return { cat: best.cat, sprite: best.sprite, catH: ls.catH };
+    }
+    return null;
+  }
+
+  function moveSyringeGhost(e: FederatedPointerEvent): void {
+    if (!syrGhost) return;
+    const p = shell.container.toLocal(e.global);
+    syrGhost.position.set(p.x, p.y);
+    // подсветка кота-цели под курсором
+    const uiP = ctx.uiRoot.toLocal(e.global);
+    const target = healTargetAt(uiP.x, uiP.y);
+    if (target && syrHover) {
+      const gp = shell.container.toLocal(target.sprite.getGlobalPosition());
+      syrHover.clear();
+      syrHover.circle(gp.x, gp.y - target.catH * 0.35, target.catH * 0.62)
+        .stroke({ width: 4, color: 0x7ee0a6, alpha: 0.95 });
+      syrHover.visible = true;
+    } else if (syrHover) {
+      syrHover.visible = false;
+    }
+  }
+
+  function dropSyringe(e: FederatedPointerEvent): void {
+    ctx.app.stage.off('globalpointermove', moveSyringeGhost);
+    ctx.app.stage.off('pointerup', dropSyringe);
+    ctx.app.stage.off('pointerupoutside', dropSyringe);
+    ctx.app.canvas.style.cursor = 'default';
+    syrGhost?.destroy({ children: true }); syrGhost = null;
+    syrHover?.destroy(); syrHover = null;
+    if (syrArtNode) syrArtNode.visible = true;
+    const uiP = ctx.uiRoot.toLocal(e.global);
+    const target = healTargetAt(uiP.x, uiP.y);
+    if (!target) { ctx.toast('Наведи шприц на кота в слоте вязки 💉'); return; }
+    ctx.openHealConfirm(target.cat); // «рабочее меню ветеринара»
+  }
+
+  function startSyringeDrag(e: FederatedPointerEvent): void {
+    if (syrGhost) return;
+    e.stopPropagation();                 // не даём начаться свайпу комнат
+    if (!isUnlocked(ctx.state, 'clinic')) { ctx.toast('Открой «Ветеринара» в Генолабе 🔬'); return; }
+    ctx.app.canvas.style.cursor = 'grabbing';
+    if (syrArtNode) syrArtNode.visible = false; // прячем домашний шприц на время виса
+    syrGhost = syringeArt(SYRINGE_H * 1.15, false);
+    dragOverlay.addChild(syrGhost);
+    syrHover = new Graphics();
+    syrHover.visible = false;
+    dragOverlay.addChild(syrHover);
+    moveSyringeGhost(e);
+    ctx.app.stage.on('globalpointermove', moveSyringeGhost);
+    ctx.app.stage.on('pointerup', dropSyringe);
+    ctx.app.stage.on('pointerupoutside', dropSyringe);
+  }
+
+  function renderSyringe(cx: number, cy: number): void {
+    syringeLayer.removeChildren();
+    syrArtNode = null;
+    const unlocked = isUnlocked(ctx.state, 'clinic');
+    const wrap = new Container();
+    // прозрачная хит-область побольше (шприц тонкий — по тонкой игле не попасть)
+    const hit = new Graphics();
+    hit.circle(0, 0, SYRINGE_H * 0.95).fill({ color: 0xffffff, alpha: 0.001 });
+    const art = syringeArt(SYRINGE_H, !unlocked);
+    const cap = unlocked
+      ? label('💉 лечить', 12, 0xffffff, '800', { color: 0x2c2438, width: 3 })
+      : lockHint('🔒 в Генолабе', 11);
+    cap.position.set(0, SYRINGE_H * 0.98);
+    wrap.addChild(hit, art, cap);
+    syrArtNode = art;
+    wrap.position.set(cx, cy);
+    wrap.eventMode = 'static';
+    wrap.cursor = 'grab';
+    wrap.on('pointerdown', startSyringeDrag);
+    syringeLayer.addChild(wrap);
+  }
+
   function refresh(): void {
     for (const c of shell.body.removeChildren()) c.destroy({ children: true });
     live = [];
@@ -746,22 +912,32 @@ export function createIncubator(ctx: UiContext): Room {
     const standTex = decorTexture('slotstand');
     const standAspect = standTex ? standTex.width / standTex.height : 480 / 330; // ширина/высота
 
+    // Ширина окна = ширина видимого стекла бокса. Ограничена и колонкой, и высотой:
+    // по вертикали должны уложиться само окно, полоса кнопок (она наезжает на низ
+    // окна) и хотя бы кусочек тумбы. На телефоне-ландшафте упирается именно в
+    // высоту — раньше в этом месте окно ужималось «cover'ом» и переставало
+    // совпадать по ширине с полосой кнопок.
     const colW = (shell.contentW - gap * (N - 1)) / N;
-    const slotW = Math.min(300, colW);
+    const budget = shell.contentH + STAND_NAV_OVERHANG; // тумбе можно чуть свеситься
+    const byH = (budget - CTRL_H) / (GLASS_RATIO * (1 - CTRL_OVERLAP) + STAND_MIN_FRAC);
+    const slotW = Math.max(140, Math.min(colW, SLOT_MAX_W, byH));
+    const glassH = slotW * GLASS_RATIO;
+    const bodyH = glassH * (1 - CTRL_OVERLAP) + CTRL_H; // окно + полоса кнопок
 
-    // Подставка чуть уже окна; её видимая (торчащая ниже окна) высота ограничена,
-    // чтобы на коротких экранах окна не схлопывались. Окно «утоплено» в платформу.
-    const seatFrac = 0.12;
-    const fullStandW = slotW * 0.96;
-    const fullUnder = (fullStandW / standAspect) * (1 - seatFrac);
-    const standUnder = Math.min(fullUnder, shell.contentH * 0.26);
-    const standH = standUnder / (1 - seatFrac);
-    const standW = standH * standAspect;
+    // Тумба под окном. Её верх утоплен под окно и полосу кнопок (STAND_SEAT) — видна
+    // только нижняя часть. Если места под полосой мало (телефон-ландшафт), тумбу
+    // сперва слегка приплющиваем (читается как более пологий ракурс), и только
+    // потом сужаем — иначе под широким окном оставался бы тонкий столбик.
+    const standNatW = slotW * STAND_W_FRAC;
+    const standNatUnder = (standNatW / standAspect) * (1 - STAND_SEAT);
+    const standUnder = Math.max(0, Math.min(standNatUnder, budget - bodyH));
+    const standW = Math.min(standNatW,
+      (standUnder / ((1 - STAND_SEAT) * STAND_SQUASH_MIN)) * standAspect);
+    const standSquash = standW > 0
+      ? standUnder / ((standW / standAspect) * (1 - STAND_SEAT))
+      : 1;
 
-    // Высота окна — под оставшееся место, с потолком (чтобы на ПК не разъезжалось).
-    const slotH = Math.min(slotW * 1.15, shell.contentH - standUnder);
-
-    const blockH = slotH + standUnder;
+    const blockH = bodyH + standUnder;
     const totalW = slotW * N + gap * (N - 1);
     const startX = Math.max(0, (shell.contentW - totalW) / 2);
     const startY = Math.max(0, (shell.contentH - blockH) / 2);
@@ -772,21 +948,31 @@ export function createIncubator(ctx: UiContext): Room {
       for (let i = 0; i < N; i++) {
         const s = new Sprite(standTex);
         s.anchor.set(0.5, 1);
-        s.scale.set(standW / standTex.width);
-        s.position.set(colX(i), startY + slotH + standUnder); // низ подставки = низ блока
+        const sx = standW / standTex.width;
+        s.scale.set(sx, sx * standSquash);
+        s.position.set(colX(i), startY + blockH); // низ подставки = низ блока
         shell.body.addChild(s);
       }
     }
 
     for (let i = 0; i < N; i++) {
       const locked = i >= owned;
-      const c = locked ? buildLockedSlot(i, slotW, slotH) : buildSlot(i, slotW, slotH);
-      // закрытые слоты опущены ровно до видимого верха бокса открытых
-      c.position.set(startX + i * (slotW + gap), startY + (locked ? boxTopInset(i, slotW, slotH) : 0));
+      const c = locked ? buildLockedSlot(i, slotW, bodyH) : buildSlot(i, slotW);
+      c.position.set(startX + i * (slotW + gap), startY);
       shell.body.addChild(c);
     }
 
     renderBoostChips(plateW); // подсветка чипов усилителей зависит от зарядов
+    // Шприц-ветеринар — над правым краем последнего (3-го) слота вязки; по высоте —
+    // примерно на середине зазора от топбара (низ topInset) до верха окна слота.
+    // Клампим по X, чтобы не ушёл за край комнаты.
+    const syrX = Math.min(ctx.roomW - 34, colX(N - 1) + slotW * 0.4);
+    // startY отсчитан от body; верх окна слота в координатах комнаты — с учётом
+    // смещения body (topInset + 8 + titleH + 12). Ставим шприц на середину между
+    // низом топбара (topInset) и верхом окна слота.
+    const slotTopY = ctx.topInset + 8 + shell.titleH + 12 + startY;
+    const syrY = (ctx.topInset + slotTopY) / 2;
+    renderSyringe(syrX, syrY); // замок шприца снимается, когда куплен узел «Ветеринар»
   }
 
   function tick(dt: number): void {
@@ -801,6 +987,12 @@ export function createIncubator(ctx: UiContext): Room {
     for (const rp of readyPulses) {
       rp.phase += dt;
       rp.view.alpha = 0.55 + 0.45 * Math.sin(rp.phase * 5);
+    }
+    // «дыхание» домашнего шприца — лёгкое парение + покачивание вокруг наклона
+    if (syrArtNode && syrArtNode.visible) {
+      syrPhase += dt;
+      syrArtNode.y = Math.sin(syrPhase * 2) * 3;
+      syrArtNode.rotation = -0.5 + Math.sin(syrPhase * 1.3) * 0.05;
     }
 
     for (const ls of live) {
@@ -915,12 +1107,12 @@ export function createIncubator(ctx: UiContext): Room {
 
   /** Кота уронили в инкубаторе: ищем слот под точкой и ставим кота в вязку. */
   function tryDropCat(cat: Cat, gx: number, gy: number): boolean {
-    // точка приходит в координатах виртуальной сцены, а getBounds() карточек —
-    // глобальные (пиксели окна); переводим точку в глобальные и сравниваем там
-    const p = ctx.uiRoot.toGlobal({ x: gx, y: gy });
+    // Точка приходит в координатах виртуальной сцены. Сравниваем в СВОИХ координатах
+    // карточки (getBounds() не годится: спрайт бокса шире видимого стекла — прозрачные
+    // поля вырезки, и зоны соседних слотов налезали бы друг на друга).
     for (const ls of live) {
-      const b = ls.card.getBounds();
-      if (p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY) {
+      const p = ls.card.toLocal({ x: gx, y: gy }, ctx.uiRoot);
+      if (p.x >= 0 && p.x <= ls.cardW && p.y >= 0 && p.y <= ls.cardH) {
         const r = assignBreeder(ctx.state, ls.index, cat.id, ctx.now());
         if (!r.ok) { ctx.toast(r.reason); return false; }
         ctx.commit();
@@ -935,7 +1127,8 @@ export function createIncubator(ctx: UiContext): Room {
   return {
     id: 'incubator', title: '🧬 Инкубатор', container: shell.container, refresh, tick, tryDropCat,
     // Обучение новичка: 'slot' — карточка первого слота, 'breed' — «Свести»,
-    // 'freeSkip' — подарочный ускоритель (см. ui/tutorial.ts).
+    // 'preview' — 🔮 прогноз пары, 'freeSkip' — подарочный ускоритель,
+    // 'toShelter' — «🏚️ В приют» у родившегося малыша (см. ui/tutorial.ts).
     anchor: (key) => {
       const node = anchors.get(key);
       return node && !node.destroyed ? node : null;

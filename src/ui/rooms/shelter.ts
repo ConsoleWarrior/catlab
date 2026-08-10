@@ -262,6 +262,18 @@ export function createShelter(ctx: UiContext): Room {
   );
 
   /**
+   * Поставить кота ВОЗЛЕ станции-короба (сбоку, у ближней кромки пола) и задержать
+   * там: диалог станции открывается уже после дропа, и кот должен ждать решения
+   * рядом с ней, а не убегать на прежнее место (образец — Питомник).
+   */
+  function standByStation(cat: Cat, side: 'left' | 'right'): void {
+    const zone = side === 'left' ? labZone : adoptZone;
+    const gap = plane.catH * 0.42; // полкорпуса кота — короб остаётся не закрыт
+    const x = side === 'left' ? zone.x + zone.width + gap : zone.x - gap;
+    floor.placeAt(cat.id, x, plane.yNear, 14);
+  }
+
+  /**
    * Уронили кота на корзину → предъявим его клиентам; на лабораторию → сдача за 🧬;
    * на переноску → пристройство; иначе переезд.
    */
@@ -283,12 +295,14 @@ export function createShelter(ctx: UiContext): Room {
         ctx.toast('Открой станцию «На эксперименты» в Генолабе 🔬');
         return false;             // заперто → кот вернётся на своё место
       }
-      ctx.commit();               // grab-спрайт уже уничтожен — вернём наземного кота на пол
+      ctx.commit();               // grab-спрайт уже уничтожен — пол пересобран, кот снова виден
+      standByStation(cat, 'left'); // откажешься сдавать — кот остаётся у станции
       ctx.openLabConfirm(cat);     // «Сдать в лабораторию?» (Да → sendToLab)
       return true;
     }
     if (adoptZone.contains(lp.x, lp.y)) {
       ctx.commit();
+      standByStation(cat, 'right'); // откажешься отдавать — кот остаётся у переноски
       ctx.openAdoptConfirm(cat);   // «Отдать котика в добрые руки?» (Да → adoptCat)
       return true;
     }
@@ -336,5 +350,16 @@ export function createShelter(ctx: UiContext): Room {
   return {
     id: 'shelter', title: '🏠 Приют', container: shell.container,
     refresh, tick, tryDropCat,
+    /**
+     * Якоря подсветки обучения (см. ui/tutorial.ts): `cat:<id>` — котик на полу,
+     * 'adopt' — станция «в добрые руки» в правом углу, 'orders' — кнопка 📋.
+     * Узлы отдаём живыми: комната пересобирается, а кот на полу ещё и ходит.
+     */
+    anchor: (key) => {
+      if (key.startsWith('cat:')) return floor.nodeOf(key.slice(4));
+      if (key === 'adopt') return adoptLayer.children.length > 0 ? adoptLayer : null;
+      if (key === 'orders') return ordersBtn && !ordersBtn.destroyed ? ordersBtn : null;
+      return null;
+    },
   };
 }

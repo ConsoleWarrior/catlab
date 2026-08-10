@@ -13,7 +13,7 @@
  * (ассет не загрузился) — отдаём процедурного кота как запасной вариант.
  */
 
-import { BlurFilter, ColorMatrixFilter, Sprite } from 'pixi.js';
+import { BlurFilter, ColorMatrixFilter, Rectangle, Sprite } from 'pixi.js';
 import type { Application, Texture } from 'pixi.js';
 import { expressPhenotype, breedTraits } from '../genetics/index.js';
 import type { RarityTier } from '../genetics/index.js';
@@ -58,22 +58,60 @@ function solidFill(color: number): ColorMatrixFilter {
   return cm;
 }
 
+/** Разрешение предрендеренного ореола относительно текстуры кота. Ореол — мягкое
+ * пятно без деталей, четверти хватает с запасом, а памяти уходит в 16 раз меньше. */
+const GLOW_RES = 0.25;
+
+// Готовые ореолы по ключу «текстура|тир|размытие»: на всю игру их десятки.
+const glowCache = new Map<string, Texture>();
+
+/**
+ * Текстура ореола: силуэт кота, залитый цветом редкости и размытый — но
+ * посчитанный ОДИН раз и сохранённый в текстуру.
+ *
+ * Раньше размытие висело живым фильтром на каждом коте, и это было главной
+ * причиной низкого FPS: объект с фильтром Pixi рисует отдельным проходом в свою
+ * временную текстуру, а BlurFilter с quality:3 — это ещё и шесть проходов
+ * размытия. Дюжина котов на полу превращалась в сотню лишних смен буфера за
+ * кадр, чего мобильный GPU не прощает.
+ */
+function glowTexture(app: Application, src: Texture, tier: RarityTier, displayH: number): Texture {
+  // Размытие задаётся в пикселях экрана, а рисуем мы в текстуре кота — она во
+  // столько-то раз крупнее его же на экране, во столько же раз шире и размытие.
+  // Шаг 4 — чтобы близкие размеры кота делили одну текстуру, а не плодили копии.
+  const screen = Math.max(3, Math.min(9, displayH * 0.06));
+  const strength = Math.max(4, Math.round((screen * src.height) / Math.max(1, displayH) / 4) * 4);
+  const key = `${src.uid}|${tier}|${strength}`;
+  const hit = glowCache.get(key);
+  if (hit) return hit;
+
+  const tmp = new Sprite(src);
+  tmp.filters = [solidFill(TIER_COLOR[tier]), new BlurFilter({ strength, quality: 3 })];
+  const tex = app.renderer.generateTexture({
+    target: tmp,
+    // Кадр ровно по текстуре кота: ореол остаётся с ней соосным, поэтому спрайту
+    // ореола годятся тот же якорь и тот же масштаб, что и коту.
+    frame: new Rectangle(0, 0, src.width, src.height),
+    resolution: GLOW_RES,
+    antialias: false,
+  });
+  tmp.destroy();
+  glowCache.set(key, tex);
+  return tex;
+}
+
 /**
  * Светящийся ореол цвета редкости: чуть увеличенный и размытый дубль силуэта
  * кота, залитый сплошным цветом редкости. Кладётся ПОД основной спрайт, поэтому
  * наружу выходит лишь мягкая цветная кромка. `displayH` задаёт ширину размытия.
  * У серых (common) ореол на треть тусклее, чтобы не спорил с котом.
  */
-export function rarityGlow(src: Sprite, tier: RarityTier, displayH: number): Sprite {
-  const glow = new Sprite(src.texture);
+export function rarityGlow(app: Application, src: Sprite, tier: RarityTier, displayH: number): Sprite {
+  const glow = new Sprite(glowTexture(app, src.texture, tier, displayH));
   glow.eventMode = 'none'; // не перехватывает тапы/перетаскивание у кота
   glow.anchor.copyFrom(src.anchor);
   glow.alpha = tier === 'common' ? 0.95 * (2 / 3) : 0.95;
   glow.scale.set(src.scale.x * GLOW_OUT, src.scale.y * GLOW_OUT);
-  glow.filters = [solidFill(TIER_COLOR[tier]), new BlurFilter({
-    strength: Math.max(3, Math.min(9, displayH * 0.06)),
-    quality: 3,
-  })];
   return glow;
 }
 

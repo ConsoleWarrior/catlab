@@ -39,15 +39,22 @@ function canAfford(state: GameState, currency: Currency, amount: number): boolea
 
 /**
  * Начислить опыт (⭐ репутацию) и пересчитать уровень лаборатории. Единая точка для
- * всех источников опыта (рождение/продажа/пристройство/лаборатория/заказ). Возвращает
- * фактически начисленное и флаг повышения уровня — UI показывает «+N ⭐» и баннер.
+ * всех источников опыта (рождение/продажа/пристройство/лаборатория/заказ). При
+ * пересечении порога дарит 💎 кристаллы (levelCrystalReward, суммарно за все
+ * пройденные уровни, если прыгнули через несколько). Возвращает фактически
+ * начисленный опыт, флаг повышения и подаренные 💎 — панель уровня показывает их.
  */
-export function addReputation(state: GameState, amount: number): { gained: number; leveledUp: boolean } {
+export function addReputation(
+  state: GameState, amount: number,
+): { gained: number; leveledUp: boolean; crystalsGifted: number } {
   const before = state.level;
   const gained = Math.max(0, Math.round(amount));
   state.reputation += gained;
   state.level = C.levelForReputation(state.reputation);
-  return { gained, leveledUp: state.level > before };
+  let crystalsGifted = 0;
+  for (let lv = before + 1; lv <= state.level; lv++) crystalsGifted += C.levelCrystalReward(lv);
+  if (crystalsGifted > 0) state.crystals += crystalsGifted;
+  return { gained, leveledUp: state.level > before, crystalsGifted };
 }
 
 function spend(state: GameState, currency: Currency, amount: number): boolean {
@@ -59,19 +66,57 @@ function spend(state: GameState, currency: Currency, amount: number): boolean {
 // --- Доход ---
 
 /**
+ * Итог начисления за отсутствие. Кроме монет отдаём, сколько игрока не было и за
+ * сколько минут реально капало — окно «С возвращением» объясняет разницу
+ * (упёрлись в потолок офлайна / закончился корм).
+ */
+export interface OfflineIncome {
+  coins: number;
+  awayMin: number;       // сколько всего прошло с прошлого визита
+  incomeMin: number;     // за сколько из них начислен доход
+  cappedByTime: boolean; // обрезано потолком офлайна («Ночной смотритель»)
+  cappedByFood: boolean; // обрезано пустой кормушкой
+}
+
+/**
  * Начисляет пассивный доход выставки с момента lastSeenAt. Корм расходуется за ВСЁ
  * отсутствие (кормушка может опустеть), а доход начисляется только за «сытые» минуты
  * и в пределах офлайн-потолка. Казну в минус не уводит (мягкий голод).
  */
-export function collectIncome(state: GameState, now: number): { coins: number } {
+export function collectIncome(state: GameState, now: number): OfflineIncome {
   const elapsedMin = Math.max(0, (now - state.lastSeenAt) / 60_000);
   if (E.autoFeedEnabled(state)) E.autoFeed(state, elapsedMin); // «Автокормушка»: докупить корм за 💰
   const fedMin = E.consumeFood(state, elapsedMin); // расход корма + сколько минут были сыты
-  const incomeMin = Math.min(fedMin, E.offlineCapMin(state));
+  const capMin = E.offlineCapMin(state);
+  const incomeMin = Math.min(fedMin, capMin);
   const coins = Math.floor(E.passiveRatePerMin(state) * incomeMin);
   state.coins += coins;
   state.lastSeenAt = now;
-  return { coins };
+  // Сравнения с допуском: сытые минуты считаются делением, и «ровно всё время»
+  // легко даёт 119.99999 — без допуска игроку показали бы ложный «корм кончился».
+  return {
+    coins,
+    awayMin: elapsedMin,
+    incomeMin,
+    cappedByTime: elapsedMin > capMin + 1e-6 && fedMin > capMin - 1e-6,
+    cappedByFood: fedMin < elapsedMin - 1e-6,
+  };
+}
+
+/** Сколько 💰 добавит 📺 к начисленному за отсутствие (доля OFFLINE_AD_BONUS). */
+export function offlineAdBonus(coins: number): number {
+  return Math.floor(Math.max(0, coins) * C.OFFLINE_AD_BONUS);
+}
+
+/**
+ * Забрать 📺-надбавку к офлайн-доходу (кнопка в окне «С возвращением»). Вызывается
+ * ТОЛЬКО после реально досмотренного ролика; `coins` — сумма из того же отчёта, что
+ * показан игроку. Возвращает начисленное (0 — надбавка меньше монеты).
+ */
+export function claimOfflineAdBonus(state: GameState, coins: number): number {
+  const bonus = offlineAdBonus(coins);
+  state.coins += bonus;
+  return bonus;
 }
 
 /**
@@ -132,6 +177,8 @@ export function startBreeding(
  * самка → «мама», самец → «папа». Если место в этой роли уже занято другим
  * котом — он просто освобождается (коты «меняются местами»). Слот с активной
  * вязкой (readyAt > 0) трогать нельзя. Само рождение запускается кнопкой «Свести».
+ * «Старый»/«Бесплодный» в слот ставится (там его лечит шприц-ветеринар), но свести
+ * его нельзя — этот запрет живёт в startBreeding.
  */
 export function assignBreeder(state: GameState, slotIndex: number, catId: string, now: number): Result {
   const slot = state.slots[slotIndex];
@@ -141,7 +188,9 @@ export function assignBreeder(state: GameState, slotIndex: number, catId: string
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
-  if (E.isOld(cat)) return { ok: false, reason: 'кот слишком стар для вязки' };
+  // «Старого» (сердца кончились) в слот ПУСКАЕМ: шприц-ветеринар лечит только кота,
+  // стоящего в слоте (см. healCat / rooms/incubator), — иначе исчерпанного производителя
+  // невозможно было бы вылечить вообще. Саму вязку по-прежнему не даст startBreeding.
   if (E.isBusy(state, catId)) return { ok: false, reason: 'кот уже занят в вязке' };
   // снимаем кота со всех других неактивных слотов, чтобы он не «раздваивался».
   // Важно и для kittenId: подросший «малыш с роднёй» уходит в соседний слот как
@@ -242,6 +291,9 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     const baseHearts = rollKittenHearts(heartsKinship, rng, E.kinshipSafety(state));
     kitten.maxHearts = E.applyExtraHearts(baseHearts, E.extraHearts(state));
     state.cats.push(kitten);
+    // Обучение: факт первого рождения фиксируем флагом — самого котёнка новичок
+    // тут же учится пристраивать, и по коллекции это событие потом не восстановить.
+    if (state.tutorial && !state.tutorial.done) state.tutorial.bornOnce = true;
     // ⭐ опыт за рождение: доля от РЫНОЧНОЙ ЦЕННОСТИ котёнка (тир × порода × родословная
     // × здоровье — гринд дворовых даёт крохи, а трудная порода с чистой линией платит
     // заметно больше), с ×множителем за первое открытие породы. Считается ПОСЛЕ броска
@@ -298,6 +350,9 @@ export function adoptCat(state: GameState, catId: string): Result<{ coins: numbe
   state.dna += dna;
   const { gained: rep } = addReputation(state, E.catMarketValue(cat) * C.REP_ADOPT_MULT);
   removeCat(state, catId);
+  // Шаг обучения «в добрые руки» из состояния не вычислить — пристроенный кот из
+  // него исчезает; отмечаем сам факт (см. game/tutorial.ts).
+  if (state.tutorial && !state.tutorial.done) state.tutorial.adoptDone = true;
   return { ok: true, coins, dna, rep };
 }
 
@@ -474,7 +529,12 @@ export function healCat(
   if (!cat) return { ok: false, reason: 'кот не найден' };
   if (!E.isUnlocked(state, 'clinic')) return { ok: false, reason: 'locked' };
   if (E.isSterile(cat)) return { ok: false, reason: 'бесплодного не вылечить' };
-  if (E.isInSlot(state, catId)) return { ok: false, reason: 'кот в слоте вязки' };
+  // Кота, ПОСТАВЛЕННОГО в слот вязки, ветеринар лечит прямо в Инкубаторе (в этом
+  // весь смысл шприца там) — но НЕ во время идущей вязки: сердца уже «в работе».
+  const inBreeding = state.slots.some(
+    (sl) => sl.readyAt > 0 && (sl.motherId === catId || sl.fatherId === catId),
+  );
+  if (inBreeding) return { ok: false, reason: 'кот сейчас в вязке' };
   const spent = cat.breedCount ?? 0;
   if (spent <= 0) return { ok: false, reason: 'кот полностью здоров' };
   if (mode === 'ad') {
@@ -698,6 +758,23 @@ export function analyzeCat(
   cat.analyzed = true;
   revealPedigree(cat);
   return { ok: true, coins: mode === 'coins' ? cost : 0 };
+}
+
+/**
+ * Подарочный Генетический анализ обучения: первый кот изучается бесплатно
+ * (`tutorial.freeAnalyzeUsed`, ровно один раз). Смысл тот же, что у подарочного
+ * ускорителя вязки: новичок должен увидеть, ЧТО даёт анализ, до того как решит,
+ * стоит ли он 💰 или просмотра рекламы.
+ */
+export function freeAnalyzeCat(state: GameState, catId: string): Result {
+  if (state.tutorial.freeAnalyzeUsed) return { ok: false, reason: 'подарок уже использован' };
+  const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
+  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (cat.analyzed) return { ok: false, reason: 'кот уже изучен' };
+  state.tutorial.freeAnalyzeUsed = true;
+  cat.analyzed = true;
+  revealPedigree(cat);
+  return { ok: true };
 }
 
 // --- Исследование рецептов (вкладка «Исследования» Генолаба, этап D) ---

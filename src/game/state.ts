@@ -45,7 +45,11 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastBoostAdAt: 0,    // 📺-зарядка усилителя сразу доступна
     processedPurchases: [],
     firstPurchaseDone: false,
-    tutorial: { done: false, freeSkipUsed: false }, // новая игра — обучение с нуля
+    // новая игра — обучение с нуля (оба подарка целы, ничего ещё не показано)
+    tutorial: {
+      done: false, freeSkipUsed: false, freeAnalyzeUsed: false,
+      bornOnce: false, previewSeen: false, ordersSeen: false, adoptDone: false,
+    },
     nextId: 1,
   };
   // стартовая пара для первой вязки — со скрытой родословной (лотерея генов)
@@ -132,10 +136,26 @@ export function deserialize(json: string): GameState {
   // а там игра уже началась, и водить игрока за руку по первой вязке поздно.
   // Такому сейву обучение сразу закрыто (и подарочный ускоритель не положен).
   if (!data.tutorial || typeof data.tutorial !== 'object') {
-    data.tutorial = { done: true, freeSkipUsed: true };
+    data.tutorial = {
+      done: true, freeSkipUsed: true, freeAnalyzeUsed: true,
+      bornOnce: true, previewSeen: true, ordersSeen: true, adoptDone: true,
+    };
   } else {
-    if (typeof data.tutorial.done !== 'boolean') data.tutorial.done = true;
-    if (typeof data.tutorial.freeSkipUsed !== 'boolean') data.tutorial.freeSkipUsed = true;
+    const t = data.tutorial;
+    if (typeof t.done !== 'boolean') t.done = true;
+    if (typeof t.freeSkipUsed !== 'boolean') t.freeSkipUsed = true;
+    // Поля второй половины обучения (анализ, прогноз пары, пристройство, заказы)
+    // добавлены позже. Сейву с ЗАКРЫТЫМ обучением они уже ни на что не влияют, а
+    // недопройденному отдаём «ещё не показано» — подсказки продолжатся с нужного шага.
+    if (typeof t.freeAnalyzeUsed !== 'boolean') t.freeAnalyzeUsed = t.done;
+    // факт первого рождения у старого сейва восстанавливаем по самим котам
+    // (tutorialStep умеет и так — держим значения согласованными)
+    if (typeof t.bornOnce !== 'boolean') {
+      t.bornOnce = t.done || data.cats.some((c) => !!(c.motherBreed || c.fatherBreed));
+    }
+    if (typeof t.previewSeen !== 'boolean') t.previewSeen = t.done;
+    if (typeof t.ordersSeen !== 'boolean') t.ordersSeen = t.done;
+    if (typeof t.adoptDone !== 'boolean') t.adoptDone = t.done;
   }
   // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
   // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;

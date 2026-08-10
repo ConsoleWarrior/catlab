@@ -9,7 +9,8 @@
  * Перетащил кота в зону НАД пьедесталом (корпус тумбы не ловит — зона подсвечена
  * золотой аурой, пока кот «в руках» над ней) → на выставку; стащил на пол → снял.
  * Чемпион на тумбе моргает и «красуется» — см. ChampAnim/updateChampions ниже.
- * У левой стены — ветеринар-шприц (💉): перетащил кота → диалог лечения вязок.
+ * Ветеринар (💉) переехал в Инкубатор — там шприц перетаскивают на кота в слоте вязки.
+ * В правом нижнем углу — криокапсула (🧊, drag кота → заморозка в крио-банк).
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
@@ -19,7 +20,7 @@ import {
   catsIn, roomCount, nurseryCapacity, isInSlot, moveCat,
   championSlots, championAt, championIncomePerMin, isChampion,
   setChampion, upgradeCost, upgradeMaxed, buyUpgrade,
-  maxChampionsForLevel, nextPedestalUnlockLevel, isUnlocked,
+  maxChampionsForLevel, nextPedestalUnlockLevel,
   pedestalPlace, placeIncomeMult,
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
   foodRatePerMin, feedingCatCount, foodBuyQuote,
@@ -120,48 +121,25 @@ export function createNursery(ctx: UiContext): Room {
 
   // экранные прямоугольники зон дропа НАД пьедесталами (в локальных координатах комнаты)
   let pedRects: { x: number; y: number; w: number; h: number }[] = [];
+  // невидимые узлы-якоря тех же зон — по ним обучение рисует кольцо «сюда ставить»
+  // (сам корпус тумбы кота не ловит, кольцо вокруг него врало бы; см. ui/tutorial.ts)
+  let pedMarks: Graphics[] = [];
   // золотые ауры зон дропа (по одной на пьедестал): видима, пока таскаемый кот над зоной
   let pedAuras: Graphics[] = [];
   let auraT = 0; // время для «дыхания» ауры
   // анимация чемпионов на тумбах (моргание + позы), пересобирается вместе с пьедесталами
   let champAnims: ChampAnim[] = [];
 
-  // Две drag-станции по нижним углам (общий образец cornerStation — короб жмётся в
-  // угол с отступом ≈ полосе навигации): клиника-шприц в левом углу (лечение),
-  // криокапсула в правом (заморозка в крио-банк). Перетащил кота на станцию →
-  // соответствующий диалог. Слои под «живым полом» (коты проходят ПЕРЕД ними);
-  // пересобираются в refresh.
+  // Drag-станция криокапсулы в правом нижнем углу (заморозка в крио-банк):
+  // перетащил кота → диалог. Ветеринар отсюда убран — он теперь шприц в Инкубаторе.
+  // Слой под «живым полом» (коты проходят ПЕРЕД ним); пересобирается в refresh.
   const ICE_EDGE = 0x8ecae6; // морозный акцент криокапсулы
-
-  // клиника — левый НИЖНИЙ угол; до открытия уровнем (LAB_UNLOCKS.clinic) — замок
-  const clinicZone = cornerStation(ctx.roomW, ctx.roomH, 'left');
-  const clinicCx = clinicZone.x + clinicZone.width / 2;
-  const clinicLayer = new Container();
-  shell.container.addChildAt(clinicLayer, shell.container.getChildIndex(floorLayer));
 
   // криокапсула — правый НИЖНИЙ угол; появляется только когда открыт крио-банк (узел «Криогенетика»)
   const cryoZone = cornerStation(ctx.roomW, ctx.roomH, 'right');
   const cryoCx = cryoZone.x + cryoZone.width / 2;
   const cryoLayer = new Container();
   shell.container.addChildAt(cryoLayer, shell.container.getChildIndex(floorLayer));
-
-  function refreshClinic(): void {
-    clinicLayer.removeChildren();
-    const unlocked = isUnlocked(ctx.state, 'clinic');
-    const { x, y, width: sw, height: sh } = clinicZone;
-    const box = new Graphics();
-    // короб-станция (заглушка): белый медицинский бокс + «кушетка»
-    box.roundRect(x, y, sw, sh, 14)
-      .fill({ color: unlocked ? 0xf3f6f4 : 0x6b7370, alpha: unlocked ? 0.9 : 0.6 })
-      .stroke({ width: 3, color: unlocked ? 0xd66a6a : 0x4a504e });
-    box.roundRect(x + sw * 0.12, y + sh * 0.16, sw * 0.76, sh * 0.4, 8)
-      .fill({ color: unlocked ? 0xf7c8c8 : 0xbfbfbf, alpha: unlocked ? 0.6 : 0.3 });
-    const syringe = label(unlocked ? '💉' : '🔒', sw * 0.42, COLORS.ink, '700');
-    syringe.position.set(clinicCx, y + sh * 0.56);
-    const badge = stationBadge(clinicCx, y,
-      unlocked ? '💉 ветеринар' : '🔒 открой в Генолабе');
-    clinicLayer.addChild(box, syringe, badge);
-  }
 
   /** Станция-криокапсула (правый угол): только когда крио-банк открыт узлом «Криогенетика». */
   function refreshCryo(): void {
@@ -181,13 +159,25 @@ export function createNursery(ctx: UiContext): Room {
     cryoLayer.addChild(box, snow, badge);
   }
 
+  const plane = floorPlane(ctx.roomW, ctx.roomH, ctx.topInset);
   const floor = createLivingFloor(
     ctx, floorLayer,
-    floorPlane(ctx.roomW, ctx.roomH, ctx.topInset),
+    plane,
     // по полу гуляют коты, кроме поставленных в слот вязки и выставленных чемпионов
     () => catsIn(ctx.state, 'nursery')
       .filter((c) => !isInSlot(ctx.state, c.id) && !isChampion(ctx.state, c.id)),
   );
+
+  /**
+   * Поставить кота ВОЗЛЕ криокапсулы (сбоку от короба, у ближней кромки пола) и
+   * задержать там: диалог заморозки открывается уже после дропа, и кот должен ждать
+   * решения рядом с капсулой, а не убегать на своё прежнее место.
+   */
+  function standByStation(cat: Cat): void {
+    const gap = plane.catH * 0.42; // полкорпуса кота — короб остаётся не закрыт
+    const x = cryoZone.x - gap;
+    floor.placeAt(cat.id, x, plane.yNear, 14); // 14 с — хватит и на диалог, и на «постоял рядом»
+  }
 
   /** Индекс пьедестала под точкой (в локальных координатах комнаты) или -1. */
   function pedestalAt(lx: number, ly: number): number {
@@ -296,7 +286,7 @@ export function createNursery(ctx: UiContext): Room {
       const aiSp = aiSitSpriteFor(champ, catSize);
       const sp = aiSp ?? catSprite(ctx.app, champ, catSize);
       sp.position.set(cx, standY);
-      const glow: Sprite = rarityGlow(sp, champ.rarityTier, catSize);
+      const glow: Sprite = rarityGlow(ctx.app, sp, champ.rarityTier, catSize);
       glow.position.copyFrom(sp.position);
       c.addChild(glow, sp);
 
@@ -341,7 +331,9 @@ export function createNursery(ctx: UiContext): Room {
     return c;
   }
 
-  /** Лёгкая золотая аура зоны дропа: мягкое свечение + кольцо-посадка на площадке. */
+  /** Золотая аура зоны дропа: мягкое свечение + кольцо-посадка на площадке.
+   *  Яркая намеренно: аура лежит в слое декора, а сверху её накрывает цветной
+   *  ореол редкости кота «в руках» — сквозь него подсветка должна читаться. */
   function buildAura(cx: number, standY: number, pedW: number,
     zone: { x: number; y: number; w: number; h: number }): Graphics {
     const a = new Graphics();
@@ -349,11 +341,14 @@ export function createNursery(ctx: UiContext): Room {
     const ecy = zone.y + zone.h / 2 - 4;
     for (let k = 4; k >= 1; k--) {
       a.ellipse(cx, ecy, zone.w * 0.62 * (k / 4), zone.h * 0.56 * (k / 4))
-        .fill({ color: 0xf6d98a, alpha: 0.084 });
+        .fill({ color: 0xf6d98a, alpha: 0.252 }); // ×3 к прежней яркости
     }
-    // кольцо на площадке — куда встанут лапы чемпиона
+    // кольцо на площадке — куда встанут лапы чемпиона; широкий внешний
+    // ореол + яркий тонкий контур поверх, чтобы кольцо не терялось на мраморе
     a.ellipse(cx, standY, pedW * 0.4, pedW * 0.1)
-      .stroke({ width: 2.5, color: 0xe7b24c, alpha: 0.95 });
+      .stroke({ width: 9, color: 0xf6d98a, alpha: 0.45 });
+    a.ellipse(cx, standY, pedW * 0.4, pedW * 0.1)
+      .stroke({ width: 4, color: 0xffe08a, alpha: 1 });
     a.visible = false;
     a.zIndex = 2000; // подсказка-подсветка — поверх всех тумб слоя декора
     return a;
@@ -372,7 +367,7 @@ export function createNursery(ctx: UiContext): Room {
     for (let i = 0; i < pedAuras.length; i++) {
       const a = pedAuras[i]!;
       a.visible = i === hover;
-      if (a.visible) a.alpha = 0.8 + Math.sin(auraT * 5) * 0.2; // лёгкое «дыхание»
+      if (a.visible) a.alpha = 0.92 + Math.sin(auraT * 5) * 0.08; // «дыхание», без просадки яркости
     }
   }
 
@@ -461,6 +456,8 @@ export function createNursery(ctx: UiContext): Room {
     pedNodes = [];
     for (const a of pedAuras) a.destroy();
     pedAuras = [];
+    for (const m of pedMarks) m.destroy();
+    pedMarks = [];
     pedRects = [];
     const pedCount = pedCountFor(ctx); // всегда 5 (открытые + запертые с замком)
     const w = ctx.roomW, h = ctx.roomH;
@@ -493,7 +490,26 @@ export function createNursery(ctx: UiContext): Room {
       const aura = buildAura(cx, standY, pedW, zone);
       shell.decor.addChild(aura);
       pedAuras.push(aura);
+      // Прозрачный «обмер» зоны дропа для подсветки обучения: рисует ничего
+      // (alpha 0), но даёт честные getBounds; для событий выключен целиком.
+      const mark = new Graphics();
+      mark.rect(zone.x, zone.y, zone.w, zone.h).fill({ color: 0xffffff, alpha: 0 });
+      mark.eventMode = 'none';
+      shell.decor.addChild(mark);
+      pedMarks.push(mark);
     }
+  }
+
+  /**
+   * Узел-якорь пьедестала для обучения: первая ОТКРЫТАЯ и свободная тумба
+   * (иначе — просто первая открытая). Отдаём зону дропа, а не корпус тумбы.
+   */
+  function tutorPedestalMark(): Container | null {
+    const open = championSlots(ctx.state);
+    for (let i = 0; i < Math.min(open, pedMarks.length); i++) {
+      if (!championAt(ctx.state, i)) return pedMarks[i]!;
+    }
+    return pedMarks[0] ?? null;
   }
 
   /**
@@ -520,21 +536,12 @@ export function createNursery(ctx: UiContext): Room {
       ctx.toast('Кот на выставке 🏆 приносит доход');
       return true;
     }
-    // клиника-шприц: уронили кота на станцию → диалог лечения (раньше проверки
-    // «чемпион мимо пьедестала», иначе чемпиона снимет с выставки вместо лечения)
-    if (clinicZone.contains(lp.x, lp.y)) {
-      if (!isUnlocked(ctx.state, 'clinic')) {
-        ctx.toast('Открой «Ветеринара» в Генолабе 🔬');
-        return false;             // заперто → кот вернётся на своё место
-      }
-      ctx.commit();               // grab-спрайт уничтожен — вернём кота на пол/пьедестал
-      ctx.openHealConfirm(cat);   // «Полечить?» (📺 +1 ❤ / 💎 полностью)
-      return true;
-    }
     // криокапсула (справа): уронили кота на станцию → диалог заморозки (📺/💰/💎).
     // Станция есть только при открытом крио-банке — иначе дроп сюда не перехватываем.
+    // (Ветеринар отсюда убран — теперь это шприц в Инкубаторе, на кота в слоте вязки.)
     if (cryoUnlocked(ctx.state) && cryoZone.contains(lp.x, lp.y)) {
-      ctx.commit();               // grab-спрайт уничтожен — вернём кота на пол/пьедестал
+      ctx.commit();               // grab-спрайт уничтожен — пол пересобран, кот снова виден
+      standByStation(cat);        // откажешься морозить — кот остаётся у капсулы
       ctx.openFreezeConfirm(cat); // «Заморозить?» (📺 бесплатно / 💰 / 💎)
       return true;
     }
@@ -663,7 +670,6 @@ export function createNursery(ctx: UiContext): Room {
     feederUpdate = feeder.update;
 
     refreshChampions();
-    refreshClinic(); // замок станции снимается, когда уровень дорастает
     refreshCryo();   // станция-криокапсула появляется, когда открыт крио-банк
     floor.refresh();
   }
@@ -678,7 +684,12 @@ export function createNursery(ctx: UiContext): Room {
       feederAcc += dt;
       if (feederAcc >= FEEDER_UPDATE_S) { feederAcc = 0; feederUpdate?.(); }
     }, tryDropCat,
-    // Обучение новичка: подсветить конкретного кота на полу (см. ui/tutorial.ts).
-    anchor: (key) => (key.startsWith('cat:') ? floor.nodeOf(key.slice(4)) : null),
+    // Обучение новичка (см. ui/tutorial.ts): `cat:<id>` — котик на полу,
+    // 'pedestal' — зона дропа свободной тумбы выставки.
+    anchor: (key) => {
+      if (key.startsWith('cat:')) return floor.nodeOf(key.slice(4));
+      if (key === 'pedestal') return tutorPedestalMark();
+      return null;
+    },
   };
 }

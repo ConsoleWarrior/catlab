@@ -72,6 +72,9 @@ export interface Ysdk {
   features?: YaFeatures;
   auth?: { openAuthDialog(): Promise<void> };
   adv?: YaAdv;
+  /** События платформы (game_api_pause / game_api_resume). */
+  on?(event: string, cb: () => void): void;
+  off?(event: string, cb: () => void): void;
 }
 
 interface YaGamesApi {
@@ -154,6 +157,31 @@ export function gameplayStop(): void {
   try { sdk?.features?.GameplayAPI?.stop(); } catch { /* метода нет */ }
 }
 
+let pauseHandler: ((on: boolean) => void) | null = null;
+let pauseBound = false;
+
+/**
+ * Подписаться на паузу от самой платформы (`game_api_pause` / `game_api_resume`).
+ * Площадка присылает их шире, чем видят наши колбэки рекламы: своя реклама
+ * поверх игры, окно покупок, переключение вкладки, сворачивание окна. По
+ * документации на паузу игра обязана остановить игровой цикл и музыку.
+ *
+ * Регистрировать можно до подъёма SDK — подпишемся, как только он появится.
+ */
+export function setPlatformPauseHandler(fn: (on: boolean) => void): void {
+  pauseHandler = fn;
+  bindPauseEvents();
+}
+
+function bindPauseEvents(): void {
+  if (pauseBound || !pauseHandler || !sdk?.on) return;
+  try {
+    sdk.on('game_api_pause', () => pauseHandler?.(true));
+    sdk.on('game_api_resume', () => pauseHandler?.(false));
+    pauseBound = true;
+  } catch { /* старый SDK без событий — остаются свои паузы вокруг рекламы */ }
+}
+
 async function bootstrap(): Promise<void> {
   await waitSdkScript();
 
@@ -166,6 +194,7 @@ async function bootstrap(): Promise<void> {
     sdk = null; // вне платформы init не проходит — это нормальный сценарий
     return;
   }
+  bindPauseEvents(); // SDK появился — вешаем паузу платформы (см. setPlatformPauseHandler)
 
   try {
     // scopes: false — доступ к данным игрока БЕЗ запроса личных данных, т.е. без

@@ -17,10 +17,11 @@ import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
   netIncomePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
   moveCat, clearBreederSlot, keepKittenWithParents,
-  nextLevelRep, unlocksAtLevel, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
+  nextLevelRep, unlocksAtLevel, levelCrystalReward, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
   finishRecipeResearch, refreshExpiredOrders,
   grantCrystals, isKnownPack, tutorialActive, tutorialStep, finishTutorial, restartTutorial,
+  markTutorialSeen, OFFLINE_REPORT_MIN_MS,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -33,6 +34,7 @@ import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
 import { Tutorial } from './tutorial.js';
 import { createFpsMeter, type FpsMeter } from './devFps.js'; // ⚠️ ВРЕМЕННОЕ DEV — убрать перед релизом
+import { DEVTOOLS } from './devTools.js';                    // ⚠️ ВРЕМЕННОЕ DEV — убрать перед релизом
 import { createIncubator } from './rooms/incubator.js';
 import { createNursery } from './rooms/nursery.js';
 import { createShelter } from './rooms/shelter.js';
@@ -43,13 +45,17 @@ import {
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
   buildHealConfirm, buildCryoMenu, buildGrowConfirm,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
-  buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel,
+  buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel, buildOfflineReport,
+  buildLevelUpPanel,
 } from './overlays.js';
+import type { OfflineReport, LevelUpInfo } from './overlays.js';
 import { buildRoomHelpPanel } from './roomHelp.js';
-import { initPlatform, loadingReady, gameplayStart, gameplayStop } from '../platform/ysdk.js';
+import {
+  initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler,
+} from '../platform/ysdk.js';
 import { loadSaveCandidates, writeSave, writeSaveAwait } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
-import { interstitialDue, showInterstitial } from '../platform/ads.js';
+import { interstitialDue, showInterstitial, setAdPauseHandler } from '../platform/ads.js';
 
 // --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
 // Сцена всегда DESIGN_H виртуальных пикселей в высоту; ширина = высота × аспект
@@ -60,11 +66,14 @@ import { interstitialDue, showInterstitial } from '../platform/ads.js';
 // цвета фона. Весь UI продолжает считать раскладку от roomW×roomH — но теперь
 // это стабильные виртуальные размеры, а не пиксели окна.
 // На тач-устройствах виртуальная высота меньше: каждый виртуальный пиксель
-// физически крупнее, весь UI (текст, кнопки, коты) растёт на ~16% — на
-// телефоне 720 было нечитаемо мелко. Вёрстка не ломается: раскладка везде
-// считается от roomW×roomH.
+// физически крупнее, весь UI (текст, кнопки, коты) растёт — на телефоне 720
+// было нечитаемо мелко. Вёрстка не ломается: раскладка везде считается от
+// roomW×roomH. Ручка укрупнения мобильной сцены — TOUCH_ZOOM: во сколько раз
+// всё крупнее, чем на ПК (1 = как на десктопе). Больше зум — крупнее текст,
+// кнопки и коты, но меньше площади комнаты влезает в кадр.
 const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
-const DESIGN_H = IS_TOUCH ? 580 : 720;
+const TOUCH_ZOOM = 1.47;
+const DESIGN_H = IS_TOUCH ? Math.round(720 / TOUCH_ZOOM) : 720;
 // уже 4:3 не сжимаемся (полосы сверху/снизу) — напр. портрет на мобиле, где
 // платформа при одной поддерживаемой ориентации сама показывает заглушку
 const MIN_ASPECT = 4 / 3;
@@ -117,7 +126,16 @@ export class Game implements UiContext {
   private readonly adLayer = new Container();
   private adCurtain: Container | null = null;
   private adPaused = false;
+  // Причины, по которым игра сейчас стоит: 'ad' — показ рекламы (наш вызов),
+  // 'platform' — пауза от площадки (её реклама, окно покупок, уход со вкладки),
+  // 'hidden' — вкладка свёрнута. Набор, а не флаг: причины накладываются, и
+  // снимать паузу можно только когда ушла последняя.
+  private readonly pauseReasons = new Set<string>();
   private rooms: Room[] = [];
+  // Комнаты, чей вид отстал от состояния. Пересобирается только видимое (см.
+  // commit/refreshVisibleRooms) — полная пересборка всех пяти комнат на каждое
+  // действие игрока и была причиной подвисаний на мобиле.
+  private roomDirty: boolean[] = [];
   private hasCryoRoom = false;   // включена ли 5-я комната Крио-банк (по cryoUnlocked)
   private cryoRebuildPending = false; // отложенная пересборка ряда при открытии крио-банка
   private currentRoom = 0;
@@ -162,6 +180,12 @@ export class Game implements UiContext {
   private incomeAcc = 0;
   private saveTimer = 0;
   private wasStarving = false;   // для тоста «корм закончился» ровно при переходе к голоду
+  // Отчёт «С возвращением» посчитан при загрузке сейва — но сцены тогда ещё нет,
+  // поэтому окно показывается в конце start() (см. applyOffline).
+  private pendingOffline: OfflineReport | null = null;
+  // Повышение уровня лаборатории ждёт показа панелью: копится в checkLevelUp (из
+  // любого источника опыта), показывается в update, когда экран свободен от оверлеев.
+  private pendingLevelUp: LevelUpInfo | null = null;
   private toastT: Text | null = null;
   private toastUntil = 0;
 
@@ -251,6 +275,12 @@ export class Game implements UiContext {
       navDot: (i) => this.dots[i] ?? null,
       overlayOpen: () => this.overlayOpen,
       skip: () => { finishTutorial(this.state); this.commit(); this.toast('Подсказки выключены — справка по кнопке ℹ️ у названия комнаты'); },
+      finish: () => {
+        finishTutorial(this.state);
+        this.commit();
+        this.save();
+        this.toast('Обучение пройдено! 🎓 Дальше — Генолаб: 📖 Котодекс и рецепты пород');
+      },
     });
     this.root.addChild(
       this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer,
@@ -258,7 +288,7 @@ export class Game implements UiContext {
     );
     this.root.mask = this.rootMask;
     // ⚠️ ВРЕМЕННОЕ DEV: панель FPS поверх всего, кроме маски (кнопка 📊 в топбаре).
-    if (import.meta.env.DEV) {
+    if (DEVTOOLS) {
       this.devFps = createFpsMeter(this.app);
       this.root.addChildAt(this.devFps.layer, this.root.children.indexOf(this.rootMask));
     }
@@ -284,6 +314,19 @@ export class Game implements UiContext {
     loadingReady();
     gameplayStart();
 
+    // Отчёт «С возвращением» (посчитан в applyOffline при загрузке сейва) — с
+    // небольшой паузой, чтобы игрок сначала увидел свою лабораторию, а уже потом
+    // окно поверх неё.
+    if (this.pendingOffline) setTimeout(() => this.showOfflineReport(), 700);
+
+    // Пауза на время ЛЮБОЙ рекламы — и межстраничной, и 📺 за награду (п. 4.7).
+    // Висит на общей обвязке показа, поэтому работает для всех восьми кнопок 📺,
+    // где бы их ни звали.
+    setAdPauseHandler((on) => this.setPause('ad', on));
+    // И пауза, которую присылает сама площадка: её собственная реклама поверх
+    // игры, окно покупок, уход со вкладки (game_api_pause / game_api_resume).
+    setPlatformPauseHandler((on) => this.setPause('platform', on));
+
     // Магазин поднимаем в фоне: пока каталог не пришёл, кнопка 💎+ просто скрыта
     // (updateHud проверяет доступность каждый кадр). Здесь же платформа отдаёт
     // зависшие покупки — их доначисление обязательно для модерации.
@@ -302,9 +345,18 @@ export class Game implements UiContext {
     });
 
     // Автосейв при сворачивании/закрытии — с flush: облачная запись уходит
-    // немедленно, дожидаться её в beforeunload всё равно нельзя.
+    // немедленно, дожидаться её в beforeunload всё равно нельзя. Заодно глушим
+    // звук: п. 1.3 требований — «при сворачивании страницы с игрой на десктопных
+    // и мобильных устройствах звук останавливается». Ждать game_api_pause от
+    // площадки тут нельзя: вне платформы его не будет вовсе.
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { this.save(true); gameplayStop(); } else gameplayStart();
+      const hidden = document.hidden;
+      this.setPause('hidden', hidden);
+      if (hidden) { this.save(true); gameplayStop(); return; }
+      gameplayStart();
+      // вкладку разморозили: пока она была скрыта, доход не капал — доначисляем
+      // за пропущенное время и показываем тот же отчёт, что и при входе в игру
+      this.resumeFromBackground();
     });
     window.addEventListener('beforeunload', () => this.save(true));
     // Канвас привязан к visualViewport — реально видимой области. На мобиле
@@ -317,7 +369,7 @@ export class Game implements UiContext {
     window.visualViewport?.addEventListener('resize', onResize);
     window.visualViewport?.addEventListener('scroll', onResize);
 
-    if (import.meta.env.DEV) {
+    if (DEVTOOLS) {
       (window as unknown as { __game: unknown }).__game = {
         app: this.app, state: this.state,
         goRoom: (i: number) => this.goRoom(i),
@@ -330,6 +382,14 @@ export class Game implements UiContext {
         openDev: () => this.openDevMenu(),
         fps: () => this.devFps?.toggle(), // панель FPS из консоли (кнопка 📊 в топбаре)
         ad: () => this.runInterstitial(), // проверка шторки/паузы без ожидания 8 мин
+        // окно «С возвращением» без реальной отлучки (по умолчанию — обрезка потолком)
+        offlineReport: (r: Partial<OfflineReport> = {}) => {
+          this.pendingOffline = {
+            coins: 1240, awayMin: 190, incomeMin: 120,
+            cappedByTime: true, cappedByFood: false, born: 2, rep: 40, ...r,
+          };
+          this.showOfflineReport();
+        },
         openBoostMenu: (id = 'tierUp') => this.openBoostMenu(id),
         openCatMenu: (id?: string) => {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
@@ -385,6 +445,7 @@ export class Game implements UiContext {
           setTimeout(() => this.goRoom(this.rooms.length - 1), 30);
         },
         openCryoMenu: (i = 0) => { const c = this.state.cryo[i]; if (c) this.openCryoMenu(c); },
+        tutor: () => this.devToggleTutorial(), // ⚠️ ВРЕМЕННОЕ DEV: прогон обучения из консоли
         save: () => this.save(),
       };
     }
@@ -501,9 +562,16 @@ export class Game implements UiContext {
     if (reset) finishTutorial(this.state);
   }
 
-  /** Офлайн-прогресс: родившиеся котята + накопленный доход. */
+  /**
+   * Офлайн-прогресс: родившиеся котята + накопленный доход. Заметную отлучку
+   * (от OFFLINE_REPORT_MIN_MS) с реальным доходом показываем окном «С возвращением»
+   * — там же 📺-надбавка; всё остальное (короткая пауза, нулевой доход) остаётся
+   * тостом, чтобы окно не всплывало на каждой перезагрузке вкладки.
+   */
   private applyOffline(): void {
     const now = this.now();
+    const awayMs = now - this.state.lastSeenAt;
+    const levelBefore = this.state.level; // офлайн-рождения могли поднять уровень
     const events = collectReady(this.state, now, this.rng);
     // Офлайн-рождения показать негде — расселяем малышей по комнатам (если есть
     // место), а если мест нет нигде — оставляем с роднёй в слоте (растут медленно).
@@ -517,11 +585,43 @@ export class Game implements UiContext {
     const born = events.filter((e) => e.kitten).length;
     const rep = events.reduce((sum, e) => sum + (e.rep ?? 0), 0);
     const inc = collectIncome(this.state, now);
+    // Уровень вырос за время отсутствия — панель повышения покажется в update, когда
+    // экран освободится (после окна «С возвращением», если оно есть). Кристаллы-подарок
+    // уже начислены внутри collectReady (addReputation).
+    if (this.state.level > levelBefore) this.queueLevelUp(levelBefore, this.state.level);
+
+    if (inc.coins > 0 && awayMs >= OFFLINE_REPORT_MIN_MS) {
+      this.pendingOffline = { ...inc, born, rep };
+      return;
+    }
     const parts: string[] = [];
     if (born) parts.push(`родилось котят: ${born} 🐱`);
     if (rep) parts.push(`+${rep} ⭐`);
     if (inc.coins) parts.push(`доход: +💰${inc.coins}`);
     if (parts.length) setTimeout(() => this.toast('С возвращением! ' + parts.join(', ')), 600);
+  }
+
+  /** Показать посчитанный отчёт «С возвращением» (сцена к этому моменту уже собрана). */
+  private showOfflineReport(): void {
+    const report = this.pendingOffline;
+    if (!report) return;
+    this.pendingOffline = null;
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildOfflineReport(this, report, close));
+  }
+
+  /**
+   * Возврат из фона (свернули вкладку, заблокировали телефон). Пока страница
+   * скрыта, игровой цикл стоит и lastSeenAt заморожен на моменте ухода — добираем
+   * пропущенное тем же кодом, что и при запуске. Короткие переключения (меньше
+   * порога отчёта) не трогаем вовсе: там и начислять нечего, и окно ни к чему.
+   */
+  private resumeFromBackground(): void {
+    if (this.adPaused) return; // ещё на паузе (реклама/площадка) — цикл не идёт
+    if (this.now() - this.state.lastSeenAt < OFFLINE_REPORT_MIN_MS) return;
+    this.applyOffline();
+    this.commit(); // начисленный доход и расселённые котята — в HUD и комнаты
+    this.showOfflineReport();
   }
 
   /** flush=true — облачную запись отправить немедленно (сворачивание/закрытие). */
@@ -532,7 +632,14 @@ export class Game implements UiContext {
   // --- UiContext ---
 
   commit(): void {
-    for (const r of this.rooms) r.refresh();
+    // Пересобираем только то, что игрок сейчас видит. Остальные комнаты помечаем
+    // «отставшими» — их вид соберётся заново, когда они появятся на экране
+    // (refreshVisibleRooms в update). Пересборка комнаты недешёвая: сносится всё
+    // содержимое и заново создаются десятки Text/Graphics, каждый со своей
+    // текстурой — делать это для четырёх невидимых комнат на каждое действие
+    // означало ~200 мс залипания на любое действие игрока.
+    this.roomDirty = this.rooms.map(() => true);
+    this.refreshVisibleRooms();
     // Крио-банк открылся/исчез (покупка узла «Криогенетика») — состав комнат
     // изменился: пересобираем ряд целиком. Откладываем на следующий тик, т.к. commit
     // мог прийти из обработчика тапа по узлу Генолаба, а layout() уничтожает его
@@ -576,16 +683,27 @@ export class Game implements UiContext {
 
   clearSelection(): void { this.selection.length = 0; }
 
+  /**
+   * Досборка «отставших» комнат — тех, что попали в кадр. Видимых всегда не
+   * больше двух (текущая + соседняя, пока доезжает свайп), плюс та, к которой
+   * едем. Зовётся каждый кадр, но почти всегда это лишь проверка пары флагов.
+   */
+  private refreshVisibleRooms(): void {
+    if (this.roomW <= 0) return;
+    const first = Math.floor(-this.world.x / this.roomW);
+    for (const i of [first, first + 1, this.currentRoom]) {
+      if (!this.roomDirty[i]) continue;
+      this.roomDirty[i] = false;
+      this.rooms[i]?.refresh();
+    }
+  }
+
   goRoom(index: number): void {
     this.currentRoom = Math.max(0, Math.min(this.rooms.length - 1, index));
     this.targetX = -this.currentRoom * this.roomW;
     this.updateNav();
-    // Финал обучения: дошёл до Генолаба с первой породой — дальше играем сами.
-    if (this.rooms[this.currentRoom]?.id === 'genolab' && tutorialStep(this.state) === 'codex') {
-      finishTutorial(this.state);
-      this.toast('Обучение пройдено! 🎓 Тапни породу — увидишь её рецепты');
-      this.save();
-    }
+    // Финал обучения теперь наступает по последнему шагу (кот на пьедестале) —
+    // его ловит сам показ подсказок, см. Tutorial.update → TutorHost.finish.
     // тикает только текущая комната — хор спящих гасим, «пол» новой комнаты
     // сам восстановит его на первом же тике (если там кто-то спит)
     sfxPurrSync([]);
@@ -618,19 +736,34 @@ export class Game implements UiContext {
   }
 
   /**
+   * Пауза игры и звука по требованию площадки (п. 4.7 — при показе любой
+   * полноэкранной рекламы, и п. 1.3 — при сворачивании страницы). Причины
+   * складываются: пока держится хоть одна, игра стоит и звук молчит.
+   */
+  private setPause(reason: string, on: boolean): void {
+    const was = this.pauseReasons.size > 0;
+    if (on) this.pauseReasons.add(reason); else this.pauseReasons.delete(reason);
+    const now = this.pauseReasons.size > 0;
+    if (now === was) return;
+    this.adPaused = now; // update() замирает: доход, таймеры комнат, анимация
+    sfxPause(now);       // мяуканье, хор мурлыканья и фоновая музыка
+  }
+
+  /**
    * Показ межстраничной по правилам площадки (см. GDD §6.7): игрока
    * предупреждаем отсчётом, игровой процесс и звук — на паузу, тапы под шторку
    * не проходят (случайный клик по рекламе = снижение дохода и риск блокировки).
+   * Паузу берём на себя уже на время отсчёта; сам показ её продлит (см.
+   * setAdPauseHandler), поэтому причина одна и та же.
    */
   private async runInterstitial(): Promise<void> {
-    this.adPaused = true; // update() замирает: доход, таймеры комнат, анимация
+    this.setPause('curtain', true);
     // жест, которым переключили комнату, считаем законченным: после рекламы он не
     // должен «продолжиться» и дёрнуть ленту комнат от старой точки касания
     this.pointerActive = false;
     this.dragging = false;
     this.axisLock = 'none';
     this.pendingGrab = null;
-    sfxPause(true);
     for (let n = AD_COUNTDOWN_S; n > 0; n--) {
       this.drawAdCurtain(`Реклама через ${n}`);
       await sleep(1000);
@@ -638,8 +771,7 @@ export class Game implements UiContext {
     this.drawAdCurtain('Реклама…');
     await showInterstitial();
     this.hideAdCurtain();
-    sfxPause(false);
-    this.adPaused = false;
+    this.setPause('curtain', false);
   }
 
   /** Рисует/обновляет шторку. Без текста — просто перерисовка под новый размер. */
@@ -742,6 +874,8 @@ export class Game implements UiContext {
   }
 
   openPairPreview(mother: Cat, father: Cat): void {
+    // шаг обучения «посмотри прогноз пары» — из состояния его не вычислить
+    if (markTutorialSeen(this.state, 'preview')) this.save();
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildPairPreview(this, mother, father, close));
   }
@@ -763,6 +897,8 @@ export class Game implements UiContext {
   }
 
   openOrders(): void {
+    // шаг обучения «загляни на доску заказов» — открытие панели состояние не меняет
+    if (markTutorialSeen(this.state, 'orders')) this.save();
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildOrdersPanel(this, close));
   }
@@ -786,8 +922,9 @@ export class Game implements UiContext {
     this.showOverlay(buildShopPanel(this, close));
   }
 
-  /** ⚠️ ВРЕМЕННОЕ DEV-меню (кнопка 🛠, только import.meta.env.DEV) — убрать перед релизом. */
+  /** ⚠️ ВРЕМЕННОЕ DEV-меню (кнопка 🛠, только при DEVTOOLS) — убрать перед релизом. */
   openDevMenu(): void {
+    if (!DEVTOOLS) return; // в прод-сборке ветка сворачивается, и buildDevMenu вытрясается
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildDevMenu(this, close));
   }
@@ -795,9 +932,9 @@ export class Game implements UiContext {
   /**
    * ⚠️ ВРЕМЕННОЕ DEV: кнопка 🎓 — прогнать обучение по требованию (убрать перед
    * релизом вместе с кнопкой). Тумблер: идёт — выключаем, не идёт — включаем
-   * заново и уводим в Питомник, откуда начинается первый шаг. Шаг считается от
-   * состояния, поэтому на отыгранной партии подсветка встанет в конец («codex»):
-   * чтобы увидеть обучение с нуля, нужна новая игра (?reset).
+   * заново и уводим в комнату текущего шага. Шаг считается от состояния, поэтому
+   * на отыгранной партии подсветка встанет туда, куда дотянулся прогресс (скорее
+   * всего сразу в конец); чтобы увидеть обучение с нуля, нужна новая игра (?reset).
    */
   devToggleTutorial(): void {
     if (tutorialActive(this.state)) {
@@ -810,11 +947,16 @@ export class Game implements UiContext {
     restartTutorial(this.state);
     this.commit();
     this.save();
-    if (tutorialStep(this.state) === 'codex') {
-      this.toast('DEV: обучение включено, но котёнок уже есть — с нуля только на новой игре');
+    const step = tutorialStep(this.state);
+    if (!step) {
+      finishTutorial(this.state); // всё уже сделано — заново вести некуда
+      this.commit();
+      this.toast('DEV: все шаги уже пройдены — с нуля только на новой игре');
       return;
     }
-    this.goRoom(this.roomIndex('nursery'));
+    this.goRoom(this.roomIndex(step === 'adopt' || step === 'orders' ? 'shelter'
+      : step === 'drag' || step === 'menu' || step === 'analyze' || step === 'champion' ? 'nursery'
+        : 'incubator'));
     this.toast('DEV: обучение включено 🎓');
   }
 
@@ -846,7 +988,7 @@ export class Game implements UiContext {
     // ореол редкости под котом «в руках» (только для спрайтов из текстуры)
     let glow: Sprite | undefined;
     if (sprite instanceof Sprite) {
-      glow = rarityGlow(sprite, opts.cat.rarityTier, opts.displayH);
+      glow = rarityGlow(this.app, sprite, opts.cat.rarityTier, opts.displayH);
       glow.position.set(gx, gy);
       this.dragLayer.addChild(glow);
     }
@@ -1002,6 +1144,7 @@ export class Game implements UiContext {
       this.world.addChild(r.container);
       r.refresh();
     });
+    this.roomDirty = this.rooms.map(() => false); // ряд собран заново — отставших нет
 
     this.buildHud();
     this.buildNav();
@@ -1089,9 +1232,10 @@ export class Game implements UiContext {
     this.hud.addChild(gear);
     rx -= btnW + btnGap;
 
-    // ⚠️ ВРЕМЕННОЕ: кнопка режима разработчика (валюты/уровень). Только в dev-сборке
-    // (в проде для Яндекса не появляется). Удалить вместе с buildDevMenu перед релизом.
-    if (import.meta.env.DEV) {
+    // ⚠️ ВРЕМЕННОЕ: кнопка режима разработчика (валюты/уровень). Только на dev-сервере и
+    // в тестовой сборке (в прод-архиве для Яндекса не появляется — см. devTools.ts).
+    // Удалить вместе с buildDevMenu перед релизом.
+    if (DEVTOOLS) {
       const dev = new Button({ text: '🛠', w: btnW, h: bh, color: COLORS.warn, textColor: COLORS.ink, fontSize: fs + 2 });
       dev.position.set(rx - btnW / 2, ti / 2);
       dev.onTap = () => this.openDevMenu();
@@ -1171,20 +1315,44 @@ export class Game implements UiContext {
   }
 
   /**
-   * Баннер повышения уровня. Сверяет текущий уровень с последним показанным; при
-   * росте — тост со списком того, что открылось (агрегирует все пройденные уровни,
-   * если прыгнули через несколько сразу). Вызывается из commit() — ловит все
-   * источники опыта (рождение/пристройство/лаборатория/заказ) единообразно.
+   * Повышение уровня. Сверяет текущий уровень с последним показанным; при росте —
+   * ставит в очередь панель поздравления (агрегирует все пройденные уровни, если
+   * прыгнули через несколько сразу). Вызывается из commit() — ловит все источники
+   * опыта (рождение/пристройство/лаборатория/заказ) единообразно.
    */
   private checkLevelUp(): void {
     if (this.state.level <= this.shownLevel) { this.shownLevel = this.state.level; return; }
     const from = this.shownLevel;
     this.shownLevel = this.state.level;
-    const items: string[] = [];
-    for (let lv = from + 1; lv <= this.state.level; lv++) items.push(...unlocksAtLevel(lv));
-    this.toast(items.length
-      ? `🎉 Уровень ${this.state.level}! Открыто: ${items.join(', ')}`
-      : `🎉 Уровень ${this.state.level}!`);
+    this.queueLevelUp(from, this.state.level);
+  }
+
+  /**
+   * Копит повышение уровня (уровни from+1..to) для показа панелью. Собирает сумму
+   * подарка 💎 (levelCrystalReward — уже начислены в addReputation) и список того,
+   * что открылось (unlocksAtLevel). Два повышения подряд до показа — объединяются.
+   */
+  private queueLevelUp(from: number, to: number): void {
+    if (to <= from) return;
+    const unlocks: string[] = [];
+    let crystals = 0;
+    for (let lv = from + 1; lv <= to; lv++) {
+      unlocks.push(...unlocksAtLevel(lv));
+      crystals += levelCrystalReward(lv);
+    }
+    if (this.pendingLevelUp) {
+      crystals += this.pendingLevelUp.crystals;
+      unlocks.unshift(...this.pendingLevelUp.unlocks);
+    }
+    this.pendingLevelUp = { level: to, crystals, unlocks };
+  }
+
+  /** Показать накопленную панель повышения уровня (экран уже свободен от оверлеев). */
+  private showLevelUpPanel(): void {
+    const info = this.pendingLevelUp;
+    if (!info) return;
+    this.pendingLevelUp = null;
+    this.showOverlay(buildLevelUpPanel(this, info, () => this.closeOverlay()));
   }
 
   private buildNav(): void {
@@ -1385,6 +1553,10 @@ export class Game implements UiContext {
       else this.world.x = this.targetX;
     }
 
+    // комната, которую вынесло в кадр, могла отстать от состояния — дособираем
+    // её здесь, до подсветки обучения (та ищет якорь в уже собранной комнате)
+    this.refreshVisibleRooms();
+
     // котик «в руках»: взяли → чуть крупнее («поп»), мягко следует, лёгкая
     // деформация и наклон-отставание от движения
     if (this.grab) {
@@ -1475,6 +1647,10 @@ export class Game implements UiContext {
       if (res.recipe) this.toast(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`);
       else if (res.refunded) this.toast('Исследовать нечего — все рецепты открыты, ресурсы возвращены ↩');
     }
+
+    // Панель повышения уровня — когда экран свободен: не поверх другого оверлея и
+    // не вместо окна «С возвращением» (у него приоритет при входе в игру).
+    if (this.pendingLevelUp && !this.overlayOpen && !this.pendingOffline) this.showLevelUpPanel();
 
     this.updateHud();
 

@@ -3,12 +3,13 @@ import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, startBreeding, assignBreeder, clearBreederSlot, isInSlot,
   collectReady, adoptCat, moveCat, keepKittenWithParents,
-  buyUpgrade, unlockGene, collectIncome, incubationDuration,
+  buyUpgrade, unlockGene, collectIncome, offlineAdBonus, claimOfflineAdBonus, incubationDuration,
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, isRescuePair, buyBoost, adChargeBoost, toggleBoost, activeBoostId, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
   revealPedigree, pedigreeHasFog, serialize, deserialize, BOOST_AD_COOLDOWN_MS,
 } from './index.js';
 import { STARTER_CAT_COST, MAX_HEARTS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
+import * as C from './config.js';
 import type { GameState } from './index.js';
 
 function pair(s: GameState) {
@@ -165,19 +166,28 @@ describe('лимит вязок (статус «Старый»)', () => {
     expect(female.breedCount).toBe(MAX_HEARTS);
     expect(breedsLeft(female)).toBe(0);
     expect(isOld(female)).toBe(true);
-    // «Старого» нельзя ни свести, ни поставить в слот
+    // «Старого» нельзя свести, но в слот он встаёт (там его лечит шприц-ветеринар)
     expect(startBreeding(s, 0, female.id, male.id, now).ok).toBe(false);
-    expect(assignBreeder(s, 0, female.id, now).ok).toBe(false);
+    expect(assignBreeder(s, 0, female.id, now).ok).toBe(true);
   });
 
-  it('«Старого» кота блокируют startBreeding и assignBreeder', () => {
+  it('«Старого» блокирует только startBreeding; assignBreeder его пускает (для лечения)', () => {
     const s = createInitialState(makeRng(72), 0);
     const { female, male } = pair(s);
     female.breedCount = MAX_HEARTS; // искусственно состарили
     expect(isOld(female)).toBe(true);
-    expect(assignBreeder(s, 0, female.id, 0).ok).toBe(false);
+    expect(assignBreeder(s, 0, female.id, 0).ok).toBe(true);
+    expect(isInSlot(s, female.id)).toBe(true);
     expect(startBreeding(s, 0, female.id, male.id, 0).ok).toBe(false);
     expect(male.breedCount).toBe(0); // несостоявшаяся вязка не засчиталась партнёру
+  });
+
+  it('«Бесплодный» (0 ❤ с рождения) тоже встаёт в слот — иначе его не подлечить', () => {
+    const s = createInitialState(makeRng(73), 0);
+    const { female } = pair(s);
+    female.maxHearts = 0; // тяжёлый инбридинг: родился без сердец
+    expect(isOld(female)).toBe(true);
+    expect(assignBreeder(s, 0, female.id, 0).ok).toBe(true);
   });
 });
 
@@ -560,5 +570,45 @@ describe('пассивный доход', () => {
     const cap = offlineCapMin(s);
     const r2 = collectIncome(s, cap * 60_000 * 5); // далеко за потолком
     expect(r2.coins).toBe(Math.floor(rate * cap));
+  });
+
+  it('отчёт для окна «С возвращением»: время отлучки и причина обрезки', () => {
+    const s = createInitialState(makeRng(9), 0);
+    s.champions = [s.cats[0]!.id];
+    const cap = offlineCapMin(s);
+
+    // уложились в потолок и корма хватило — обрезки нет
+    s.lastSeenAt = 0;
+    const short = collectIncome(s, 30 * 60_000);
+    expect(short.awayMin).toBeCloseTo(30);
+    expect(short.incomeMin).toBeCloseTo(30);
+    expect(short.cappedByTime).toBe(false);
+    expect(short.cappedByFood).toBe(false);
+
+    // ушли надолго — доход обрезан потолком офлайна
+    s.food = C.FOOD_CAP_BASE;
+    s.lastSeenAt = 0;
+    const long = collectIncome(s, (cap + 60) * 60_000);
+    expect(long.awayMin).toBeCloseTo(cap + 60);
+    expect(long.incomeMin).toBeCloseTo(cap);
+    expect(long.cappedByTime).toBe(true);
+
+    // кормушка пуста — доход обрезан голодом
+    s.food = 0;
+    s.lastSeenAt = 0;
+    const hungry = collectIncome(s, 30 * 60_000);
+    expect(hungry.coins).toBe(0);
+    expect(hungry.cappedByFood).toBe(true);
+  });
+
+  it('📺-надбавка добавляет 20% от начисленного за отсутствие', () => {
+    const s = createInitialState(makeRng(9), 0);
+    s.coins = 1000;
+    expect(offlineAdBonus(250)).toBe(50);
+    expect(offlineAdBonus(4)).toBe(0);   // меньше монеты — кнопки в окне не будет
+    expect(offlineAdBonus(-10)).toBe(0); // отчёт без дохода награды не даёт
+
+    expect(claimOfflineAdBonus(s, 250)).toBe(50);
+    expect(s.coins).toBe(1050);
   });
 });

@@ -5,7 +5,7 @@
 
 import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { Application, FederatedPointerEvent, Point } from 'pixi.js';
-import type { Cat, BirthEvent, Ancestor, LiveRoom } from '../game/index.js';
+import type { Cat, BirthEvent, Ancestor, LiveRoom, OfflineIncome } from '../game/index.js';
 import {
   isBusy, isInSlot, freeBreedSlot, assignBreeder, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
@@ -19,7 +19,8 @@ import {
   healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cloneCostCoins, cryoCount, cryoCapacity,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
-  analyzeCat, analyzeCoinCost, KINSHIP_RU,
+  analyzeCat, freeAnalyzeCat, analyzeCoinCost, tutorialActive, KINSHIP_RU,
+  claimOfflineAdBonus, offlineAdBonus, OFFLINE_AD_BONUS,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
   RESEARCH, unlockResearch, researchLevel, researchNext, researchExtraCoins, canAffordResearch,
@@ -360,6 +361,205 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
   };
 
   render();
+  return root;
+}
+
+/** Что показать в окне «С возвращением»: начисление + что ещё случилось без игрока. */
+export interface OfflineReport extends OfflineIncome {
+  born: number; // родившихся котят разобрали по комнатам (см. Game.applyOffline)
+  rep: number;  // ⭐ за эти рождения
+}
+
+/** «2 ч 15 мин» / «45 мин» / «1 д 6 ч» — длительность отлучки по-человечески. */
+function fmtAway(min: number): string {
+  const total = Math.max(1, Math.round(min));
+  const h = Math.floor(total / 60);
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return rh ? `${d} д ${rh} ч` : `${d} д`;
+  }
+  const m = total % 60;
+  if (h <= 0) return `${m} мин`;
+  return m ? `${h} ч ${m} мин` : `${h} ч`;
+}
+
+/**
+ * «С возвращением»: сколько лаборатория заработала, пока игрока не было. Открывается
+ * само при входе в игру и при возврате из фона (см. Game.applyOffline) — но только
+ * после заметной отлучки и когда доход реально капнул, иначе показывается обычный тост.
+ *
+ * 📺 добавляет OFFLINE_AD_BONUS от уже начисленного. Награда одноразовая: кнопка
+ * гаснет на время показа ролика, а после начисления окно закрывается — второй раз
+ * тот же отчёт не открыть (он живёт только до закрытия окна).
+ */
+export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close: () => void): Container {
+  const W = 340;
+  const pad = 24;
+  const root = new Container();
+  const parts: Container[] = [];
+
+  const title = label('🌙 С возвращением!', 20, COLORS.ink, '800');
+  title.position.set(W / 2, 32);
+  parts.push(title);
+
+  const away = label(`Вас не было ${fmtAway(report.awayMin)}`, 13, COLORS.inkSoft, '700');
+  away.position.set(W / 2, 56);
+  parts.push(away);
+
+  let y = 76;
+
+  // главная строка отчёта — заработок на плашке цвета монет
+  const plate = panel(W - pad * 2, 64, COLORS.card, 14);
+  plate.position.set(pad, y);
+  const cap = label('Лаборатория заработала', 12, COLORS.inkSoft, '700');
+  cap.position.set(W / 2, y + 18);
+  const sum = label(`💰 +${report.coins}`, 28, COLORS.coins, '800');
+  sum.position.set(W / 2, y + 42);
+  parts.push(plate, cap, sum);
+  y += 74;
+
+  // почему не больше: потолок офлайна важнее (его лечат улучшением), пустая
+  // кормушка — вторым, показываем что-то одно, чтобы окно не превращалось в стену
+  const limitNote = report.cappedByTime
+    ? `⏳ Доход копился ${fmtAway(report.incomeMin)} — это потолок офлайна`
+    : report.cappedByFood
+      ? `🍽 Корм закончился — доход шёл ${fmtAway(report.incomeMin)}`
+      : '';
+  if (limitNote) {
+    const note = label(limitNote, 11.5, COLORS.warn, '800');
+    note.position.set(W / 2, y + 8);
+    parts.push(note);
+    y += 22;
+    const hint = label(
+      report.cappedByTime ? 'поднять потолок: 🌙 «Ночной смотритель» в Улучшениях' : 'кормушка в Питомнике',
+      10.5, COLORS.inkSoft, '600',
+    );
+    hint.position.set(W / 2, y + 6);
+    parts.push(hint);
+    y += 20;
+  }
+
+  if (report.born) {
+    const b = label(`🐱 Родилось котят: ${report.born}${report.rep ? `  ⭐ +${report.rep}` : ''}`, 13, COLORS.ink, '800');
+    b.position.set(W / 2, y + 10);
+    parts.push(b);
+    y += 26;
+  }
+
+  y += 8;
+  const btnW = W - pad * 2;
+
+  // 📺 надбавка: только если она хотя бы в одну монету (иначе кнопка-обманка)
+  const bonus = offlineAdBonus(report.coins);
+  if (bonus > 0) {
+    const adBtn = new Button({
+      text: `📺 +${Math.round(OFFLINE_AD_BONUS * 100)}%  ·  💰 +${bonus}`,
+      w: btnW, h: 48, color: COLORS.good, textColor: 0xffffff, fontSize: 16,
+    });
+    adBtn.position.set(W / 2, y + 24);
+    adBtn.onTap = () => {
+      adBtn.enabled = false; // ролик уже показывается — второй тап награды не даст
+      void showRewarded().then((watched) => {
+        if (!watched) { adBtn.enabled = true; ctx.toast('Реклама недоступна'); return; }
+        const got = claimOfflineAdBonus(ctx.state, report.coins);
+        ctx.commit();
+        ctx.toast(`Надбавка за просмотр: 💰 +${got}`);
+        close();
+      });
+    };
+    parts.push(adBtn);
+    y += 56;
+  }
+
+  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+  closeBtn.position.set(W / 2, y + 21);
+  closeBtn.onTap = close;
+  parts.push(closeBtn);
+  y += 52;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), ...parts);
+  return root;
+}
+
+/** Что показать в панели повышения уровня лаборатории. */
+export interface LevelUpInfo {
+  level: number;      // достигнутый уровень лаборатории (итоговый, если прыгнули через несколько)
+  crystals: number;   // 💎 подарок суммарно за пройденные уровни
+  unlocks: string[];  // что открылось (агрегировано по всем пройденным уровням; может быть пусто)
+}
+
+/**
+ * Панель повышения уровня лаборатории. Открывается сама (Game.checkLevelUp), когда
+ * уровень вырос от любого источника опыта. Показывает поздравление, подарок 💎 и
+ * список того, что открылось по уровню (слоты/пьедесталы/фичи/узлы «Улучшений»).
+ * Кристаллы к этому моменту уже начислены (actions.addReputation) — здесь только показ.
+ */
+export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () => void): Container {
+  void ctx;
+  const W = 340;
+  const pad = 24;
+  const root = new Container();
+  const parts: Container[] = [];
+
+  const title = label('🎉 Новый уровень!', 20, COLORS.ink, '800');
+  title.position.set(W / 2, 32);
+  parts.push(title);
+
+  let y = 54;
+
+  // Главная плашка: «Поздравляем! Достигнут ⭐ Уровень N лаборатории».
+  const plate = panel(W - pad * 2, 62, COLORS.card, 14);
+  plate.position.set(pad, y);
+  const cong = label('Поздравляем! Достигнут', 12.5, COLORS.inkSoft, '700');
+  cong.position.set(W / 2, y + 17);
+  const lvlT = label(`⭐ Уровень ${info.level} лаборатории`, 19, COLORS.ink, '800');
+  lvlT.position.set(W / 2, y + 41);
+  parts.push(plate, cong, lvlT);
+  y += 74;
+
+  // Подарок кристаллами (на цветной плашке 💎).
+  if (info.crystals > 0) {
+    const gift = panel(W - pad * 2, 40, COLORS.crystals, 12);
+    gift.position.set(pad, y);
+    const gt = label(`🎁 Подарок: 💎 +${info.crystals}`, 16, 0xffffff, '800');
+    gt.position.set(W / 2, y + 20);
+    parts.push(gift, gt);
+    y += 50;
+  }
+
+  // Что открылось на этом уровне (бывает пусто — тогда просто поздравление + 💎).
+  if (info.unlocks.length) {
+    const head = label('Стало доступно:', 14, COLORS.ink, '800');
+    head.anchor.set(0, 0.5);
+    head.position.set(pad, y + 8);
+    parts.push(head);
+    y += 24;
+    for (const u of info.unlocks) {
+      const line = new Text({
+        text: `• ${u}`,
+        style: {
+          fontFamily: FONT, fontSize: 14, fontWeight: '600', fill: COLORS.inkSoft,
+          align: 'left', wordWrap: true, wordWrapWidth: W - pad * 2 - 12, lineHeight: 19,
+        },
+      });
+      line.anchor.set(0, 0);
+      line.position.set(pad + 6, y);
+      parts.push(line);
+      y += line.height + 5;
+    }
+    y += 6;
+  } else {
+    y += 4;
+  }
+
+  const closeBtn = new Button({ text: 'Отлично!', w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
+  closeBtn.position.set(W / 2, y + 23);
+  closeBtn.onTap = close;
+  parts.push(closeBtn);
+  y += 58;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), ...parts);
   return root;
 }
 
@@ -1064,7 +1264,8 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
 /**
  * Подтверждение Генетического анализа (система знаний, этап B): вскрывает СРАЗУ
  * всю родословную кота и его скрытые гены (породы предков). Механику не меняет —
- * скрытые гены работали и до анализа. Оплата 💰 (цена по тиру) или 📺 (без кулдауна).
+ * скрытые гены работали и до анализа. Оплата 💰 (цена по тиру) или 📺 (без кулдауна);
+ * самый первый анализ новичку достаётся подарком обучения (см. freeAnalyzeCat).
  * После успеха открывает родословную — показать игроку, что он купил.
  */
 export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
@@ -1098,40 +1299,59 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   const btnW = W - 48;
   const done = (): void => { ctx.commit(); ctx.toast('Анализ готов 🧬 родословная вскрыта'); close(); ctx.openPedigree(cat); };
 
-  // 💰 основная цена — по тиру кота (породистого анализировать дороже)
-  const cost = analyzeCoinCost(cat.rarityTier);
-  const afford = ctx.state.coins >= cost;
-  const coinBtn = new Button({
-    text: `💰 Провести анализ · ${cost}`,
-    w: btnW, h: 44, color: afford ? COLORS.primary : COLORS.cardEdge,
-    textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
-  });
-  coinBtn.enabled = afford;
-  coinBtn.position.set(W / 2, y + 22);
-  coinBtn.onTap = () => {
-    const r = analyzeCat(ctx.state, cat.id, 'coins', ctx.now());
-    if (!r.ok) { ctx.toast(r.reason); return; }
-    done();
-  };
-  root.addChild(coinBtn);
-  y += 52;
-
-  // 📺 бесплатная альтернатива (кулдауна больше нет — анализ инфо-действие)
-  const adBtn = new Button({
-    text: '📺 Бесплатно за рекламу',
-    w: btnW, h: 44, color: COLORS.good, textColor: 0xffffff, fontSize: 15,
-  });
-  adBtn.position.set(W / 2, y + 22);
-  adBtn.onTap = () => {
-    void showRewarded().then((watched) => {
-      if (!watched) { ctx.toast('Реклама недоступна'); return; }
-      const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
+  // Подарок обучения: САМЫЙ ПЕРВЫЙ анализ бесплатный (см. freeAnalyzeCat) — новичок
+  // должен увидеть, что именно даёт анализ, прежде чем платить за него 💰 или 📺.
+  // Пока подарок цел, платные варианты не показываем: одно очевидное действие.
+  const gift = tutorialActive(ctx.state) && !ctx.state.tutorial.freeAnalyzeUsed && !cat.analyzed;
+  if (gift) {
+    const freeBtn = new Button({
+      text: '🎁 Бесплатно — подарок лаборатории',
+      w: btnW, h: 44, color: COLORS.warn, textColor: COLORS.ink, fontSize: 14,
+    });
+    freeBtn.position.set(W / 2, y + 22);
+    freeBtn.onTap = () => {
+      const r = freeAnalyzeCat(ctx.state, cat.id);
       if (!r.ok) { ctx.toast(r.reason); return; }
       done();
+    };
+    root.addChild(freeBtn);
+    y += 52;
+  } else {
+    // 💰 основная цена — по тиру кота (породистого анализировать дороже)
+    const cost = analyzeCoinCost(cat.rarityTier);
+    const afford = ctx.state.coins >= cost;
+    const coinBtn = new Button({
+      text: `💰 Провести анализ · ${cost}`,
+      w: btnW, h: 44, color: afford ? COLORS.primary : COLORS.cardEdge,
+      textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
-  };
-  root.addChild(adBtn);
-  y += 52;
+    coinBtn.enabled = afford;
+    coinBtn.position.set(W / 2, y + 22);
+    coinBtn.onTap = () => {
+      const r = analyzeCat(ctx.state, cat.id, 'coins', ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      done();
+    };
+    root.addChild(coinBtn);
+    y += 52;
+
+    // 📺 бесплатная альтернатива (кулдауна больше нет — анализ инфо-действие)
+    const adBtn = new Button({
+      text: '📺 Бесплатно за рекламу',
+      w: btnW, h: 44, color: COLORS.good, textColor: 0xffffff, fontSize: 15,
+    });
+    adBtn.position.set(W / 2, y + 22);
+    adBtn.onTap = () => {
+      void showRewarded().then((watched) => {
+        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
+        if (!r.ok) { ctx.toast(r.reason); return; }
+        done();
+      });
+    };
+    root.addChild(adBtn);
+    y += 52;
+  }
 
   const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
@@ -1479,9 +1699,10 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // засорять список и держать действия у станций). См. rooms/nursery.ts.
 
   // Группа «куда отправить кота»: слот вязки + переезд между комнатами.
-  // Слота нет у тех, кому в нём не место: занятый вязкой, «Старый»/«Бесплодный»
-  // (сердца кончились) и тот, кто уже стоит в слоте.
-  if (!busy && !isOld(cat) && !isInSlot(ctx.state, cat.id)) {
+  // Слота нет у тех, кому в нём не место: занятый вязкой и тот, кто уже стоит в слоте.
+  // «Старого»/«Бесплодного» пускаем: свести его нельзя, но именно в слоте его лечит
+  // шприц-ветеринар (см. assignBreeder).
+  if (!busy && !isInSlot(ctx.state, cat.id)) {
     addBtn('💞 В свободный слот вязки', COLORS.primary, true, () => {
       const idx = freeBreedSlot(ctx.state, cat);
       if (idx < 0) { ctx.toast('Нет свободных слотов вязки 💞 — освободи слот в Инкубаторе'); return; }
@@ -1673,9 +1894,10 @@ export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Containe
 
 /**
  * Ветеринар: диалог лечения кота (💉). Показывает сердца (потраченные 🖤 / оставшиеся ❤️)
- * и два способа восстановить вязки: 📺 реклама (+1 ❤, глобальный кулдаун) или
+ * и два способа восстановить вязки: 📺 реклама (+HEAL_AD_HEARTS ❤, без кулдауна) или
  * 💎 полное лечение (цена ∝ потраченным сердцам). maxHearts НЕ меняется — потолок
  * от инбридинга неизлечим; «Бесплодных» (0 ❤) ветеринар не берёт (healCat откажет).
+ * Открывается перетаскиванием шприца-ветеринара на кота в слоте вязки (Инкубатор).
  */
 export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
   const W = 340;
@@ -1991,7 +2213,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
 /**
  * Доска заказов (кнопка 📋 в Приюте). Каждый слот всегда держит активный заказ со своим
  * 6-часовым таймером жизни: не выполнил вовремя — заказ сам сменится (на строке виден
- * остаток «⏳ обновится через Ч:ММ»). У каждого заказа свой часовой кулдаун 📺-обновления.
+ * остаток «⏳ сменятся через Ч:ММ»). У каждого заказа свой часовой кулдаун 📺-обновления.
  * Выполнить заказ можно ТОЛЬКО котом из корзины: кнопка «Выполнить» активна лишь у строк,
  * под которые он подходит.
  *
@@ -2049,7 +2271,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     row.addChild(rew);
 
     // таймер жизни — текстом в правом нижнем углу (под кнопкой «Выполнить»)
-    const timer = label(`⏳ обновится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, 11.5, COLORS.inkSoft, '600');
+    const timer = label(`⏳ сменятся через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, 11.5, COLORS.inkSoft, '600');
     timer.anchor.set(1, 0.5);
     timer.position.set(cardW - 16, 70);
     row.addChild(timer);

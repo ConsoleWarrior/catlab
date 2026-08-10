@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { makeRng, makeCat } from '../genetics/index.js';
 import {
   createInitialState, deserialize, serialize,
-  levelForReputation, nextLevelRep, addReputation,
+  levelForReputation, nextLevelRep, addReputation, levelCrystalReward,
   isUnlocked, unlockLevelOf, maxSlotsForLevel, maxChampionsForLevel,
   nextSlotUnlockLevel, nextPedestalUnlockLevel,
   buyUpgrade, sendToLab, buyBoost, unlockResearch, adoptCat,
@@ -49,11 +49,35 @@ describe('уровень лаборатории по опыту', () => {
     const r1 = addReputation(s, 300); // 300 < порог L2 (360)
     expect(r1.gained).toBe(300);
     expect(r1.leveledUp).toBe(false);
+    expect(r1.crystalsGifted).toBe(0);
     expect(s.level).toBe(1);
     const r2 = addReputation(s, 300); // всего 600 → ур.2
     expect(r2.leveledUp).toBe(true);
     expect(s.level).toBe(2);
     expect(addReputation(s, -100).gained).toBe(0); // отрицательное не отнимает
+  });
+
+  it('повышение уровня дарит 💎: со 2-го уровня 6,9,…,30 (3×уровень)', () => {
+    expect(levelCrystalReward(1)).toBe(0);      // старт — без подарка
+    expect(levelCrystalReward(2)).toBe(6);
+    expect(levelCrystalReward(10)).toBe(30);
+    expect(levelCrystalReward(MAX_LEVEL + 1)).toBe(0);
+
+    const s = createInitialState(makeRng(9), 0);
+    const before = s.crystals;
+    const r = addReputation(s, LEVEL_REP_THRESHOLDS[1]!); // ровно порог ур.2
+    expect(s.level).toBe(2);
+    expect(r.crystalsGifted).toBe(6);
+    expect(s.crystals).toBe(before + 6);
+  });
+
+  it('прыжок через несколько уровней дарит сумму 💎 всех пройденных', () => {
+    const s = createInitialState(makeRng(10), 0);
+    const before = s.crystals;
+    const r = addReputation(s, LEVEL_REP_THRESHOLDS[2]!); // сразу до ур.3 (пропустили ур.2)
+    expect(s.level).toBe(3);
+    expect(r.crystalsGifted).toBe(6 + 9); // подарки ур.2 и ур.3 суммируются
+    expect(s.crystals).toBe(before + 15);
   });
 });
 

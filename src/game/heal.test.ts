@@ -18,7 +18,7 @@ function setup(seed = 1, spent = 2) {
   return { s, cat };
 }
 
-describe('клиника: 📺 реклама (+1 ❤, без кулдауна)', () => {
+describe('клиника: 📺 реклама (+2 ❤, без кулдауна)', () => {
   it('снимает HEAL_AD_HEARTS с breedCount и фиксирует факт просмотра; maxHearts не трогает', () => {
     const { s, cat } = setup(1, 2);
     const heartsBefore = heartsOf(cat);
@@ -30,12 +30,13 @@ describe('клиника: 📺 реклама (+1 ❤, без кулдауна)'
   });
 
   it('повторный просмотр сразу же снова работает (кулдауна нет)', () => {
-    const { s, cat } = setup(2, 3);
+    const spent = C.HEAL_AD_HEARTS * 2 + 1; // хватит на два полноценных лечения
+    const { s, cat } = setup(2, spent);
     const t0 = 1_000_000;
     expect(healCat(s, cat.id, 'ad', t0).ok).toBe(true);
-    expect(cat.breedCount).toBe(2);
+    expect(cat.breedCount).toBe(spent - C.HEAL_AD_HEARTS);
     expect(healCat(s, cat.id, 'ad', t0 + 1).ok).toBe(true);
-    expect(cat.breedCount).toBe(1);
+    expect(cat.breedCount).toBe(spent - C.HEAL_AD_HEARTS * 2);
   });
 
   it('реклама на одном коте не блокирует лечение другого', () => {
@@ -94,10 +95,18 @@ describe('клиника: отказы', () => {
     expect(healCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'кот полностью здоров' });
   });
 
-  it('кота в слоте вязки не лечит', () => {
+  it('кота, поставленного в слот (вязка ещё не идёт), лечит — в этом смысл шприца в Инкубаторе', () => {
     const { s, cat } = setup(9, 1);
     expect(assignBreeder(s, 0, cat.id, 0).ok).toBe(true);
-    expect(healCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'кот в слоте вязки' });
+    expect(healCat(s, cat.id, 'ad', 0).ok).toBe(true);
+    expect(cat.breedCount).toBe(0); // потраченное сердце восстановлено
+  });
+
+  it('во время ИДУЩЕЙ вязки лечить нельзя', () => {
+    const { s, cat } = setup(9, 1);
+    expect(assignBreeder(s, 0, cat.id, 0).ok).toBe(true);
+    s.slots[0]!.readyAt = 999_999; // вязка пошла (таймер запущен)
+    expect(healCat(s, cat.id, 'ad', 0)).toMatchObject({ ok: false, reason: 'кот сейчас в вязке' });
   });
 
   it('без узла «Ветеринар» — reason locked (клиника заперта)', () => {

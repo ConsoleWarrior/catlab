@@ -31,6 +31,7 @@ type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch'
 
 interface Actor {
   cat: Cat;
+  sig: string;             // слепок всего, что влияет на вид (см. viewSig) — для точечной пересборки
   view: Container;         // якорь на полу (позиция = точка контакта с землёй)
   body: Container;         // спрайт+ореол — только они «подпрыгивают» при ходьбе
   sprite: Sprite;
@@ -109,7 +110,12 @@ export function createLivingFloor(
   layer: Container,
   plane: FloorPlane,
   getCats: () => Cat[],
-): { refresh(): void; tick(dt: number): void; nodeOf(catId: string): Container | null } {
+): {
+  refresh(): void;
+  tick(dt: number): void;
+  nodeOf(catId: string): Container | null;
+  placeAt(catId: string, lx: number, ly: number, hold?: number): void;
+} {
   let actors: Actor[] = [];
   const effects: GrowFx[] = [];
   const moodFx: MoodFx[] = [];
@@ -129,6 +135,43 @@ export function createLivingFloor(
   function enterState(a: Actor, state: ActorState, dur: number): void {
     a.state = state;
     a.stateLeft = dur;
+  }
+
+  const actorOf = (catId: string): Actor | null => {
+    const a = actors.find((x) => x.cat.id === catId);
+    return a && !a.view.destroyed ? a : null;
+  };
+
+  /**
+   * Спрятать/показать кота на полу (пока он «в руках», его рисует dragLayer).
+   * Ищем актёра по id, а не держим ссылку на его view: пол могли пересобрать,
+   * пока кота несли, — старый контейнер уже уничтожен, и show() ушёл бы в пустоту.
+   */
+  function setHidden(catId: string, hidden: boolean): void {
+    const a = actorOf(catId);
+    if (a) a.view.visible = !hidden;
+  }
+
+  /**
+   * Поставить кота в точку слоя пола (локальные координаты) и задержать его там
+   * на hold секунд. Нужно станциям комнаты (ветеринар, криокапсула, лаборатория,
+   * пристройство): после диалога кот остаётся у станции, куда его принесли, а не
+   * возвращается на прежнее место через полкомнаты.
+   */
+  function placeAt(catId: string, lx: number, ly: number, hold = 10): void {
+    const nz = Math.max(0, Math.min(1, (yNear - ly) / Math.max(1, yNear - yFar)));
+    const m = maxOx(nz);
+    const ox = Math.max(-m, Math.min(m, lx - centerX));
+    rememberFloorPos(catId, ox / m, nz); // переживёт пересборку пола (ресайз/реклама)
+    const a = actorOf(catId);
+    if (!a) return;
+    a.ox = ox; a.targetOx = ox;
+    a.z = nz; a.targetZ = nz;
+    a.leapT = 0;
+    a.view.position.set(centerX + ox, yAt(nz));
+    a.view.scale.set(growthScale(a.cat, ctx.now()) * depthScale(nz));
+    a.view.zIndex = Math.round(yAt(nz));
+    enterState(a, 'idle', hold); // постоит у станции, потом сам пойдёт гулять
   }
 
   /** Новая цель блуждания: с вероятностью 80% — вокруг «своей» зоны (мягко,
@@ -176,6 +219,23 @@ export function createLivingFloor(
     if (!a.busy) enterState(a, 'idle', 5 + Math.random() * 3);
   }
 
+  /**
+   * Всё, из чего собран вид кота на полу: занятость, взрослость, выбор для вязки,
+   * бейдж «новый», подпись. Совпали слепки — значит пересобирать актёра незачем,
+   * можно оставить готового (см. refresh). Иначе любое действие игрока
+   * пересоздавало бы всю толпу: спрайт, ореол, тень и по два Text на кота.
+   */
+  function viewSig(cat: Cat): string {
+    return [
+      isBusy(ctx.state, cat.id) ? 1 : 0,
+      isAdult(cat, ctx.now()) ? 1 : 0,
+      ctx.selection.includes(cat.id) ? 1 : 0,
+      cat.isNew ? 1 : 0,
+      cat.name ?? '',
+      cat.rarityTier,
+    ].join('|');
+  }
+
   function makeActor(cat: Cat, savedOx?: number, savedZ?: number, savedFacing?: 1 | -1, savedPhase?: number): Actor {
     const busy = isBusy(ctx.state, cat.id);
     const adult = isAdult(cat, ctx.now());
@@ -198,7 +258,7 @@ export function createLivingFloor(
     const sprite = aiSprite ?? catSprite(ctx.app, cat, catH);
     if (busy) sprite.alpha = 0.55;
     // ореол редкости — под спрайтом, чтобы наружу выходила лишь цветная кромка
-    const glow = rarityGlow(sprite, cat.rarityTier, catH);
+    const glow = rarityGlow(ctx.app, sprite, cat.rarityTier, catH);
     if (busy) glow.alpha *= 0.5;
     body.addChild(glow, sprite);
     view.addChild(body);
@@ -276,7 +336,7 @@ export function createLivingFloor(
     const zoneU = !adult ? 0 : (cat.genotype.sex === 'male' ? -ZONE_BIAS : ZONE_BIAS);
 
     const actor: Actor = {
-      cat, view, body, sprite, glow, shadow, baseScale, busy, adult,
+      cat, sig: viewSig(cat), view, body, sprite, glow, shadow, baseScale, busy, adult,
       ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? mem?.facing ?? 1,
       phase: savedPhase ?? mem?.phase ?? Math.random() * 6,
       leapT: 0, leapVX: 0, leapPending: false, turnT: 0, moodT: 2 + Math.random() * 6, blink, zoneU,
@@ -292,23 +352,26 @@ export function createLivingFloor(
         cat,
         // «на весу» кот того же размера, что и на полу (с учётом роста и глубины)
         displayH: catH * growthScale(cat, ctx.now()) * depthScale(actor.z),
-        hide: () => { view.visible = false; },
-        show: () => { view.visible = true; },
+        hide: () => setHidden(cat.id, true),
+        show: () => setHidden(cat.id, false),
         onTap: () => ctx.openCatMenu(cat),
         onDrop: (gx, gy) => {
+          // пол могли пересобрать, пока кота несли — берём актуального актёра по id
+          const a = actorOf(cat.id);
+          if (!a) return;
           // gx/gy — координаты виртуальной сцены (uiRoot) → в систему слоя пола
           const lp = layer.toLocal({ x: gx, y: gy ?? 0 }, ctx.uiRoot);
-          if (gy === undefined) lp.y = yAt(actor.z);
+          if (gy === undefined) lp.y = yAt(a.z);
           // глубина из точки сброса по Y (вне диапазона — прижимаем к краю)
           const nz = Math.max(0, Math.min(1, (yNear - lp.y) / Math.max(1, yNear - yFar)));
           const m = maxOx(nz);
-          actor.z = nz;
-          actor.ox = Math.max(-m, Math.min(m, lp.x - centerX));
-          actor.targetZ = nz;
-          actor.targetOx = actor.ox;
-          view.scale.set(growthScale(cat, ctx.now()) * depthScale(nz));
-          view.position.set(centerX + actor.ox, yAt(nz));
-          view.zIndex = Math.round(yAt(nz));
+          a.z = nz;
+          a.ox = Math.max(-m, Math.min(m, lp.x - centerX));
+          a.targetZ = nz;
+          a.targetOx = a.ox;
+          a.view.scale.set(growthScale(cat, ctx.now()) * depthScale(nz));
+          a.view.position.set(centerX + a.ox, yAt(nz));
+          a.view.zIndex = Math.round(yAt(nz));
         },
       }, e); });
     }
@@ -347,10 +410,18 @@ export function createLivingFloor(
     const cats = getCats();
     const keep = new Set(cats.map((c) => c.id));
     for (const a of actors) if (!keep.has(a.cat.id)) a.view.destroy({ children: true });
+    // Скрыт на полу ровно один кот — тот, что сейчас «в руках» (его рисует
+    // dragLayer). Сверяем это на каждой пересборке: иначе переиспользованный
+    // актёр (см. ниже) навсегда оставался бы невидимым после дропа на станцию —
+    // кот числится в комнате, а на полу его нет.
+    const held = ctx.carrying()?.cat.id ?? null;
     actors = cats.map((cat) => {
       const p = prev.get(cat.id);
-      if (p) p.view.destroy({ children: true }); // пересобираем (выбор/занятость могли измениться)
+      // вид кота не изменился — оставляем готового актёра со всей его анимацией
+      if (p && p.sig === viewSig(cat)) { p.cat = cat; p.view.visible = cat.id !== held; return p; }
+      if (p) p.view.destroy({ children: true }); // выбор/занятость/подпись изменились — пересобираем
       const a = makeActor(cat, p?.ox, p?.z, p?.facing, p?.phase);
+      a.view.visible = cat.id !== held;
       layer.addChild(a.view);
       return a;
     });
@@ -608,5 +679,5 @@ export function createLivingFloor(
     return a && !a.body.destroyed ? a.body : null;
   }
 
-  return { refresh, tick, nodeOf };
+  return { refresh, tick, nodeOf, placeAt };
 }

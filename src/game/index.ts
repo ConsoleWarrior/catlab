@@ -9,7 +9,7 @@ export {
   BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
   HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, AD_SKIP_MS, BOOST_AD_COOLDOWN_MS,
   BREED_SPEEDUP_CRYSTAL_PER_MIN, GROWTH_SPEEDUP_CRYSTAL_PER_MIN, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
-  LEVEL_REP_THRESHOLDS, MAX_LEVEL, nextLevelRep, unlocksAtLevel, LAB_UNLOCKS,
+  LEVEL_REP_THRESHOLDS, MAX_LEVEL, nextLevelRep, unlocksAtLevel, levelCrystalReward, LAB_UNLOCKS,
   SLOT_UNLOCK_LEVELS, PEDESTAL_UNLOCK_LEVELS,
   REP_BIRTH_RATE, REP_NEW_BREED_MULT, REP_ADOPT_MULT, REP_LAB_MULT,
   FOOD_CAP_BASE, FOOD_PER_MIN_BY_TIER, FOOD_PACK_UNITS, FOOD_PACK_COST,
@@ -19,8 +19,10 @@ export {
   CRYO_BASE_CAP, CLONE_LAB_MULT,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
   ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS, ORDER_SELL_SLOTS, ORDER_CRYSTALS,
+  ORDER_CRYSTALS_MAX, ORDER_CRYSTAL_LEVELS, orderCrystalsFor,
   ORDER_REP_BASE, ORDER_REP_GROWTH, orderRepFor,
   PEDESTAL_COSTS, PEDESTAL_PLACES, PLACE_INCOME_MULT,
+  OFFLINE_CAP_BASE_MIN, OFFLINE_REPORT_MIN_MS, OFFLINE_AD_BONUS,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature, CrystalPack } from './config.js';
 export {
@@ -61,15 +63,19 @@ export {
   msUntilOrderExpiry, canAdRefreshOrder, msUntilAdRefresh,
 } from './orders.js';
 export {
-  collectIncome, startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
+  collectIncome, offlineAdBonus, claimOfflineAdBonus,
+  startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
   keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
   speedUpBreeding, adSkipBreeding, freeSkipBreeding, speedUpGrowth, adSkipGrowth,
   putCatInBasket, clearOrderBasket,
-  buyUpgrade, unlockGene, analyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
+  buyUpgrade, unlockGene, analyzeCat, freeAnalyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
   startRecipeResearch, finishRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
   grantCrystals, firstPurchaseBonusAvailable, isKnownPack,
 } from './actions.js';
-export type { Result, BirthEvent } from './actions.js';
-export { tutorialStep, tutorialActive, finishTutorial, restartTutorial } from './tutorial.js';
+export type { Result, BirthEvent, OfflineIncome } from './actions.js';
+export {
+  tutorialStep, tutorialActive, finishTutorial, restartTutorial, markTutorialSeen,
+  analyzeTarget, adoptTarget,
+} from './tutorial.js';
 export type { TutorStep } from './tutorial.js';

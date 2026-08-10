@@ -4,7 +4,8 @@ import {
   createInitialState, matchesOrder, generateOrder, claimOrder, makeCatInstance,
   initOrders, refreshExpiredOrders, adRefreshOrder, canAdRefreshOrder, msUntilAdRefresh,
   msUntilOrderExpiry, ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS,
-  ORDER_SELL_SLOTS, ORDER_CRYSTALS, orderRepFor, MAX_LEVEL,
+  ORDER_SELL_SLOTS, ORDER_CRYSTALS, ORDER_CRYSTALS_MAX, ORDER_CRYSTAL_LEVELS, orderCrystalsFor,
+  orderRepFor, MAX_LEVEL,
 } from './index.js';
 import type { Order } from './index.js';
 
@@ -293,7 +294,7 @@ describe('⭐ за заказ: плавно по скрытому уровню �
   });
 });
 
-describe('💎 за заказ: только «цель», независимо от цены', () => {
+describe('💎 за заказ: только «цель», от уровня лабы, а не от цены', () => {
   it('дешёвый заказ-«цель» всё равно даёт 💎 (правила «от 500 ценности» больше нет)', () => {
     const s = createInitialState(makeRng(20), 0);
     s.level = 1; // самый дешёвый пул: породы 1-го скрытого уровня
@@ -306,6 +307,28 @@ describe('💎 за заказ: только «цель», независимо 
       if (o.reward.coins < 500) sawCheap = true;
     }
     expect(sawCheap).toBe(true); // на L1 такие заказы раньше шли без 💎
+  });
+
+  it('💎 растёт с уровнем лаборатории: 1 → 2 → 3 и не выше потолка', () => {
+    expect(orderCrystalsFor(1)).toBe(ORDER_CRYSTALS);
+    for (let l = 1; l <= MAX_LEVEL; l++) {
+      const expected = ORDER_CRYSTALS + ORDER_CRYSTAL_LEVELS.filter((t) => l >= t).length;
+      expect(orderCrystalsFor(l)).toBe(Math.min(ORDER_CRYSTALS_MAX, expected));
+      expect(orderCrystalsFor(l)).toBeGreaterThanOrEqual(orderCrystalsFor(l - 1)); // монотонно
+    }
+    expect(orderCrystalsFor(MAX_LEVEL)).toBe(ORDER_CRYSTALS_MAX);
+    expect(orderCrystalsFor(0)).toBe(ORDER_CRYSTALS); // битый сейв → как на 1-м уровне
+  });
+
+  it('заказ-«цель» выдаёт 💎 по текущему уровню лабы, «сбыт» — всегда 0', () => {
+    const s = createInitialState(makeRng(40), 0);
+    s.discoveredBreeds = ['persian'];
+    const rng = makeRng(41);
+    for (let l = 1; l <= MAX_LEVEL; l++) {
+      s.level = l;
+      expect(generateOrder(s, rng, 0, 'target').reward.crystals).toBe(orderCrystalsFor(l));
+      expect(generateOrder(s, rng, 0, 'sell').reward.crystals).toBe(0);
+    }
   });
 
   it('заказ-«сбыт» (уже выведенная порода) идёт без 💎', () => {
@@ -326,7 +349,7 @@ describe('💎 за заказ: только «цель», независимо 
     s.discoveredBreeds = [];
     const o = generateOrder(s, makeRng(25), 0, 'sell');
     expect(o.kind).toBe('target');
-    expect(o.reward.crystals).toBe(ORDER_CRYSTALS);
+    expect(o.reward.crystals).toBe(orderCrystalsFor(s.level));
   });
 
   it('доска: первые ORDER_SELL_SLOTS — «сбыт» без 💎, остальные — «цель» с 💎', () => {

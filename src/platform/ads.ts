@@ -36,6 +36,19 @@ const WATCHDOG_MS = 60_000;
 
 let showing = false;
 
+let pauseUi: ((on: boolean) => void) | null = null;
+
+/**
+ * Кто останавливает игру и звук на время показа. Требование площадки (п. 4.7):
+ * «При показе полноэкранной рекламы (interstitial или rewarded video) звук в
+ * игре и игровой процесс должны ставиться на паузу» — оба типа, не только
+ * межстраничная. Ставим это здесь, в общей обвязке показа, чтобы пауза не
+ * зависела от того, из какого места игры позвали рекламу.
+ */
+export function setAdPauseHandler(fn: (on: boolean) => void): void {
+  pauseUi = fn;
+}
+
 /**
  * Отсчёт интервала — с загрузки модуля, то есть со старта сессии: на входе в
  * игру площадка уже показывает свою рекламу, добавлять сразу свою нельзя.
@@ -100,6 +113,7 @@ export function showInterstitial(): Promise<boolean> {
 function run(show: (finish: (ok: boolean) => void) => void): Promise<boolean> {
   showing = true;
   gameplayStop(); // площадка реже показывает свою рекламу поверх игры
+  pauseUi?.(true); // игра и звук замирают на весь показ (п. 4.7)
   return new Promise((resolve) => {
     let done = false;
     const finish = (ok: boolean): void => {
@@ -108,6 +122,7 @@ function run(show: (finish: (ok: boolean) => void) => void): Promise<boolean> {
       clearTimeout(timer);
       showing = false;
       gameplayStart();
+      pauseUi?.(false);
       resolve(ok);
     };
     const timer = setTimeout(() => finish(false), WATCHDOG_MS);
@@ -119,7 +134,8 @@ function run(show: (finish: (ok: boolean) => void) => void): Promise<boolean> {
 function devMock(ms: number): Promise<boolean> {
   if (!import.meta.env.DEV) return Promise.resolve(false);
   showing = true;
+  pauseUi?.(true); // и на локалке пауза настоящая — иначе её нечем проверить
   return new Promise((resolve) => {
-    setTimeout(() => { showing = false; resolve(true); }, ms);
+    setTimeout(() => { showing = false; pauseUi?.(false); resolve(true); }, ms);
   });
 }

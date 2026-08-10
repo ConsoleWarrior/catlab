@@ -1,12 +1,20 @@
 /**
- * Обучение новичка (FTUE) — визуальный слой. Ведёт до первого котёнка: пара в
- * слот → «Свести» → подарочный ускоритель → Котодекс. Логика шага — чистая
- * функция ядра (`game/tutorial.ts`), здесь только показ.
+ * Обучение новичка (FTUE) — визуальный слой. Ведёт по базовой петле игры:
+ * 🧬 анализ → пара в слот → 🔮 прогноз пары → «Свести» → ⚡ подарочное ускорение →
+ * малыш в Приют → 🤝 в добрые руки → 📋 заказы → 🏆 пьедестал. Логика шага —
+ * чистая функция ядра (`game/tutorial.ts`), здесь только показ.
  *
  * Принцип — МЯГКАЯ подсветка: ничего не блокируется и не затемняется, все тапы
- * проходят насквозь (`eventMode = 'none'` на всём слое, кроме крестика
- * «пропустить»). Игрок волен игнорировать подсказку, уйти в другую комнату или
- * сделать шаг раньше — подсветка просто догонит его на следующем кадре.
+ * проходят насквозь. Игрок волен игнорировать подсказку, уйти в другую комнату
+ * или сделать шаг раньше — подсветка просто догонит его на следующем кадре.
+ *
+ * ⚠️ Все декоративные узлы слоя (кольцо, рука, подложка и текст плашки) обязаны
+ * иметь `eventMode = 'none'`. Одного `'passive'` на самом слое НЕ хватает: в
+ * Pixi v8 интерактивность НАСЛЕДУЕТСЯ от stage (он `'static'`), и пассивный
+ * потомок, попавший под палец, обрывает поиск цели — тап не доходит до кнопки
+ * под ним. Ровно этим багом когда-то «съедал» нажатия пустой тост-контейнер
+ * (см. Game.start). 'none' у детей + 'passive' у слоя = кнопка «пропустить»
+ * работает, остальное для событий прозрачно.
  *
  * Что рисуем:
  *  - пульсирующее кольцо вокруг цели (узел берём у комнаты через `Room.anchor`,
@@ -17,7 +25,9 @@
 
 import { Container, Graphics, Text } from 'pixi.js';
 import type { Cat } from '../game/index.js';
-import { tutorialStep, isInSlot, isAdult, isOld } from '../game/index.js';
+import {
+  tutorialStep, isInSlot, isAdult, isOld, isChampion, analyzeTarget, adoptTarget,
+} from '../game/index.js';
 import type { TutorStep } from '../game/index.js';
 import { COLORS, FONT, label } from './theme.js';
 import { NAV_RESERVE } from './rooms/shell.js';
@@ -43,6 +53,8 @@ export interface TutorHost {
   overlayOpen(): boolean;
   /** Игрок нажал «пропустить обучение». */
   skip(): void;
+  /** Все шаги пройдены — закрыть обучение (поздравление + сейв). */
+  finish(): void;
 }
 
 /** Куда указывает подсказка и что написано в плашке. */
@@ -51,6 +63,12 @@ interface Hint {
   key: string | null;    // ключ якоря внутри комнаты (null — цель не в комнате)
   text: string;
   gesture: 'tap' | 'hold' | 'carry'; // какой жест проигрывает рука
+  /**
+   * Показывать плашку поверх открытого оверлея. Нужно шагам, где само действие
+   * лежит ВНУТРИ панели (меню кота: «💞 В слот вязки», «🧬 Анализ»). На всех
+   * прочих шагах открытая панель прячет подсказку целиком — она там только мешает.
+   */
+  overOverlay?: boolean;
 }
 
 const PLATE_MAX_W = 460;
@@ -70,15 +88,19 @@ export class Tutorial {
   private lastStep: TutorStep | null = null;
 
   constructor(private readonly host: TutorHost) {
-    // 'passive', а не 'none': сам слой и его неинтерактивные дети (кольцо, рука,
-    // подложка плашки) тапы не ловят и пропускают их к игре, но интерактивный
-    // ребёнок — крестик «пропустить» — события получает. С 'none' отключилось бы
-    // всё поддерево вместе с ним.
+    // 'passive', а не 'none': сам слой тапы не ловит, но интерактивный ребёнок —
+    // крестик «пропустить» — события получает (с 'none' отключилось бы всё
+    // поддерево). Декор при этом обязан быть 'none' — см. шапку файла.
     this.layer.eventMode = 'passive';
+    this.layer.label = 'tutorial'; // опознавание слоя при отладке хит-теста
     this.layer.visible = false;
+    this.ring.eventMode = 'none';
+    this.plate.eventMode = 'passive';
+    this.plateBg.eventMode = 'none';
 
     this.hand = label('👆', 30, 0xffffff, '700');
     this.hand.alpha = 0.95;
+    this.hand.eventMode = 'none';
 
     this.plateText = new Text({
       text: '',
@@ -88,6 +110,7 @@ export class Tutorial {
       },
     });
     this.plateText.anchor.set(0, 0.5);
+    this.plateText.eventMode = 'none';
 
     // Крестик «пропустить» — единственный интерактивный элемент слоя.
     this.skipBtn = new Container();
@@ -106,13 +129,24 @@ export class Tutorial {
   /** Покадровое обновление. dt — секунды. */
   update(dt: number): void {
     const step = tutorialStep(this.host.ctx.state);
-    if (!step) { this.layer.visible = false; return; }
+    if (!step) {
+      this.layer.visible = false;
+      // Шагов больше нет, а обучение ещё открыто — значит игрок только что
+      // закрыл последний (кот на пьедестале). Поздравляем и выключаем.
+      if (this.host.ctx.state.tutorial?.done === false) this.host.finish();
+      return;
+    }
 
     this.t += dt;
     if (step !== this.lastStep) { this.gestureT = 0; this.lastStep = step; }
     this.gestureT += dt;
 
     const hint = this.hintFor(step);
+    // Открытая панель: подсказка остаётся только там, где действие внутри неё
+    // самой (меню кота), иначе прячем весь слой — он лишь загораживает диалог.
+    const overlay = this.host.overlayOpen();
+    if (overlay && !hint.overOverlay) { this.layer.visible = false; return; }
+
     const roomIdx = this.host.roomIndexById(hint.room);
     const here = this.host.currentRoomIndex() === roomIdx;
 
@@ -122,10 +156,8 @@ export class Tutorial {
     const target = node ?? navNode;
 
     this.layer.visible = true;
-    const overlay = this.host.overlayOpen();
-    // Пока открыт оверлей (например меню кота), кольцо/рука бессмысленны — цель
-    // под панелью. Плашку оставляем: на шаге «второго кота» она и объясняет,
-    // какую кнопку в этом меню нажать.
+    // Пока открыт оверлей, кольцо/рука бессмысленны — цель под панелью. Плашку
+    // оставляем: она и объясняет, какую кнопку в этом меню нажать.
     const showPointer = !overlay && !!target;
 
     this.ring.visible = showPointer;
@@ -231,11 +263,20 @@ export class Tutorial {
     this.plate.position.set(x, y);
   }
 
-  /** Текст и цель шага. Внутри `drag` подшаг выбирается по тому, кот в руках или нет. */
+  /** Текст и цель шага. Внутри шагов-переносов подшаг выбирается по «коту в руках». */
   private hintFor(step: TutorStep): Hint {
+    const ctx = this.host.ctx;
     switch (step) {
+      case 'analyze': {
+        const cat = analyzeTarget(ctx.state);
+        return {
+          room: 'nursery', key: cat ? `cat:${cat.id}` : null, gesture: 'tap', overOverlay: true,
+          text: 'Начнём с науки: тапни котика → «🧬 Генетический анализ» → 🎁 бесплатно. '
+            + 'Он вскроет родословную и скрытые гены предков — от них зависит, какие породы у тебя родятся',
+        };
+      }
       case 'drag': {
-        const held = this.host.ctx.carrying();
+        const held = ctx.carrying();
         if (held) {
           // кота уже несут: в Инкубаторе — «отпусти на слот», иначе — «неси к краю»
           const inIncubator = this.host.currentRoomIndex() === this.host.roomIndexById('incubator');
@@ -260,13 +301,20 @@ export class Tutorial {
           room: 'nursery',
           key: cat ? `cat:${cat.id}` : null,
           gesture: 'tap',
+          overOverlay: true,
           text: 'Второго проще: тапни котика → «💞 В свободный слот вязки»',
         };
       }
+      case 'preview':
+        return {
+          room: 'incubator', key: 'preview', gesture: 'tap',
+          text: 'Пара собрана — но сначала 🔮 прогноз пары: он показывает, каких котят '
+            + 'эта пара может дать и с какими шансами. Так вяжут осознанно, а не наугад',
+        };
       case 'breed':
         return {
           room: 'incubator', key: 'breed', gesture: 'tap',
-          text: 'Пара готова! Жми «Свести» — порода котёнка зависит от родителей',
+          text: 'Теперь жми «Свести» — порода котёнка зависит от родителей',
         };
       case 'skip':
         return {
@@ -278,12 +326,55 @@ export class Tutorial {
           room: 'incubator', key: 'slot', gesture: 'tap',
           text: 'Малыш вот-вот появится в окошке вязки 🥚',
         };
-      case 'codex':
-      default:
+      case 'kitten':
         return {
-          room: 'genolab', key: null, gesture: 'tap',
-          text: 'Первая порода твоя! Загляни в Генолаб → 📖 Котодекс — там вся коллекция и рецепты',
+          room: 'incubator', key: 'toShelter', gesture: 'tap',
+          text: 'Малыш родился! Пока он в окошке, слот занят. Отправь его кнопкой «🏚️ В приют» — '
+            + 'приют это перевалочный пункт для всех лишних котиков',
         };
+      case 'adopt': {
+        if (ctx.carrying()) {
+          return {
+            room: 'shelter', key: 'adopt', gesture: 'tap',
+            text: 'Отпусти котика на станцию 🤝 в правом углу — за него дадут 💰 и опыт ⭐',
+          };
+        }
+        const cat = adoptTarget(ctx.state);
+        return {
+          room: 'shelter', key: cat ? `cat:${cat.id}` : null, gesture: 'hold',
+          text: 'Простых и лишних котиков отдают «в добрые руки»: возьми котика за шкирку '
+            + 'и тащи в правый угол, на станцию 🤝. Породистых так не отдавай — им место в Питомнике',
+        };
+      }
+      case 'orders':
+        return {
+          room: 'shelter', key: 'orders', gesture: 'tap',
+          text: '📋 Заказы — главный заработок игры. Клиент называет приметы кота (цвет, узор, '
+            + 'уши, порода), ты кладёшь подходящего в 🧺 корзину под кнопкой и жмёшь «Выполнить»: '
+            + 'платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
+        };
+      case 'champion':
+      default: {
+        if (ctx.carrying()) {
+          return {
+            room: 'nursery', key: 'pedestal', gesture: 'tap',
+            text: 'Опусти котика на пьедестал 🏆 — над тумбой загорится золотая зона',
+          };
+        }
+        const cat = this.championTarget();
+        if (!cat) {
+          return {
+            room: 'incubator', key: 'slot', gesture: 'tap', overOverlay: true,
+            text: 'Родители всё ещё стоят в окошке вязки. Тапни кота → «🏠 В питомник» — '
+              + 'он пригодится на выставке',
+          };
+        }
+        return {
+          room: 'nursery', key: `cat:${cat.id}`, gesture: 'hold',
+          text: 'Последнее: возьми взрослого котика за шкирку и подними на пьедестал 🏆. '
+            + 'Чемпион на выставке приносит 💰 каждую минуту — даже пока игра закрыта',
+        };
+      }
     }
   }
 
@@ -298,5 +389,17 @@ export class Tutorial {
       && !isInSlot(s, c.id) && isAdult(c, now) && !isOld(c)
       && (!need || c.genotype.sex === need));
     return fit[0] ?? null;
+  }
+
+  /**
+   * Кот для пьедестала: взрослый (котёнка выставка не примет), гуляет по
+   * Питомнику и ещё не чемпион. Пусто — значит все взрослые заперты в окошке
+   * вязки, и подсказка сначала ведёт забрать их оттуда.
+   */
+  private championTarget(): Cat | null {
+    const s = this.host.ctx.state;
+    const now = Date.now();
+    return s.cats.find((c) => c.location === 'nursery' && isAdult(c, now)
+      && !isInSlot(s, c.id) && !isChampion(s, c.id)) ?? null;
   }
 }
