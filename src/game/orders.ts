@@ -16,9 +16,10 @@
  * одного заказа не блокирует остальные. Кулдауна на выполнение/пустых слотов нет.
  *
  * ТИП СЛОТА ФИКСИРОВАН: первые ORDER_SELL_SLOTS слотов — «сбыт» (породы, которые игрок
- * уже вывел: выполнимо прямо сейчас, но БЕЗ 💎), остальные — «цель» по уровню лаборатории
- * (могут быть ещё не выведены, зато дают 💎). Цена заказа на 💎 не влияет — влияет уровень
- * лаборатории: C.orderCrystalsFor(level) = 1 💎 (ур. 1-3) → 2 (ур. 4-7) → 3 (ур. 8+).
+ * уже вывел: выполнимо прямо сейчас), остальные — «цель» по уровню лаборатории (могут
+ * быть ещё не выведены). Цена заказа на 💎 не влияет — влияет уровень лаборатории:
+ * «цель» даёт C.orderCrystalsFor(level) = 1 💎 (ур. 1-3) → 2 (ур. 4-7) → 3 (ур. 8+),
+ * «сбыт» — 1 💎 с шансом C.ORDER_SELL_CRYSTAL_CHANCE (монетка при генерации заказа).
  */
 
 import {
@@ -113,9 +114,10 @@ function sellCandidates(state: GameState): OrderReq[] {
 }
 
 /**
- * Генерирует один заказ. `kind` выбирает пул: 'sell' — уже выведенные породы (без 💎),
- * 'target' (по умолчанию) — пул по уровню лаборатории (даёт 1..3 💎 по уровню). Если
- * сбывать ещё нечего, слот «сбыт» падает обратно на «цель» — и тогда он тоже с 💎.
+ * Генерирует один заказ. `kind` выбирает пул: 'sell' — уже выведенные породы (1 💎 с
+ * шансом 50%), 'target' (по умолчанию) — пул по уровню лаборатории (даёт 1..3 💎 по
+ * уровню). Если сбывать ещё нечего, слот «сбыт» падает обратно на «цель» — и тогда
+ * платит как «цель».
  * `adRefreshAt` — кулдаун 📺-обновления слота, переезжающий на новый заказ. Мутирует nextId.
  */
 export function generateOrder(
@@ -127,14 +129,16 @@ export function generateOrder(
   const req = cands[Math.floor(rng() * cands.length)] ?? { minRarity: 'uncommon' };
   const value = refValue(req);
   const demand = 1 + rng() * C.ORDER_DEMAND_SPREAD; // 1.0 .. 1.5
+  // 💎 за «сбыт» — монетка на заказ (половина слотов-«сбыта» приходит с кристаллом)
+  const sellCrystals = rng() < C.ORDER_SELL_CRYSTAL_CHANCE ? C.ORDER_SELL_CRYSTALS : 0;
   return {
     id: 'order' + state.nextId++,
     req,
     kind: actual,
     reward: {
       coins: Math.round(value * C.ORDER_COIN_MULT * demand),
-      // 💎 — только за «цель» (заказ под уровень лабы): не от цены заказа, а от уровня (1..3)
-      crystals: actual === 'target' ? C.orderCrystalsFor(state.level) : 0,
+      // 💎 за «цель» — не от цены заказа, а от уровня лабы (1..3); за «сбыт» — 1 с шансом 50%
+      crystals: actual === 'target' ? C.orderCrystalsFor(state.level) : sellCrystals,
       dna: Math.max(1, Math.round(value * C.ORDER_DNA_MULT)),
       reputation: refRep(req),
     },

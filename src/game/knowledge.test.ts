@@ -233,18 +233,18 @@ describe('исследование рецептов (этап D)', () => {
     expect(s.dna).toBe(dna + price.dna);
   });
 
-  it('ускорения: 💎 завершает сразу (цена ∝ остатку), 📺 срезает AD_SKIP_MS', () => {
+  it('ускорения: 💎 завершает сразу (цена ∝ остатку), 📺 срезает RECIPE_AD_SKIP_MS', () => {
     const { s } = setup(45);
     expect(startRecipeResearch(s, 0).ok).toBe(true);
     const ready0 = s.recipeResearch.readyAt;
     expect(adSkipRecipeResearch(s, 1000).ok).toBe(true);
-    expect(s.recipeResearch.readyAt).toBe(Math.max(1000, ready0 - C.AD_SKIP_MS));
+    expect(s.recipeResearch.readyAt).toBe(Math.max(1000, ready0 - C.RECIPE_AD_SKIP_MS));
     // 💎: стол ещё занят? (короткий тестовый таймер мог уже дойти до now)
     s.recipeResearch.readyAt = 1000 + 5 * 60_000; // 5 минут остатка
     s.crystals = 5;
     const r = speedUpRecipeResearch(s, 1000);
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.crystals).toBe(Math.round(5 * C.RECIPE_SPEEDUP_CRYSTAL_PER_MIN)); // 0.5 💎/мин × 5 мин = 3
+    if (r.ok) expect(r.crystals).toBe(1); // 1 💎 за каждые 5 мин остатка
     expect(s.recipeResearch.readyAt).toBe(1000);
   });
 });

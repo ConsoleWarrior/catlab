@@ -1,14 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { makeRng, makeCat, RECIPES, recipeChance } from '../genetics/index.js';
+import { makeRng, makeCat, RECIPES, recipeChance, tierOfBreed } from '../genetics/index.js';
 import {
   createInitialState, makeCatInstance,
   breedChanceMult, kinshipSafety, extraHearts, applyExtraHearts, rollKittenHearts,
   feedEfficiency, foodRatePerMin, autoFeedEnabled, collectIncome, claimOrder,
   researchBonus, offlineCapMin, incubationDuration, upgradeCost, upgradeMaxed,
   passiveRatePerMin, setChampion,
+  hiddenRaritySteps, hiddenTierWeights, buyCat, buyCatCost,
 } from './index.js';
 import * as C from './config.js';
-import type { GameState } from './index.js';
+import type { GameState, Ancestor } from './index.js';
 
 function addCat(s: GameState, breed: string, sex: 'female' | 'male' = 'female') {
   const c = makeCatInstance(s, makeCat(sex), 0, 'nursery', breed);
@@ -47,17 +48,14 @@ describe('C: селекция — шанс рецептов', () => {
     expect(breedChanceMult(s)).toBeCloseTo(1.15);
   });
 
-  it('recipeChance ×chanceMult, кап 0.95, Катализатор ×2 без стека с инбридингом', () => {
+  it('recipeChance ×chanceMult, кап 0.95 (усилители сюда не входят)', () => {
     const r = RECIPES.find((x) => x.result === 'domestic_shorthair')!; // 0.55, не родословный
-    expect(recipeChance(r, 'none', false, 1)).toBeCloseTo(0.55);
-    expect(recipeChance(r, 'none', false, 1.15)).toBeCloseTo(0.6325);
+    expect(recipeChance(r, 'none', 1)).toBeCloseTo(0.55);
+    expect(recipeChance(r, 'none', 1.15)).toBeCloseTo(0.6325);
     const big = RECIPES.find((x) => x.result === 'exotic_shorthair')!; // 0.90
-    expect(recipeChance(big, 'none', false, 1.15)).toBeCloseTo(0.95);   // упёрлись в кап
-    expect(recipeChance(r, 'none', true, 1.15)).toBeCloseTo(0.95); // прямой ×Катализатор упёрся в кап
-    // родословный рецепт с активным инбридингом: Катализатор НЕ стекается (нет ×2)
+    expect(recipeChance(big, 'none', 1.15)).toBeCloseTo(0.95);   // упёрлись в кап
     const ped = RECIPES.find((x) => x.result === 'caracat')!; // minKinship critical, база 0.08
-    expect(recipeChance(ped, 'critical', false, 1)).toBeCloseTo(0.08 * 2.5); // инбридинг ×2.5 = 0.20
-    expect(recipeChance(ped, 'critical', true, 1)).toBeCloseTo(0.08 * 2.5);  // luckyUp не удвоил
+    expect(recipeChance(ped, 'critical', 1)).toBeCloseTo(0.08 * 2.5); // инбридинг ×2.5 = 0.20
   });
 });
 
@@ -90,6 +88,71 @@ describe('C: селекция — инбридинг и здоровье', () =>
     expect(applyExtraHearts(C.MAX_HEARTS, 1)).toBe(C.MAX_HEARTS + 1);
     expect(applyExtraHearts(3, 1)).toBe(4);
     expect(applyExtraHearts(0, 1)).toBe(0); // бесплодный (0 ❤) остаётся тупиком
+  });
+});
+
+describe('C: селекция — «Тщательный отбор» (скрытая родословная покупных котов)', () => {
+  it('веса тиров предков сдвигаются по ступеням: 70/20/8/2/0 → 60/25/11/3/1 → 50/30/14/4/2', () => {
+    const s = createInitialState(makeRng(1), 0);
+    const w = (): number[] => {
+      const t = hiddenTierWeights(s);
+      return [t.common, t.uncommon, t.rare, t.epic, t.legendary].map((x) => Math.round(x * 100));
+    };
+    expect(hiddenRaritySteps(s)).toBe(0);
+    expect(w()).toEqual([70, 20, 8, 2, 0]);
+    s.research = { r_sel_select: 1 };
+    expect(w()).toEqual([60, 25, 11, 3, 1]);
+    s.research = { r_sel_select: 2 };
+    expect(w()).toEqual([50, 30, 14, 4, 2]);
+    // сумма весов остаётся 1 — раздача идёт ровно из T1
+    for (const lvlN of [0, 1, 2]) {
+      s.research = { r_sel_select: lvlN };
+      const t = hiddenTierWeights(s);
+      const sum = t.common + t.uncommon + t.rare + t.epic + t.legendary;
+      expect(sum).toBeCloseTo(1);
+    }
+  });
+
+  it('покупка кота дорожает на 25% за ступень (поверх цены уровня лаборатории)', () => {
+    const s = createInitialState(makeRng(1), 0);
+    const base = C.STARTER_CAT_COST + C.BUY_CAT_COST_PER_LEVEL * s.level; // ур.1 → 55
+    const up = C.BUY_CAT_COST_PER_SELECT;
+    expect(buyCatCost(s)).toBe(base);
+    s.research = { r_sel_select: 1 };
+    expect(buyCatCost(s)).toBe(Math.round(base * (1 + up)));
+    s.research = { r_sel_select: 2 };
+    expect(buyCatCost(s)).toBe(Math.round(base * (1 + 2 * up)));
+    s.cats = [];                       // анти-софт-лок сильнее наценки: первый кот бесплатно
+    expect(buyCatCost(s)).toBe(0);
+  });
+
+  it('у купленных котов реально растёт доля породистых предков', () => {
+    const countPedigree = (steps: number): number => {
+      const rng = makeRng(77);
+      const s = createInitialState(rng, 0);
+      s.level = 10; s.coins = 1_000_000;
+      s.research = { r_sel_select: steps };
+      let pedigreed = 0, total = 0;
+      for (let i = 0; i < 60; i++) {
+        s.cats = s.cats.slice(0, 2);   // держим приют свободным
+        const r = buyCat(s, rng, 0);
+        expect(r.ok).toBe(true);
+        if (!r.ok) return 0;
+        const walk = (a?: Ancestor): void => {
+          if (!a) return;
+          total++;
+          if (tierOfBreed(a.breed) !== 'common') pedigreed++;
+          walk(a.mother); walk(a.father);
+        };
+        walk(r.cat.pedigree!.mother); walk(r.cat.pedigree!.father);
+      }
+      return pedigreed / total;
+    };
+    const base = countPedigree(0);
+    const maxed = countPedigree(2);
+    expect(base).toBeGreaterThan(0.15);   // ожидание 0.30
+    expect(base).toBeLessThan(0.45);
+    expect(maxed).toBeGreaterThan(base);  // ожидание 0.50
   });
 });
 

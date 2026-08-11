@@ -29,7 +29,7 @@ import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label } from './theme.js';
 import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { loadEyeData } from './eyeBlink.js';
-import { initSfx, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
+import { initSfx, sfxEvent, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
 import { Tutorial } from './tutorial.js';
@@ -55,7 +55,7 @@ import {
 } from '../platform/ysdk.js';
 import { loadSaveCandidates, writeSave, writeSaveAwait } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
-import { interstitialDue, showInterstitial, setAdPauseHandler } from '../platform/ads.js';
+import { setAdPauseHandler } from '../platform/ads.js';
 
 // --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
 // Сцена всегда DESIGN_H виртуальных пикселей в высоту; ширина = высота × аспект
@@ -81,12 +81,6 @@ const MIN_ASPECT = 4 / 3;
 // (п. 1.6.2.2); на телефонах лимита нет (п. 1.6.1 — полный экран), поэтому на
 // тач-устройствах заполняем экран целиком (современные телефоны ≤ ~2.4:1)
 const MAX_ASPECT = IS_TOUCH ? 2.5 : 2;
-
-// Предупреждение перед межстраничной рекламой: игрок должен понять, что дальше
-// не часть игры (см. GDD §6.7). Секунды отсчёта «Реклама через 3, 2, 1».
-const AD_COUNTDOWN_S = 3;
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
 
 export class Game implements UiContext {
   readonly app = new Application();
@@ -122,9 +116,6 @@ export class Game implements UiContext {
   private tutorial!: Tutorial;
   // ⚠️ ВРЕМЕННОЕ DEV: счётчик FPS (кнопка 📊 в топбаре) — см. devFps.ts, убрать перед релизом.
   private devFps: FpsMeter | null = null;
-  // Шторка межстраничной рекламы — поверх всего, включая оверлеи (см. runInterstitial).
-  private readonly adLayer = new Container();
-  private adCurtain: Container | null = null;
   private adPaused = false;
   // Причины, по которым игра сейчас стоит: 'ad' — показ рекламы (наш вызов),
   // 'platform' — пауза от площадки (её реклама, окно покупок, уход со вкладки),
@@ -284,7 +275,7 @@ export class Game implements UiContext {
     });
     this.root.addChild(
       this.world, this.hud, this.nav, this.dragLayer, this.overlayLayer,
-      this.tutorial.layer, this.toastBox, this.adLayer, this.rootMask,
+      this.tutorial.layer, this.toastBox, this.rootMask,
     );
     this.root.mask = this.rootMask;
     // ⚠️ ВРЕМЕННОЕ DEV: панель FPS поверх всего, кроме маски (кнопка 📊 в топбаре).
@@ -319,9 +310,8 @@ export class Game implements UiContext {
     // окно поверх неё.
     if (this.pendingOffline) setTimeout(() => this.showOfflineReport(), 700);
 
-    // Пауза на время ЛЮБОЙ рекламы — и межстраничной, и 📺 за награду (п. 4.7).
-    // Висит на общей обвязке показа, поэтому работает для всех восьми кнопок 📺,
-    // где бы их ни звали.
+    // Пауза на время рекламы 📺 за награду (п. 4.7). Висит на общей обвязке
+    // показа, поэтому работает для всех восьми кнопок 📺, где бы их ни звали.
     setAdPauseHandler((on) => this.setPause('ad', on));
     // И пауза, которую присылает сама площадка: её собственная реклама поверх
     // игры, окно покупок, уход со вкладки (game_api_pause / game_api_resume).
@@ -381,7 +371,6 @@ export class Game implements UiContext {
         buyPack: (id: string) => buyPack(id).then((r) => { this.commit(); return r; }),
         openDev: () => this.openDevMenu(),
         fps: () => this.devFps?.toggle(), // панель FPS из консоли (кнопка 📊 в топбаре)
-        ad: () => this.runInterstitial(), // проверка шторки/паузы без ожидания 8 мин
         // окно «С возвращением» без реальной отлучки (по умолчанию — обрезка потолком)
         offlineReport: (r: Partial<OfflineReport> = {}) => {
           this.pendingOffline = {
@@ -516,6 +505,7 @@ export class Game implements UiContext {
       slot.startedAt = 0; slot.readyAt = 0;
       slot.kittenId = kitten.id;
     }
+    sfxEvent('birth');
     this.commit();
     this.goRoom(0); // Инкубатор — увидеть малыша с роднёй в центре слота + салют
   }
@@ -710,35 +700,11 @@ export class Game implements UiContext {
     this.updateMusic();
   }
 
-  // --- межстраничная реклама ---
-
   /**
-   * Смена комнаты жестом игрока (точки навигации, стрелки, свайп) — единственная
-   * логическая пауза в этой игре: уровней и экранов результата тут нет, а
-   * переход между комнатами игрок всегда делает сам и осознанно. Только отсюда
-   * может прийти межстраничная реклама; программные переходы (DEV, перенос кота
-   * у края экрана, «показать Крио-банк») идут через goRoom и её не запускают.
-   */
-  private navRoom(index: number): void {
-    const from = this.currentRoom;
-    this.goRoom(index);
-    if (this.currentRoom !== from) this.maybeInterstitial();
-  }
-
-  private maybeInterstitial(): void {
-    // ни поверх открытой панели, ни с котом в руках, ни поверх другой рекламы
-    if (this.adPaused || this.overlayOpen || this.grab) return;
-    // и никогда во время обучения: смена комнаты — это его штатный шаг (несём
-    // кота в Инкубатор), новичок не должен упереться в рекламу на первой минуте
-    if (tutorialActive(this.state)) return;
-    if (!interstitialDue(this.now())) return;
-    void this.runInterstitial();
-  }
-
-  /**
-   * Пауза игры и звука по требованию площадки (п. 4.7 — при показе любой
-   * полноэкранной рекламы, и п. 1.3 — при сворачивании страницы). Причины
-   * складываются: пока держится хоть одна, игра стоит и звук молчит.
+   * Пауза игры и звука по требованию площадки (п. 4.7 — при показе
+   * полноэкранной рекламы, у нас это 📺 rewarded, и п. 1.3 — при сворачивании
+   * страницы). Причины складываются: пока держится хоть одна, игра стоит и звук
+   * молчит.
    */
   private setPause(reason: string, on: boolean): void {
     const was = this.pauseReasons.size > 0;
@@ -747,54 +713,6 @@ export class Game implements UiContext {
     if (now === was) return;
     this.adPaused = now; // update() замирает: доход, таймеры комнат, анимация
     sfxPause(now);       // мяуканье, хор мурлыканья и фоновая музыка
-  }
-
-  /**
-   * Показ межстраничной по правилам площадки (см. GDD §6.7): игрока
-   * предупреждаем отсчётом, игровой процесс и звук — на паузу, тапы под шторку
-   * не проходят (случайный клик по рекламе = снижение дохода и риск блокировки).
-   * Паузу берём на себя уже на время отсчёта; сам показ её продлит (см.
-   * setAdPauseHandler), поэтому причина одна и та же.
-   */
-  private async runInterstitial(): Promise<void> {
-    this.setPause('curtain', true);
-    // жест, которым переключили комнату, считаем законченным: после рекламы он не
-    // должен «продолжиться» и дёрнуть ленту комнат от старой точки касания
-    this.pointerActive = false;
-    this.dragging = false;
-    this.axisLock = 'none';
-    this.pendingGrab = null;
-    for (let n = AD_COUNTDOWN_S; n > 0; n--) {
-      this.drawAdCurtain(`Реклама через ${n}`);
-      await sleep(1000);
-    }
-    this.drawAdCurtain('Реклама…');
-    await showInterstitial();
-    this.hideAdCurtain();
-    this.setPause('curtain', false);
-  }
-
-  /** Рисует/обновляет шторку. Без текста — просто перерисовка под новый размер. */
-  private drawAdCurtain(text?: string): void {
-    let box = this.adCurtain;
-    if (!box) {
-      box = new Container();
-      box.eventMode = 'static'; // глотает тапы: под шторкой игра стоит
-      box.addChild(new Graphics(), label('', 22, 0xffffff, '700'));
-      this.adLayer.addChild(box);
-      this.adCurtain = box;
-    }
-    const [bg, t] = box.children as [Graphics, Text];
-    bg.clear();
-    bg.rect(0, 0, this.roomW, this.roomH).fill({ color: COLORS.overlay, alpha: 0.92 });
-    box.hitArea = new Rectangle(0, 0, this.roomW, this.roomH);
-    if (text !== undefined) t.text = text;
-    t.position.set(this.roomW / 2, this.roomH / 2);
-  }
-
-  private hideAdCurtain(): void {
-    this.adCurtain?.destroy({ children: true });
-    this.adCurtain = null;
   }
 
   /** Фоновый эмбиент играет в «технических» комнатах и молчит в жилых. */
@@ -838,9 +756,9 @@ export class Game implements UiContext {
     this.showOverlay(buildBulkLabConfirm(this, close));
   }
 
-  openHealConfirm(cat: Cat): void {
+  openHealConfirm(cat: Cat, onHealed?: (hearts: number) => void): void {
     const close = (): void => this.closeOverlay();
-    this.showOverlay(buildHealConfirm(this, cat, close));
+    this.showOverlay(buildHealConfirm(this, cat, close, onHealed));
   }
 
   openCryoMenu(cat: Cat): void {
@@ -1158,7 +1076,6 @@ export class Game implements UiContext {
     this.updateNav();
     this.updateMusic(); // старт игры / пересборка: включить эмбиент, если мы в «технической» комнате
     this.fitOverlay(); // открытая панель (если есть) — под новый размер экрана
-    if (this.adCurtain) this.drawAdCurtain(); // шторка рекламы переживает ресайз
   }
 
   private buildHud(): void {
@@ -1352,6 +1269,7 @@ export class Game implements UiContext {
     const info = this.pendingLevelUp;
     if (!info) return;
     this.pendingLevelUp = null;
+    sfxEvent('levelup'); // фанфара вместе с панелью, а не в момент начисления опыта
     this.showOverlay(buildLevelUpPanel(this, info, () => this.closeOverlay()));
   }
 
@@ -1374,7 +1292,7 @@ export class Game implements UiContext {
       // вверх не вылезает за низ контента (верх зоны = -14, как раньше), рост зоны
       // идёт вширь и вниз в леттербокс — чтобы не перехватывать тапы по контенту.
       d.hitArea = new Rectangle(-24, -14, 48, 30);
-      d.on('pointertap', () => this.navRoom(i));
+      d.on('pointertap', () => this.goRoom(i));
       this.nav.addChild(d);
       this.dots.push(d);
     }
@@ -1389,10 +1307,10 @@ export class Game implements UiContext {
     const rightX = Math.min(this.roomW - aw / 2 - 4, startX + totalW + gap + aw / 2);
     const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     left.position.set(leftX, y);
-    left.onTap = () => this.navRoom(this.currentRoom - 1);
+    left.onTap = () => this.goRoom(this.currentRoom - 1);
     const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     right.position.set(rightX, y);
-    right.onTap = () => this.navRoom(this.currentRoom + 1);
+    right.onTap = () => this.goRoom(this.currentRoom + 1);
     this.nav.addChild(left, right);
   }
 
@@ -1485,8 +1403,8 @@ export class Game implements UiContext {
 
   private installInput(): void {
     this.app.stage.on('pointerdown', (e: FederatedPointerEvent) => {
-      // события со сцены доходят сюда всплытием даже от шторки рекламы — на паузе
-      // жесты не обрабатываем вовсе (иначе свайп листал бы комнаты вслепую)
+      // на паузе (реклама, сворачивание вкладки) жесты не обрабатываем вовсе —
+      // иначе свайп листал бы комнаты вслепую
       if (this.adPaused) return;
       if (this.overlayOpen || this.pendingGrab) return; // котика берём — комнату не свайпим
       this.pointerActive = true;
@@ -1531,7 +1449,7 @@ export class Game implements UiContext {
       this.axisLock = 'none';
       if (!this.dragging) return;
       const moved = this.startWorldX - this.world.x; // >0 — свайп влево (к следующей)
-      if (Math.abs(moved) > this.roomW * 0.18) this.navRoom(this.currentRoom + Math.sign(moved));
+      if (Math.abs(moved) > this.roomW * 0.18) this.goRoom(this.currentRoom + Math.sign(moved));
       else this.goRoom(this.currentRoom);
       this.dragging = false;
     };
@@ -1543,7 +1461,7 @@ export class Game implements UiContext {
 
   private update(dt: number): void {
     // на время рекламы игра стоит: ни дохода, ни таймеров комнат, ни анимации
-    // (требование площадки — см. runInterstitial)
+    // (требование площадки, п. 4.7 — см. setPause)
     if (this.adPaused) return;
 
     // плавный доезд к выбранной комнате
@@ -1627,6 +1545,9 @@ export class Game implements UiContext {
       const dead = events.filter((e) => e.stillborn).length;
       const rep = events.reduce((sum, e) => sum + (e.rep ?? 0), 0);
       if (born) {
+        // первую в Котодексе породу отмечаем отдельной фанфарой — событие редкое,
+        // обычное рождение звучит скромнее (на выводок один звук, а не по малышу)
+        sfxEvent(events.some((e) => e.kitten && e.newBreed) ? 'newbreed' : 'birth');
         const base = born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾';
         this.toast(rep ? `${base} +${rep} ⭐` : base);
       } else if (dead) this.toast('Котёнок не выжил 😿');

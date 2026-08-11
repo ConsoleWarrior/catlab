@@ -105,7 +105,7 @@ export function adoptTarget(state: GameState): Cat | null {
     && !isInSlot(state, c.id) && !isInBasket(state, c.id)) ?? null;
 }
 
-/** Обучение идёт прямо сейчас (для гейтов: межстраничная реклама и т.п.). */
+/** Обучение идёт прямо сейчас (для гейтов: подарки новичку, подсказки и т.п.). */
 export function tutorialActive(state: GameState): boolean {
   return tutorialStep(state) !== null;
 }

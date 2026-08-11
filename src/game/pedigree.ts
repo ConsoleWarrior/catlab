@@ -124,11 +124,13 @@ export function knownAncestorBreeds(cat: Cat): string[] {
 
 // --- Скрытая родословная стартовых котов ---
 
-/** Случайная порода скрытого предка по весам тиров (T5 не выпадает). */
-function hiddenBreed(rng: Rng): string {
+type TierWeights = Record<RarityTier, number>;
+
+/** Случайная порода скрытого предка по весам тиров (базово T5 не выпадает). */
+function hiddenBreed(rng: Rng, weights: TierWeights): string {
   let r = rng();
   for (const tier of LEVEL_TIER) {
-    const w = HIDDEN_GENE_TIER_WEIGHTS[tier as RarityTier];
+    const w = weights[tier as RarityTier];
     if (r < w) {
       const list = BREEDS_BY_TIER[tier as RarityTier];
       return list[Math.floor(rng() * list.length)]!.key;
@@ -138,11 +140,11 @@ function hiddenBreed(rng: Rng): string {
   return 'moggie';
 }
 
-function hiddenNode(state: GameState, rng: Rng, depth: number): Ancestor {
-  const node: Ancestor = { id: 'anc' + state.nextId++, breed: hiddenBreed(rng) };
+function hiddenNode(state: GameState, rng: Rng, depth: number, weights: TierWeights): Ancestor {
+  const node: Ancestor = { id: 'anc' + state.nextId++, breed: hiddenBreed(rng, weights) };
   if (depth > 1) {
-    node.mother = hiddenNode(state, rng, depth - 1);
-    node.father = hiddenNode(state, rng, depth - 1);
+    node.mother = hiddenNode(state, rng, depth - 1, weights);
+    node.father = hiddenNode(state, rng, depth - 1, weights);
   }
   return node;
 }
@@ -151,10 +153,15 @@ function hiddenNode(state: GameState, rng: Rng, depth: number): Ancestor {
  * Прописывает коту случайную скрытую родословную (полное дерево до прадедов).
  * Вызывается для стартовых и купленных котов. Мутирует state.nextId — id
  * предков уникальны на всю игру, ложных совпадений родства не бывает.
+ *
+ * `weights` — веса тиров предков; покупка кота передаёт сюда economy.hiddenTierWeights
+ * (сдвиг от «Тщательного отбора»), стартовые коты идут по базовой таблице.
  */
-export function attachHiddenPedigree(state: GameState, cat: Cat, rng: Rng): void {
+export function attachHiddenPedigree(
+  state: GameState, cat: Cat, rng: Rng, weights: TierWeights = HIDDEN_GENE_TIER_WEIGHTS,
+): void {
   cat.pedigree = {
-    mother: hiddenNode(state, rng, PEDIGREE_DEPTH),
-    father: hiddenNode(state, rng, PEDIGREE_DEPTH),
+    mother: hiddenNode(state, rng, PEDIGREE_DEPTH, weights),
+    father: hiddenNode(state, rng, PEDIGREE_DEPTH, weights),
   };
 }

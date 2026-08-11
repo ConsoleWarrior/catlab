@@ -25,6 +25,22 @@ const musicUrls = import.meta.glob('../assets/sounds/background/*.mp3', {
   eager: true, query: '?url', import: 'default',
 }) as Record<string, string>;
 
+// Звуки событий: имя файла = ключ события (см. SfxEvent), один файл на событие
+const eventUrls = import.meta.glob('../assets/sounds/ui/*.mp3', {
+  eager: true, query: '?url', import: 'default',
+}) as Record<string, string>;
+
+/** Событие, у которого есть свой звук (= имя файла в assets/sounds/ui). */
+export type SfxEvent =
+  | 'levelup'   // повышение уровня лаборатории
+  | 'newbreed'  // родилась порода, которой ещё не было в Котодексе
+  | 'birth'     // родился котёнок
+  | 'order'     // выполнен заказ
+  | 'freeze'    // кот заморожен в криокапсулу
+  | 'lab'       // кот сдан в лабораторию «на эксперименты»
+  | 'adopt'     // кот отдан «в добрые руки»
+  | 'heal';     // ветеринар восстановил вязки
+
 const TARGET_RMS = 0.08; // ориентир «нормальной» громкости (≈ −22 дБFS)
 const GAIN_MIN = 0.25;   // пределы автоподстройки: совсем тихая запись не должна
 const GAIN_MAX = 3;      //   улететь в шум, громкая — в клиппинг
@@ -36,10 +52,18 @@ const PURR_MAX = 10;       // предел одновременных петел
 const PURR_FADE_IN = 1.5;  // с — мурчание «разгоняется» мягко, как засыпание
 const PURR_FADE_OUT = 0.6; // с — затухание при пробуждении (без щелчка обрыва)
 
+// Звуки событий сведены заранее (обрезка, фейды, общий уровень −19.5 LUFS с
+// поправкой на «важность» события — см. assets/sounds/README.md), поэтому
+// автонормализация к ним НЕ применяется: она бы стёрла эту разницу. Уровень
+// подобран так, чтобы событие звучало вровень с мяуканьем и не спорило с музыкой.
+const EVENT_VOL = 0.8;
+const EVENT_GAP_MS = 200; // защита от дребезга: повтор ТОГО ЖЕ события — один звук
+
 const meows: string[] = [];
 const purrs: string[] = [];
 let lastAt = 0;
 let lastIdx = -1;
+const eventAt = new Map<string, number>();
 
 /** RMS слышимой части записи: паузы и тишину не учитываем. */
 function activeRms(buf: AudioBuffer): number {
@@ -130,6 +154,27 @@ export function initSfx(): void {
   };
   reg(meowUrls, 'meow', meows, MEOW_VOL);
   reg(purrUrls, 'purr', purrs, PURR_VOL);
+  // события: алиас = имя файла (levelup.mp3 → 'levelup'), громкость уже сведена
+  Object.entries(eventUrls).forEach(([file, url]) => {
+    sound.add(`ev:${file.replace(/^.*\/|\.mp3$/g, '')}`, { url, preload: true, volume: EVENT_VOL });
+  });
+}
+
+/**
+ * Звук игрового события: награда, рождение, лечение и т.п. Один файл на событие.
+ * Гашение повторов считается по каждому событию отдельно: разные события
+ * идут подряд по делу (пристроил кота → тут же панель «Новый уровень»), а вот
+ * один и тот же звук дважды за EVENT_GAP_MS — это дребезг двойного тапа.
+ */
+export function sfxEvent(id: SfxEvent): void {
+  const now = performance.now();
+  if (now - (eventAt.get(id) ?? -Infinity) < EVENT_GAP_MS) return;
+  const alias = `ev:${id}`;
+  if (!sound.exists(alias)) return; // initSfx ещё не звали (find бы бросил исключение)
+  const s = sound.find(alias);
+  if (!s.isLoaded) return; // ещё грузится — молчим, ждать событие не будет
+  eventAt.set(id, now);
+  s.play();
 }
 
 /** Случайное «мяу» (не то же, что в прошлый раз) со случайной высотой тона. */

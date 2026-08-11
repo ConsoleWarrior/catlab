@@ -331,7 +331,8 @@ export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: C
   const cats = sexes.map((sex) => {
     const cat = E.makeCatInstance(state, simpleCat(rng, sex), now, 'shelter');
     cat.isNew = true; // бейдж «новый» над котом, пока не откроют его инфо-меню
-    attachHiddenPedigree(state, cat, rng); // лотерея скрытых генов у купленного дворового
+    // лотерея скрытых генов у купленного дворового; «Тщательный отбор» сдвигает тиры предков
+    attachHiddenPedigree(state, cat, rng, E.hiddenTierWeights(state));
     state.cats.push(cat);
     return cat;
   });
@@ -827,7 +828,7 @@ export function finishRecipeResearch(
   return { recipe, refunded: false };
 }
 
-/** Мгновенно завершить исследование рецепта за 💎 (цена ∝ остатку, как у вязки). */
+/** Мгновенно завершить исследование рецепта за 💎 (цена ∝ остатку: 1 💎 за 5 мин). */
 export function speedUpRecipeResearch(state: GameState, now: number): Result<{ crystals: number }> {
   const rr = state.recipeResearch;
   if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
@@ -837,11 +838,11 @@ export function speedUpRecipeResearch(state: GameState, now: number): Result<{ c
   return { ok: true, crystals: cost };
 }
 
-/** Реклама: сократить остаток исследования на AD_SKIP_MS (бесплатно, можно повторять). */
+/** Реклама: сократить остаток исследования на RECIPE_AD_SKIP_MS (бесплатно, можно повторять). */
 export function adSkipRecipeResearch(state: GameState, now: number): Result {
   const rr = state.recipeResearch;
   if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
-  rr.readyAt = Math.max(now, rr.readyAt - C.AD_SKIP_MS);
+  rr.readyAt = Math.max(now, rr.readyAt - C.RECIPE_AD_SKIP_MS);
   return { ok: true };
 }
 

@@ -35,7 +35,7 @@ import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
-import { getMasterVolume, setMasterVolume, sfxMeow } from './sound.js';
+import { getMasterVolume, setMasterVolume, sfxEvent, sfxMeow } from './sound.js';
 
 /**
  * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
@@ -1483,7 +1483,8 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
   // ×2 Катализатора учитываем только когда он АКТИВЕН (склад ≠ активность): заряд
   // на складе при другом активном усилителе на вязку не влияет — превью не должно врать.
   const lucky = activeBoostId(ctx.state) === 'luckyUp';
-  const outcomes = breedingOutcomes(bctx, lucky, breedChanceMult(ctx.state));
+  const degrade = activeBoostId(ctx.state) === 'degrade'; // ⬇ дворовые исходы ×10
+  const outcomes = breedingOutcomes(bctx, lucky, breedChanceMult(ctx.state), degrade);
 
   const title = label('🔮 Прогноз пары', 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
@@ -1507,9 +1508,15 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
     y += 20;
   }
   if (lucky) {
-    const lk = label('🍀 Катализатор активен — шансы учтены (×2)', 11.5, COLORS.good, '800');
+    const lk = label('🍀 Катализатор активен — шанс рецептов ×2 (учтено)', 11.5, COLORS.good, '800');
     lk.position.set(W / 2, y);
     root.addChild(lk);
+    y += 20;
+  }
+  if (degrade) {
+    const dg = label('⬇ Деградатор активен — шанс дворовых ×10 (учтено)', 11.5, COLORS.good, '800');
+    dg.position.set(W / 2, y);
+    root.addChild(dg);
     y += 20;
   }
   // 🔼 Активатор активен и у пары есть цель — гарантия вместо броска шансов.
@@ -1764,6 +1771,7 @@ export function buildAdoptConfirm(ctx: UiContext, cat: Cat, close: () => void): 
   yesBtn.onTap = () => {
     const r = adoptCat(ctx.state, cat.id);
     if (!r.ok) { ctx.toast(r.reason); close(); return; }
+    sfxEvent('adopt');
     ctx.commit();
     ctx.toast(`Котика пристроили 🏠  +💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`);
     close();
@@ -1808,6 +1816,7 @@ export function buildLabConfirm(ctx: UiContext, cat: Cat, close: () => void): Co
   yesBtn.onTap = () => {
     const r = sendToLab(ctx.state, cat.id);
     if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Лаборатория ещё заперта 🔒' : r.reason); close(); return; }
+    sfxEvent('lab');
     ctx.commit();
     ctx.toast(`Кот в лаборатории 🧪  +🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`);
     close();
@@ -1846,6 +1855,7 @@ export function buildBulkAdoptConfirm(ctx: UiContext, close: () => void): Contai
   yesBtn.onTap = () => {
     const r = adoptAll(ctx.state);
     if (!r.ok) { ctx.toast(r.reason); close(); return; }
+    sfxEvent('adopt'); // на всю партию один звук, а не по коту
     ctx.commit();
     ctx.toast(`Пристроено ${r.count} 🏠  +💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`);
     close();
@@ -1883,6 +1893,7 @@ export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Containe
   yesBtn.onTap = () => {
     const r = sendAllToLab(ctx.state);
     if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Лаборатория ещё заперта 🔒' : r.reason); close(); return; }
+    sfxEvent('lab'); // на всю партию один звук, а не по коту
     ctx.commit();
     ctx.toast(`В лаборатории ${r.count} 🧪  +🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`);
     close();
@@ -1898,8 +1909,12 @@ export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Containe
  * 💎 полное лечение (цена ∝ потраченным сердцам). maxHearts НЕ меняется — потолок
  * от инбридинга неизлечим; «Бесплодных» (0 ❤) ветеринар не берёт (healCat откажет).
  * Открывается перетаскиванием шприца-ветеринара на кота в слоте вязки (Инкубатор).
+ * `onHealed` — хук комнаты: после успешного лечения (и после commit, т.е. по свежим
+ * спрайтам) Инкубатор пускает над котом красные плюсики. Аргумент — сколько ❤ вернули.
  */
-export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
+export function buildHealConfirm(
+  ctx: UiContext, cat: Cat, close: () => void, onHealed?: (hearts: number) => void,
+): Container {
   const W = 340;
   const root = new Container();
 
@@ -1948,7 +1963,9 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
         if (!watched) { ctx.toast('Реклама недоступна'); return; }
         const r = healCat(ctx.state, cat.id, 'ad', ctx.now());
         if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
+        sfxEvent('heal');
         ctx.commit();
+        onHealed?.(r.healed); // плюсики над котом — после пересбора комнаты
         ctx.toast(`Кот подлечен 💉 +${r.healed} ❤`);
         close();
       });
@@ -1969,7 +1986,9 @@ export function buildHealConfirm(ctx: UiContext, cat: Cat, close: () => void): C
     fullBtn.onTap = () => {
       const r = healCat(ctx.state, cat.id, 'crystals', ctx.now());
       if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
+      sfxEvent('heal');
       ctx.commit();
+      onHealed?.(r.healed);
       ctx.toast(`Кот полностью здоров 💉 +${r.healed} ❤  −${r.crystals} 💎`);
       close();
     };
@@ -2022,6 +2041,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
 
   const btnW = W - 48;
   const done = (r: { coins: number; crystals: number }): void => {
+    sfxEvent('freeze');
     ctx.commit();
     ctx.toast(`Кот в криокапсуле ❄️${r.coins ? `  −💰${r.coins}` : ''}${r.crystals ? `  −💎${r.crystals}` : ''}`);
     close();
@@ -2287,8 +2307,10 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     btn.position.set(cardW - 16 - 75, 26);
     btn.onTap = () => {
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
-      if (r.ok) { ctx.commit(); ctx.toast('Заказ выполнен! ' + rewardText(r.reward)); close(); ctx.openOrders(); }
-      else ctx.toast(r.reason);
+      if (r.ok) {
+        sfxEvent('order');
+        ctx.commit(); ctx.toast('Заказ выполнен! ' + rewardText(r.reward)); close(); ctx.openOrders();
+      } else ctx.toast(r.reason);
     };
     row.addChild(btn);
 

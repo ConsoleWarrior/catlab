@@ -236,30 +236,43 @@ describe('комнаты', () => {
 });
 
 describe('покупка кота (анти-софт-лок)', () => {
+  // цена растёт с уровнем лаборатории: 50 + 5 × уровень (на ур.1 — 55)
+  const costAtLevel1 = STARTER_CAT_COST + C.BUY_CAT_COST_PER_LEVEL;
+
   it('первый кот бесплатно, если котов нет; затем платно', () => {
     const rng = makeRng(20);
     const s = createInitialState(rng, 0);
     s.cats = [];                    // продал всех — тупик
-    s.coins = STARTER_CAT_COST;     // но деньги есть → пары не будет, выдадут одного
+    s.coins = costAtLevel1;         // но деньги есть → пары не будет, выдадут одного
     expect(buyCatCost(s)).toBe(0);
     const r1 = buyCat(s, rng, 0);
     expect(r1.ok).toBe(true);
     expect(s.cats).toHaveLength(1);
-    expect(s.coins).toBe(STARTER_CAT_COST); // первый бесплатный, монеты целы
+    expect(s.coins).toBe(costAtLevel1); // первый бесплатный, монеты целы
     expect(s.cats[0]!.location).toBe('shelter');
     expect(s.cats[0]!.isNew).toBe(true); // бейдж «новый» до первого открытия инфо
     // следующий уже стоит денег
-    expect(buyCatCost(s)).toBe(STARTER_CAT_COST);
+    expect(buyCatCost(s)).toBe(costAtLevel1);
     expect(buyCat(s, rng, 0).ok).toBe(true);
     expect(s.coins).toBe(0);
     expect(buyCat(s, rng, 0).ok).toBe(false); // 0 монет
+  });
+
+  it('цена покупки растёт с уровнем лаборатории: 55 на ур.1 … 100 на ур.10', () => {
+    const s = createInitialState(makeRng(20), 0);
+    expect(s.level).toBe(1);
+    expect(buyCatCost(s)).toBe(55);
+    s.level = 5;  expect(buyCatCost(s)).toBe(75);
+    s.level = 10; expect(buyCatCost(s)).toBe(100);
+    s.research = { r_sel_select: 2 }; // потолок: 100 × 1.5
+    expect(buyCatCost(s)).toBe(150);
   });
 
   it('ни котов, ни денег → бесплатно выдают пару ♀+♂', () => {
     const rng = makeRng(22);
     const s = createInitialState(rng, 0);
     s.cats = [];
-    s.coins = STARTER_CAT_COST - 1; // не хватает даже на одного
+    s.coins = costAtLevel1 - 1; // не хватает даже на одного
     expect(isRescuePair(s)).toBe(true);
     const r = buyCat(s, rng, 0);
     expect(r.ok).toBe(true);
@@ -267,10 +280,10 @@ describe('покупка кота (анти-софт-лок)', () => {
     expect(s.cats).toHaveLength(2);
     expect(s.cats.map((c) => c.genotype.sex).sort()).toEqual(['female', 'male']);
     expect(s.cats.every((c) => c.location === 'shelter' && c.isNew)).toBe(true);
-    expect(s.coins).toBe(STARTER_CAT_COST - 1); // подарок ничего не стоит
+    expect(s.coins).toBe(costAtLevel1 - 1); // подарок ничего не стоит
     // подарок разовый: коты появились → дальше обычная платная покупка
     expect(isRescuePair(s)).toBe(false);
-    expect(buyCatCost(s)).toBe(STARTER_CAT_COST);
+    expect(buyCatCost(s)).toBe(costAtLevel1);
   });
 
   it('купленный кот — простой (без редких генов)', () => {
@@ -462,10 +475,11 @@ describe('дерево исследований', () => {
   it('unlockResearch: полностью прокачанный узел больше не покупается', () => {
     const s = createInitialState(makeRng(51), 0);
     s.level = 10; s.dna = 10_000; s.coins = 30_000;
-    // «Витамины роста» — одноуровневый узел, финал цепочки Селекции: Маркеры→Подбор→Витамины
-    // (Криогенетика переехала в ветку «Лаборатория»).
+    // «Витамины роста» — одноуровневый узел, финал цепочки Селекции:
+    // Маркеры→Подбор→Тщательный отбор→Витамины (Криогенетика ушла в ветку «Лаборатория»).
     unlockResearch(s, 'r_sel_markers');
     unlockResearch(s, 'r_sel_pairs');
+    unlockResearch(s, 'r_sel_select');
     expect(unlockResearch(s, 'r_sel_vitamins').ok).toBe(true);
     expect(unlockResearch(s, 'r_sel_vitamins')).toMatchObject({ ok: false, reason: 'уже изучено' });
   });

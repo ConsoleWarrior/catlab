@@ -75,12 +75,18 @@ const STAND_NAV_OVERHANG = 18; // тумбе можно чуть зайти на
 
 // Акцент свечения заряженного усилителя — в тон его текстуры (boost_<id>.webp).
 // После перемаппинга: стабилизатор→зелёный, катализатор→синий, активатор→оранжевый.
+// Деградатор тянет вниз, к дворовым — серо-стальной, в тон серого тира T1.
 const BOOST_ACCENT: Record<string, number> = {
-  noDown: 0x3fe08c, luckyUp: 0x59b1ff, tierUp: 0xffab3d,
+  degrade: 0x9aa7b4, noDown: 0x3fe08c, luckyUp: 0x59b1ff, tierUp: 0xffab3d,
 };
 
 interface Heart { view: Text; life: number; ttl: number; vx: number; }
 interface Spark { view: Text; life: number; ttl: number; vx: number; vy: number; rot: number; }
+/** Всплывающий красный плюсик лечения (эффект ветеринара над котом в слоте). */
+interface HealPlus {
+  view: Container; delay: number; life: number; ttl: number;
+  x0: number; y0: number; rise: number; sway: number; phase: number;
+}
 
 interface LiveSlot {
   index: number;
@@ -130,6 +136,25 @@ const easeOut = (t: number): number => 1 - (1 - t) * (1 - t);
  */
 const lockHint = (text: string, size = 12): Text =>
   label(text, size, 0xffffff, '800', { color: 0x2c2438, width: 3.5 });
+
+/**
+ * Медицинский плюсик для эффекта лечения. Рисуем крест ОДНОЙ фигурой (а не двумя
+ * прямоугольниками) — иначе белый кант рвётся линиями на стыке лучей. Под крестом
+ * мягкое розовое свечение, чтобы плюсики читались на любом ИИ-фоне бокса.
+ */
+function healPlusIcon(size: number): Container {
+  const c = new Container();
+  const h = size / 2;      // половина размаха креста
+  const t = size * 0.17;   // половина толщины луча
+  const glow = new Graphics();
+  glow.circle(0, 0, size * 0.62).fill({ color: 0xff5b7a, alpha: 0.22 });
+  const g = new Graphics();
+  g.poly([-t, -h, t, -h, t, -t, h, -t, h, t, t, t, t, h, -t, h, -t, t, -h, t, -h, -t, -t, -t])
+    .fill(0xff3b5c)
+    .stroke({ width: Math.max(1.5, size * 0.09), color: 0xffffff, alpha: 0.95, join: 'round' });
+  c.addChild(glow, g);
+  return c;
+}
 
 /** Ужимает подпись под ширину полосы кнопок (на узком экране слот уже текста). */
 function fitLabel(t: Text, maxW: number): void {
@@ -768,6 +793,18 @@ export function createIncubator(ctx: UiContext): Room {
   let syrGhost: Container | null = null;   // призрак, что летит за курсором
   let syrHover: Graphics | null = null;    // кольцо-подсветка кота под курсором
 
+  // Эффект укола: пачка красных плюсиков + кольцо-вспышка + упругий «поп» кота.
+  // Живёт в своём слое на container комнаты (НЕ в body): лечение делает commit,
+  // а тот пересобирает тело комнаты — эффект в body умер бы, не начавшись.
+  const HEAL_PULSE_S = 0.55;               // длительность «попа» вылеченного кота
+  const healLayer = new Container();
+  healLayer.eventMode = 'none';
+  shell.container.addChild(healLayer);
+  const healPluses: HealPlus[] = [];
+  let healRing: { g: Graphics; x: number; y: number; r: number; life: number; ttl: number } | null = null;
+  let healPulseId: string | null = null;   // кот, который сейчас «подпрыгивает»
+  let healPulse = 0;
+
   /** Рисуем шприц (иглой вниз-влево, «на котов»). h — высота иконки. */
   function syringeArt(h: number, locked: boolean): Container {
     const c = new Container();
@@ -825,6 +862,54 @@ export function createIncubator(ctx: UiContext): Room {
     return null;
   }
 
+  /** Куда «ставить укол»: грудка кота с таким id в одном из слотов вязки. */
+  function healSpotOf(catId: string): { x: number; y: number; catH: number } | null {
+    for (const ls of live) {
+      const sp = ls.momCat?.id === catId ? ls.mom : ls.dadCat?.id === catId ? ls.dad : undefined;
+      if (!sp) continue;
+      const p = shell.container.toLocal(sp.getGlobalPosition()); // спрайт стоит лапами в position
+      return { x: p.x, y: p.y - ls.catH * 0.55, catH: ls.catH };
+    }
+    return null;
+  }
+
+  /**
+   * Мини-анимация лечения: из кота выпрыгивает пачка красных плюсиков и всплывает
+   * вверх, расходясь веером и покачиваясь; вдогонку — красное кольцо-вспышка, а сам
+   * кот делает упругий «поп». Плюсиков тем больше, чем больше ❤ вернул ветеринар.
+   * Зовётся из диалога ветеринара уже ПОСЛЕ commit — по свежим спрайтам слотов.
+   */
+  function playHealFx(catId: string, hearts: number): void {
+    const spot = healSpotOf(catId);
+    if (!spot) return; // кота уже нет в слоте (лечили из dev-консоли) — эффекту негде играть
+    const { x, y, catH } = spot;
+    healPulseId = catId;
+    healPulse = HEAL_PULSE_S;
+
+    healRing?.g.destroy();
+    const ring = new Graphics();
+    healLayer.addChild(ring);
+    healRing = { g: ring, x, y, r: catH, life: 0, ttl: 0.45 };
+
+    const n = Math.min(14, 7 + Math.max(1, hearts) * 2);
+    for (let i = 0; i < n; i++) {
+      const view = healPlusIcon(catH * (0.16 + Math.random() * 0.12));
+      view.visible = false; // покажется, когда дойдёт очередь (delay) — пачка идёт волной
+      healLayer.addChild(view);
+      healPluses.push({
+        view, delay: i * 0.055 + Math.random() * 0.04,
+        life: 0, ttl: 0.85 + Math.random() * 0.5,
+        x0: x + (Math.random() - 0.5) * catH * 0.55,
+        y0: y + (Math.random() - 0.5) * catH * 0.18,
+        // подъём меряем от груди кота и держим в пределах стекла бокса: плюсики,
+        // всплывающие поверх рамки окна, читаются как «мусор вне слота»
+        rise: catH * (0.55 + Math.random() * 0.45),
+        sway: catH * (0.06 + Math.random() * 0.1) * (Math.random() < 0.5 ? -1 : 1),
+        phase: Math.random() * Math.PI * 2,
+      });
+    }
+  }
+
   function moveSyringeGhost(e: FederatedPointerEvent): void {
     if (!syrGhost) return;
     const p = shell.container.toLocal(e.global);
@@ -854,7 +939,9 @@ export function createIncubator(ctx: UiContext): Room {
     const uiP = ctx.uiRoot.toLocal(e.global);
     const target = healTargetAt(uiP.x, uiP.y);
     if (!target) { ctx.toast('Наведи шприц на кота в слоте вязки 💉'); return; }
-    ctx.openHealConfirm(target.cat); // «рабочее меню ветеринара»
+    const healed = target.cat;
+    // «рабочее меню ветеринара»; вылечили — играем плюсики над этим котом
+    ctx.openHealConfirm(healed, (hearts) => playHealFx(healed.id, hearts));
   }
 
   function startSyringeDrag(e: FederatedPointerEvent): void {
@@ -1062,6 +1149,14 @@ export function createIncubator(ctx: UiContext): Room {
         ls.kitten.scale.set(ls.kittenBase * gs * pop, ls.kittenBase * gs * breathe * pop);
       }
 
+      // «поп» только что вылеченного кота — короткий упругий рывок вместе с плюсиками.
+      // Масштаб задаём от базы (не домножаем текущий), иначе за кадры накопится.
+      if (healPulse > 0 && healPulseId) {
+        const k = 1 + Math.sin(clamp01(1 - healPulse / HEAL_PULSE_S) * Math.PI) * 0.18;
+        if (ls.mom && ls.momCat?.id === healPulseId) ls.mom.scale.set(-ls.momBase * k, ls.mom.scale.y * k);
+        if (ls.dad && ls.dadCat?.id === healPulseId) ls.dad.scale.set(ls.dadBase * k, ls.dad.scale.y * k);
+      }
+
       // ореолы редкости повторяют позы котов этого слота
       syncGlow(ls.mom, ls.momGlow);
       syncGlow(ls.dad, ls.dadGlow);
@@ -1102,6 +1197,35 @@ export function createIncubator(ctx: UiContext): Room {
         hh.view.scale.set(0.7 + t * 0.5);
         if (hh.life >= hh.ttl) { hh.view.destroy(); ls.heartObjs.splice(k, 1); }
       }
+    }
+
+    // --- эффект укола ветеринара (общий для комнаты, живёт поверх слотов) ---
+    if (healPulse > 0) {
+      healPulse = Math.max(0, healPulse - dt);
+      if (healPulse === 0) healPulseId = null;
+    }
+    if (healRing) {
+      const hr = healRing;
+      hr.life += dt;
+      const t = clamp01(hr.life / hr.ttl);
+      hr.g.clear();
+      hr.g.circle(hr.x, hr.y, hr.r * (0.25 + t * 0.85))
+        .stroke({ width: Math.max(1.5, hr.r * 0.09 * (1 - t)), color: 0xff5b7a, alpha: 0.8 * (1 - t) });
+      if (t >= 1) { hr.g.destroy(); healRing = null; }
+    }
+    for (let k = healPluses.length - 1; k >= 0; k--) {
+      const p = healPluses[k]!;
+      if (p.delay > 0) { p.delay -= dt; if (p.delay > 0) continue; }
+      p.view.visible = true;
+      p.life += dt;
+      const t = clamp01(p.life / p.ttl);
+      p.view.y = p.y0 - p.rise * easeOut(t);                 // всплывает, замедляясь
+      p.view.x = p.x0 + Math.sin(p.phase + t * 4) * p.sway;  // покачивается по дороге
+      const pop = clamp01(t / 0.18);                          // выпрыгивает с перелётом
+      p.view.scale.set((0.35 + 0.65 * easeOut(pop)) * (1 + Math.sin(pop * Math.PI) * 0.18));
+      p.view.alpha = t < 0.65 ? 1 : 1 - (t - 0.65) / 0.35;
+      p.view.rotation = Math.sin(p.phase + t * 3) * 0.22;
+      if (p.life >= p.ttl) { p.view.destroy({ children: true }); healPluses.splice(k, 1); }
     }
   }
 

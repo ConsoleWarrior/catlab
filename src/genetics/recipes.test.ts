@@ -4,7 +4,7 @@ import { BREEDS, BREED_BY_KEY, tierOfBreed, TIER_LEVEL } from './catalog.js';
 import type { BreedBoosts } from './catalog.js';
 import {
   RECIPES, recipesFor, recipeMatches, recipeChance, resolveBreeding, isPedigreeRecipe,
-  tierUpTarget, boostCanFire,
+  tierUpTarget, boostCanFire, breedingOutcomes,
 } from './recipes.js';
 import type { BreedingContext, BreedSide, KinshipLevel, Recipe } from './recipes.js';
 import { carriedTraitSet, TRAIT_BY_ID } from './traits.js';
@@ -181,7 +181,7 @@ describe('инбридинг и шансы', () => {
 
   it('шанс не превышает потолок 0.95', () => {
     const r = recipesFor('exotic_shorthair')[0]!; // 0.90 базовый
-    expect(recipeChance(r, 'none', true)).toBeCloseTo(0.95);
+    expect(recipeChance(r, 'none', 1.5)).toBeCloseTo(0.95);
   });
 });
 
@@ -306,5 +306,93 @@ describe('resolveBreeding (разрешение вязки)', () => {
     expect(lucky).toBeGreaterThan(base);
     expect(usedCount).toBeGreaterThan(0);
     expect(usedCount).toBeLessThan(2000); // не каждый бросок успешен → заряд не сгорает впустую
+  });
+
+  it('🍀 Катализатор поднимает ВСЕ рецептные исходы одним множителем', () => {
+    // пара домашних короткошёрстных со скрытыми генами: три рецепта T2 + фолбэк-наследование
+    const pair = ctx('domestic_shorthair', 'domestic_shorthair', {
+      motherAnc: ['british_shorthair', 'siamese'],
+    });
+    const base = breedingOutcomes(pair);
+    const luck = breedingOutcomes(pair, true);
+    const pOf = (list: { breed: string; p: number }[], breed: string): number =>
+      list.filter((o) => o.breed === breed).reduce((s, o) => s + o.p, 0);
+    const byRecipe = ['british_shorthair', 'siamese', 'european_shorthair'];
+    const mult = byRecipe.map((b) => pOf(luck, b) / pOf(base, b));
+    const first = mult[0]!;
+    expect(first).toBeGreaterThan(1);
+    for (const m of mult) expect(m).toBeCloseTo(first, 6); // рост одинаковый, не перекос в первый
+    // растёт за счёт фолбэка (остаться домашней короткошёрстной), а не за счёт друг друга
+    expect(pOf(luck, 'domestic_shorthair')).toBeLessThan(pOf(base, 'domestic_shorthair'));
+    for (const b of byRecipe) expect(pOf(luck, b)).toBeLessThan(0.6);
+  });
+
+  it('🍀 не стекается с инбридингом: рецепту, усиленному родством, ×2 не достаётся', () => {
+    const args = { motherAnc: ['sphynx'], fatherAnc: ['donskoy'], kinship: 'critical' as const };
+    const pair = ctx('moggie', 'moggie', args);
+    const pOf = (list: { breed: string; p: number }[], breed: string): number =>
+      list.filter((o) => o.breed === breed).reduce((s, o) => s + o.p, 0);
+    // донской — родословный рецепт, его шанс уже поднят критическим родством
+    expect(pOf(breedingOutcomes(pair, true), 'donskoy'))
+      .toBeLessThan(pOf(breedingOutcomes(pair), 'donskoy'));
+  });
+
+  it('⬇ Деградатор: дворовых (T1) рождается кратно больше, заряд списывается за метиса', () => {
+    const isT1 = (k: string): boolean => tierOfBreed(k) === 'common';
+    const rBase = makeRng(11);
+    let base = 0;
+    for (let i = 0; i < 2000; i++) {
+      if (isT1(resolveBreeding(ctx('persian', 'ragdoll'), rBase))) base++;
+    }
+    const rDeg = makeRng(11);
+    let deg = 0, usedCount = 0;
+    for (let i = 0; i < 2000; i++) {
+      const used: BreedBoosts = {};
+      if (isT1(resolveBreeding(ctx('persian', 'ragdoll'), rDeg, { degrade: true }, used))) deg++;
+      if (used.degrade) usedCount++;
+    }
+    expect(base / 2000).toBeLessThan(0.25);   // обычно «неудача»-метис ~15%
+    expect(deg / 2000).toBeGreaterThan(0.85); // с ⬇ шанс метиса упирается в кап 0.95
+    expect(usedCount).toBeGreaterThan(0);
+    expect(usedCount).toBeLessThanOrEqual(deg); // заряд только за реально усиленный исход
+  });
+
+  it('⬇ Деградатор поднимает ВСЕ дворовые породы одним множителем', () => {
+    // пара дворовых: два рецепта T1 (домашние) + сам дворовый в фолбэке + сиамка (T2)
+    const pair = ctx('moggie', 'moggie', { motherAnc: ['siamese'] });
+    const base = breedingOutcomes(pair);
+    const deg = breedingOutcomes(pair, false, 1, true);
+    const pOf = (list: { breed: string; p: number }[], breed: string): number =>
+      list.filter((o) => o.breed === breed).reduce((s, o) => s + o.p, 0);
+    const t1 = ['moggie', 'domestic_shorthair', 'domestic_longhair'];
+    const mult = t1.map((b) => pOf(deg, b) / pOf(base, b));
+    const first = mult[0]!;
+    expect(first).toBeGreaterThan(1);
+    for (const m of mult) expect(m).toBeCloseTo(first, 6); // рост одинаковый, не перекос в одну
+    // старший тир не растёт: сиамка ужимается, освобождая массу дворовым
+    expect(pOf(deg, 'siamese')).toBeLessThan(pOf(base, 'siamese'));
+    // и ни одна дворовая не съедает почти всё распределение
+    for (const b of t1) expect(pOf(deg, b)).toBeLessThan(0.6);
+  });
+
+  it('⬇ Деградатор виден в превью пары (breedingOutcomes) той же математикой', () => {
+    const sumT1 = (list: { breed: string; p: number }[]): number =>
+      list.filter((o) => tierOfBreed(o.breed) === 'common').reduce((s, o) => s + o.p, 0);
+    const pair = ctx('persian', 'ragdoll');
+    expect(sumT1(breedingOutcomes(pair))).toBeLessThan(0.25);
+    expect(sumT1(breedingOutcomes(pair, false, 1, true))).toBeGreaterThan(0.85);
+    // сумма вероятностей остаётся единицей — превью не «уплывает»
+    const total = breedingOutcomes(pair, false, 1, true).reduce((s, o) => s + o.p, 0);
+    expect(total).toBeCloseTo(1, 6);
+  });
+
+  it('boostCanFire(⬇): нечего усиливать, когда дворовый исход и так гарантирован', () => {
+    expect(boostCanFire('degrade', ctx('persian', 'ragdoll'))).toBe(true);
+    // подвинет рецепт старшего тира в пользу дворовых
+    expect(boostCanFire('degrade', ctx('moggie', 'moggie', { motherAnc: ['siamese'] }))).toBe(true);
+    expect(boostCanFire('degrade', ctx('domestic_shorthair', 'domestic_shorthair'))).toBe(true);
+    // у пары, чьи исходы все до одного дворовые, поднимать уже некуда
+    expect(boostCanFire('degrade', ctx('moggie', 'moggie'))).toBe(false);
+    expect(boostCanFire('degrade', ctx('moggie', 'domestic_longhair'))).toBe(false);
   });
 });

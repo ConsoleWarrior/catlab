@@ -3,8 +3,8 @@
  * ставки дохода, стоимость апгрейдов. Чистые функции над GameState. См. GAME.md.
  */
 
-import { tierOfBreed, TIER_LEVEL, breedValueMult } from '../genetics/index.js';
-import type { Genotype, BreedBoosts } from '../genetics/index.js';
+import { tierOfBreed, TIER_LEVEL, LEVEL_TIER, breedValueMult } from '../genetics/index.js';
+import type { Genotype, BreedBoosts, RarityTier } from '../genetics/index.js';
 import type { Ancestor, BreedingSlot, Cat, Currency, GameState, LiveRoom } from './types.js';
 import { catAncestors } from './pedigree.js';
 import * as C from './config.js';
@@ -127,6 +127,25 @@ export function breedChanceMult(state: GameState): number {
 /** Снижение риска инбридинга для котёнка (доля, потолок 0.5 — полностью не убрать). */
 export function kinshipSafety(state: GameState): number {
   return Math.min(0.5, researchBonus(state, 'kinshipSafety'));
+}
+
+/** Купленные ступени «Тщательного отбора» (0..2) — сдвиг тиров скрытой родословной. */
+export function hiddenRaritySteps(state: GameState): number {
+  return researchBonus(state, 'hiddenRarity');
+}
+
+/**
+ * Веса тиров предка в скрытой родословной покупного кота с учётом «Тщательного отбора»:
+ * каждая ступень отнимает у T1 и раздаёт выше (HIDDEN_GENE_TIER_SHIFT). Сумма всегда 1.
+ */
+export function hiddenTierWeights(state: GameState): Record<RarityTier, number> {
+  const steps = hiddenRaritySteps(state);
+  const out = { ...C.HIDDEN_GENE_TIER_WEIGHTS };
+  if (steps <= 0) return out;
+  for (const tier of LEVEL_TIER) {
+    out[tier] = Math.max(0, out[tier] + C.HIDDEN_GENE_TIER_SHIFT[tier] * steps);
+  }
+  return out;
 }
 
 /** Бонус сердец новорождённым от «Витаминов роста» (обычно 0 или 1). */
@@ -444,9 +463,21 @@ export function consumeBoosts(state: GameState, used: BreedBoosts): void {
   }
 }
 
-/** Стоимость покупки простого кота. Если котов нет вовсе — первый бесплатно (анти-софт-лок). */
+/**
+ * Стоимость покупки простого кота. Если котов нет вовсе — первый бесплатно (анти-софт-лок).
+ * База растёт с уровнем лаборатории (+5 💰 за уровень: 55 на ур.1 … 100 на ур.10), сверху
+ * «Тщательный отбор» удорожает покупку на 25% за ступень — плата за более породистых предков.
+ * Потолок цены: 100 × 1.5 = 150 💰.
+ */
 export function buyCatCost(state: GameState): number {
-  return state.cats.length === 0 ? 0 : C.STARTER_CAT_COST;
+  return state.cats.length === 0 ? 0 : fullCatCost(state);
+}
+
+/** Цена кота БЕЗ скидки анти-софт-лока — она же порог «не хватает даже на одного». */
+function fullCatCost(state: GameState): number {
+  const base = C.STARTER_CAT_COST + C.BUY_CAT_COST_PER_LEVEL * Math.min(state.level, C.MAX_LEVEL);
+  const mult = 1 + hiddenRaritySteps(state) * C.BUY_CAT_COST_PER_SELECT;
+  return Math.round(base * mult);
 }
 
 /**
@@ -456,7 +487,7 @@ export function buyCatCost(state: GameState): number {
  */
 export function isRescuePair(state: GameState): boolean {
   return state.cats.length === 0
-    && state.coins < C.STARTER_CAT_COST
+    && state.coins < fullCatCost(state)
     && shelterCapacity(state) - roomCount(state, 'shelter') >= 2;
 }
 

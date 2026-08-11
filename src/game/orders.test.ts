@@ -5,7 +5,7 @@ import {
   initOrders, refreshExpiredOrders, adRefreshOrder, canAdRefreshOrder, msUntilAdRefresh,
   msUntilOrderExpiry, ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS,
   ORDER_SELL_SLOTS, ORDER_CRYSTALS, ORDER_CRYSTALS_MAX, ORDER_CRYSTAL_LEVELS, orderCrystalsFor,
-  orderRepFor, MAX_LEVEL,
+  ORDER_SELL_CRYSTALS, ORDER_SELL_CRYSTAL_CHANCE, orderRepFor, MAX_LEVEL,
 } from './index.js';
 import type { Order } from './index.js';
 
@@ -320,28 +320,33 @@ describe('💎 за заказ: только «цель», от уровня л�
     expect(orderCrystalsFor(0)).toBe(ORDER_CRYSTALS); // битый сейв → как на 1-м уровне
   });
 
-  it('заказ-«цель» выдаёт 💎 по текущему уровню лабы, «сбыт» — всегда 0', () => {
+  it('заказ-«цель» выдаёт 💎 по текущему уровню лабы, «сбыт» — 0 либо ORDER_SELL_CRYSTALS', () => {
     const s = createInitialState(makeRng(40), 0);
     s.discoveredBreeds = ['persian'];
     const rng = makeRng(41);
     for (let l = 1; l <= MAX_LEVEL; l++) {
       s.level = l;
       expect(generateOrder(s, rng, 0, 'target').reward.crystals).toBe(orderCrystalsFor(l));
-      expect(generateOrder(s, rng, 0, 'sell').reward.crystals).toBe(0);
+      expect([0, ORDER_SELL_CRYSTALS]).toContain(generateOrder(s, rng, 0, 'sell').reward.crystals);
     }
   });
 
-  it('заказ-«сбыт» (уже выведенная порода) идёт без 💎', () => {
+  it('заказ-«сбыт»: 💎 не зависит от уровня лабы и выпадает примерно в половине случаев', () => {
     const s = createInitialState(makeRng(22), 0);
     s.level = 10;                       // дорогой пул: цена заказа заведомо выше 500
     s.discoveredBreeds = ['persian'];
     const rng = makeRng(23);
-    for (let i = 0; i < 20; i++) {
+    let withGem = 0;
+    const n = 400;
+    for (let i = 0; i < n; i++) {
       const o = generateOrder(s, rng, 0, 'sell');
       expect(o.kind).toBe('sell');
       expect(o.req.breed).toBe('persian');
-      expect(o.reward.crystals).toBe(0);
+      // уровень лабы 10 дал бы «цели» 3 💎 — «сбыт» платит ровно 1 либо ничего
+      expect([0, ORDER_SELL_CRYSTALS]).toContain(o.reward.crystals);
+      if (o.reward.crystals) withGem++;
     }
+    expect(Math.abs(withGem / n - ORDER_SELL_CRYSTAL_CHANCE)).toBeLessThan(0.08);
   });
 
   it('сбывать нечего → слот «сбыт» падает на «цель» и даёт 💎', () => {
@@ -352,13 +357,14 @@ describe('💎 за заказ: только «цель», от уровня л�
     expect(o.reward.crystals).toBe(orderCrystalsFor(s.level));
   });
 
-  it('доска: первые ORDER_SELL_SLOTS — «сбыт» без 💎, остальные — «цель» с 💎', () => {
+  it('доска: первые ORDER_SELL_SLOTS — «сбыт», остальные — «цель», и каждая «цель» с 💎', () => {
     const s = createInitialState(makeRng(26), 0);
     s.discoveredBreeds = ['persian', 'siamese'];
     initOrders(s, makeRng(27), 0);
     const kinds = s.orders.map((o) => o.kind);
     expect(kinds).toEqual(s.orders.map((_, i) => (i < ORDER_SELL_SLOTS ? 'sell' : 'target')));
-    expect(s.orders.filter((o) => o.reward.crystals > 0).length).toBe(ORDER_TARGET - ORDER_SELL_SLOTS);
+    expect(s.orders.filter((o) => o.kind === 'target' && o.reward.crystals > 0).length)
+      .toBe(ORDER_TARGET - ORDER_SELL_SLOTS);
     // тип слота держится и после смены заказа по таймеру
     for (const o of s.orders) o.expiresAt = 1;
     refreshExpiredOrders(s, makeRng(28), 1000);
