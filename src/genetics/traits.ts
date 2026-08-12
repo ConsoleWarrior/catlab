@@ -12,6 +12,8 @@
  *     визитки нет — облик случаен, потому он и хранит лотерею скрытых генов.
  */
 
+import { tx, type LocStr } from '../i18n.js';
+
 // ============================================================================
 //  Слой 1 — наследуемые гены строения (гейты рецептов)
 // ============================================================================
@@ -32,8 +34,8 @@ export type TraitGroup = 'length' | 'texture' | 'ears' | 'body' | 'signature';
 
 export interface TraitDef {
   id: TraitId;
-  /** RU-подпись. */
-  label: string;
+  /** Подпись, пара [ru, en] — разворачивать через `tx()` (см. traitTag). */
+  label: LocStr;
   emoji: string;
   group: TraitGroup;
 }
@@ -41,24 +43,24 @@ export interface TraitDef {
 /** Метаданные всех 14 наследуемых генов (порядок = порядок вывода в UI). */
 export const TRAITS: readonly TraitDef[] = [
   // --- длина ---
-  { id: 'shorthair', label: 'короткая шерсть', emoji: '🐈', group: 'length' },
-  { id: 'longhair', label: 'длинная шерсть', emoji: '🦁', group: 'length' },
-  { id: 'hairless', label: 'лысый', emoji: '🥚', group: 'length' },
+  { id: 'shorthair', label: ['короткая шерсть', 'shorthair'], emoji: '🐈', group: 'length' },
+  { id: 'longhair', label: ['длинная шерсть', 'longhair'], emoji: '🦁', group: 'length' },
+  { id: 'hairless', label: ['лысый', 'hairless'], emoji: '🥚', group: 'length' },
   // --- текстура ---
-  { id: 'curly', label: 'кудрявая шерсть', emoji: '🌀', group: 'texture' },
-  { id: 'wirehair', label: 'жёсткая шерсть', emoji: '🧽', group: 'texture' },
+  { id: 'curly', label: ['кудрявая шерсть', 'curly coat'], emoji: '🌀', group: 'texture' },
+  { id: 'wirehair', label: ['жёсткая шерсть', 'wirehair'], emoji: '🧽', group: 'texture' },
   // --- уши ---
-  { id: 'folded_ears', label: 'вислоухость', emoji: '📐', group: 'ears' },
-  { id: 'curled_ears', label: 'уши-кёрл', emoji: '🌙', group: 'ears' },
+  { id: 'folded_ears', label: ['вислоухость', 'folded ears'], emoji: '📐', group: 'ears' },
+  { id: 'curled_ears', label: ['уши-кёрл', 'curled ears'], emoji: '🌙', group: 'ears' },
   // --- строение ---
-  { id: 'flat_face', label: 'плоская морда', emoji: '😽', group: 'body' },
-  { id: 'short_tail', label: 'короткий хвост', emoji: '🐇', group: 'body' },
-  { id: 'short_legs', label: 'короткие лапы', emoji: '🦵', group: 'body' },
-  { id: 'big', label: 'крупный', emoji: '🐘', group: 'body' },
+  { id: 'flat_face', label: ['плоская морда', 'flat face'], emoji: '😽', group: 'body' },
+  { id: 'short_tail', label: ['короткий хвост', 'short tail'], emoji: '🐇', group: 'body' },
+  { id: 'short_legs', label: ['короткие лапы', 'short legs'], emoji: '🦵', group: 'body' },
+  { id: 'big', label: ['крупный', 'large'], emoji: '🐘', group: 'body' },
   // --- сигнатурный рисунок ---
-  { id: 'colorpoint', label: 'колор-пойнт', emoji: '🎭', group: 'signature' },
-  { id: 'ticked', label: 'тикинг', emoji: '🌾', group: 'signature' },
-  { id: 'spotted', label: 'пятнистость', emoji: '🐆', group: 'signature' },
+  { id: 'colorpoint', label: ['колор-пойнт', 'colorpoint'], emoji: '🎭', group: 'signature' },
+  { id: 'ticked', label: ['тикинг', 'ticked'], emoji: '🌾', group: 'signature' },
+  { id: 'spotted', label: ['пятнистость', 'spotted'], emoji: '🐆', group: 'signature' },
 ];
 
 export const TRAIT_BY_ID: Record<TraitId, TraitDef> = Object.fromEntries(
@@ -187,7 +189,7 @@ export function dormantTraits(ownBreed: string, ancestorBreeds: Iterable<string>
 /** Короткая подпись гена: «🐆 пятнистость». */
 export function traitTag(id: TraitId): string {
   const t = TRAIT_BY_ID[id];
-  return `${t.emoji} ${t.label}`;
+  return `${t.emoji} ${tx(t.label)}`;
 }
 
 // ============================================================================
@@ -212,43 +214,43 @@ export interface Look {
   eyes?: EyeId;
 }
 
-interface Tagged { label: string; emoji: string; }
+interface Tagged { label: LocStr; emoji: string; }
 
 export const COLOR_INFO: Record<ColorId, Tagged> = {
-  black: { emoji: '⚫', label: 'чёрный' },
-  blue: { emoji: '🩶', label: 'голубой' },
-  white: { emoji: '⚪', label: 'белый' },
-  red: { emoji: '🟠', label: 'рыжий' },
-  cream: { emoji: '🟡', label: 'кремовый' },
-  brown: { emoji: '🟤', label: 'коричневый' },
-  sable: { emoji: '🟫', label: 'соболиный' },
-  chocolate: { emoji: '🍫', label: 'шоколадный' },
-  silver: { emoji: '⬜', label: 'серебристый' },
-  bronze: { emoji: '🥉', label: 'бронзовый' },
-  tortoiseshell: { emoji: '🐢', label: 'черепаховый' },
-  calico: { emoji: '🎨', label: 'черепахово-белый' },
-  red_white: { emoji: '🔶', label: 'рыже-белый' },
-  black_roan: { emoji: '🐺', label: 'чёрный роан' },
-  skin_pink: { emoji: '🩷', label: 'розовая кожа' },
-  skin_grey: { emoji: '🩶', label: 'серо-голубая кожа' },
-  seal: { emoji: '🟤', label: 'сил-пойнт' },
-  sorrel: { emoji: '🍂', label: 'соррель' },
-  ruddy: { emoji: '🦊', label: 'дикий (ruddy)' },
-  sepia: { emoji: '🫘', label: 'сепия' },
+  black: { emoji: '⚫', label: ['чёрный', 'black'] },
+  blue: { emoji: '🩶', label: ['голубой', 'blue'] },
+  white: { emoji: '⚪', label: ['белый', 'white'] },
+  red: { emoji: '🟠', label: ['рыжий', 'red'] },
+  cream: { emoji: '🟡', label: ['кремовый', 'cream'] },
+  brown: { emoji: '🟤', label: ['коричневый', 'brown'] },
+  sable: { emoji: '🟫', label: ['соболиный', 'sable'] },
+  chocolate: { emoji: '🍫', label: ['шоколадный', 'chocolate'] },
+  silver: { emoji: '⬜', label: ['серебристый', 'silver'] },
+  bronze: { emoji: '🥉', label: ['бронзовый', 'bronze'] },
+  tortoiseshell: { emoji: '🐢', label: ['черепаховый', 'tortoiseshell'] },
+  calico: { emoji: '🎨', label: ['черепахово-белый', 'calico'] },
+  red_white: { emoji: '🔶', label: ['рыже-белый', 'red & white'] },
+  black_roan: { emoji: '🐺', label: ['чёрный роан', 'black roan'] },
+  skin_pink: { emoji: '🩷', label: ['розовая кожа', 'pink skin'] },
+  skin_grey: { emoji: '🩶', label: ['серо-голубая кожа', 'blue-grey skin'] },
+  seal: { emoji: '🟤', label: ['сил-пойнт', 'seal point'] },
+  sorrel: { emoji: '🍂', label: ['соррель', 'sorrel'] },
+  ruddy: { emoji: '🦊', label: ['дикий (ruddy)', 'ruddy'] },
+  sepia: { emoji: '🫘', label: ['сепия', 'sepia'] },
 };
 
 export const PATTERN_INFO: Record<PatternId, Tagged> = {
-  tiger: { emoji: '🐅', label: 'тигровый' },
-  marbled: { emoji: '🪵', label: 'мраморный' },
-  shaded: { emoji: '✨', label: 'затушёванный' },
-  spotted: { emoji: '🐆', label: 'пятнистый' },
-  ticked: { emoji: '🌾', label: 'тикированный' },
-  colorpoint: { emoji: '🎭', label: 'колор-пойнт' },
+  tiger: { emoji: '🐅', label: ['тигровый', 'tabby'] },
+  marbled: { emoji: '🪵', label: ['мраморный', 'marbled'] },
+  shaded: { emoji: '✨', label: ['затушёванный', 'shaded'] },
+  spotted: { emoji: '🐆', label: ['пятнистый', 'spotted'] },
+  ticked: { emoji: '🌾', label: ['тикированный', 'ticked'] },
+  colorpoint: { emoji: '🎭', label: ['колор-пойнт', 'colorpoint'] },
 };
 
 export const EYE_INFO: Record<EyeId, Tagged> = {
-  heterochromia: { emoji: '👁', label: 'гетерохромия' },
-  blue_eyes: { emoji: '🔵', label: 'голубые глаза' },
+  heterochromia: { emoji: '👁', label: ['гетерохромия', 'heterochromia'] },
+  blue_eyes: { emoji: '🔵', label: ['голубые глаза', 'blue eyes'] },
 };
 
 const L = (color: ColorId, pattern?: PatternId, eyes?: EyeId): Look => ({
@@ -347,19 +349,19 @@ export function lookOf(breed: string, sex: Sex): Look | undefined {
 /** Подпись окраса: «🟤 коричневый». */
 export function colorTag(id: ColorId): string {
   const c = COLOR_INFO[id];
-  return `${c.emoji} ${c.label}`;
+  return `${c.emoji} ${tx(c.label)}`;
 }
 
 /** Подпись рисунка: «🐅 тигровый». */
 export function patternTag(id: PatternId): string {
   const p = PATTERN_INFO[id];
-  return `${p.emoji} ${p.label}`;
+  return `${p.emoji} ${tx(p.label)}`;
 }
 
 /** Подпись глаз: «👁 гетерохромия». */
 export function eyeTag(id: EyeId): string {
   const e = EYE_INFO[id];
-  return `${e.emoji} ${e.label}`;
+  return `${e.emoji} ${tx(e.label)}`;
 }
 
 /** Готовые подписи облика: [окрас, рисунок?, глаза?]. */

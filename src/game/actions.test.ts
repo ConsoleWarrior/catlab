@@ -327,18 +327,18 @@ describe('прокачка и генолаб', () => {
 describe('генная инженерия', () => {
   it('buyBoost заряжает усилитель за ДНК', () => {
     const s = createInitialState(makeRng(40), 0);
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     expect(buyBoost(s, 'tierUp').ok).toBe(false); // 0 ДНК
     expect(buyBoost(s, 'bogus').ok).toBe(false);  // нет такого усилителя
-    s.dna = 100;
+    s.dna = 200;
     expect(buyBoost(s, 'tierUp').ok).toBe(true);
     expect(s.boosts.tierUp).toBe(1);
-    expect(s.dna).toBe(40); // 60 🧬 списано
+    expect(s.dna).toBe(50); // 150 🧬 списано
   });
 
   it('buyBoost заряжает усилитель за кристаллы (премиум-альтернатива)', () => {
     const s = createInitialState(makeRng(40), 0);
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     s.crystals = 4; s.dna = 0;
     expect(buyBoost(s, 'tierUp', 'crystals').ok).toBe(false); // нужно 5 💎
     expect(buyBoost(s, 'luckyUp', 'crystals').ok).toBe(true); // 3 💎
@@ -349,8 +349,8 @@ describe('генная инженерия', () => {
 
   it('заряды копятся любых типов; авто-активируется первый купленный', () => {
     const s = createInitialState(makeRng(40), 0);
-    s.level = 10; // Генная инженерия открыта уровнем
-    s.dna = 300; s.crystals = 20;
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
+    s.dna = 500; s.crystals = 20;
     expect(buyBoost(s, 'noDown').ok).toBe(true);
     expect(s.activeBoost).toBe('noDown'); // ничего не было активно → авто-активация
     // другой тип тоже заряжается (склад копится), но активность не меняется
@@ -365,7 +365,7 @@ describe('генная инженерия', () => {
   it('adChargeBoost даёт бесплатный заряд за 📺 с глобальным кулдауном (🛡/🍀)', () => {
     const s = createInitialState(makeRng(40), 0);
     expect(adChargeBoost(s, 'noDown', 1000).ok).toBe(false); // Генная инженерия ещё заперта
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     expect(adChargeBoost(s, 'bogus', 1000).ok).toBe(false);  // нет такого усилителя
     // первый просмотр — бесплатно, без валюты; ничего не было активно → авто-активация
     expect(adChargeBoost(s, 'noDown', 1000).ok).toBe(true);
@@ -384,14 +384,14 @@ describe('генная инженерия', () => {
 
   it('🔼 Активатор за 📺 не заряжается — только за валюту (adCharge: false)', () => {
     const s = createInitialState(makeRng(40), 0);
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     const r = adChargeBoost(s, 'tierUp', 1000);
     expect(r.ok).toBe(false);
     expect(r.ok ? undefined : r.reason).toBe('заряжается только за валюту');
     expect(s.boosts.tierUp).toBeUndefined();
     expect(s.lastBoostAdAt).toBe(0); // отказ не сжигает кулдаун
     // за валюту — по-прежнему можно
-    s.dna = 100;
+    s.dna = 200;
     expect(buyBoost(s, 'tierUp').ok).toBe(true);
   });
 
@@ -405,7 +405,7 @@ describe('генная инженерия', () => {
 
   it('toggleBoost переключает активность без траты зарядов; активен только один', () => {
     const s = createInitialState(makeRng(40), 0);
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     s.dna = 300;
     buyBoost(s, 'noDown'); // active = noDown
     buyBoost(s, 'tierUp'); // на складе, не активен
@@ -428,9 +428,9 @@ describe('генная инженерия', () => {
   it('🔼 Форсаж в инкубаторе поднимает тир котёнка и тратит заряд', () => {
     const rng = makeRng(41);
     const s = createInitialState(rng, 0);
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     const { female, male } = pair(s); // дворовые (common)
-    s.dna = 100;
+    s.dna = 200;
     buyBoost(s, 'tierUp');
     startBreeding(s, 0, female.id, male.id, 0);
     const ev = collectReady(s, incubationDuration(s), rng);
@@ -442,11 +442,11 @@ describe('генная инженерия', () => {
   it('заряд Форсажа не тратится впустую на легендарной паре', () => {
     const rng = makeRng(42);
     const s = createInitialState(rng, 0);
-    s.level = 10; // Генная инженерия открыта уровнем
+    s.research.r_lab_boosts = 1; // куплен узел «Учёный» — усилители открыты
     const { female, male } = pair(s);
     female.breed = 'bengal'; female.rarityTier = 'legendary';
     male.breed = 'bengal'; male.rarityTier = 'legendary';
-    s.dna = 100;
+    s.dna = 200;
     buyBoost(s, 'tierUp');
     startBreeding(s, 0, female.id, male.id, 0);
     const ev = collectReady(s, incubationDuration(s), rng);
@@ -530,6 +530,23 @@ describe('малыш с родителями (рождение)', () => {
     const r = moveCat(s, kitten.id, 'nursery');
     expect(r.ok).toBe(false);
     expect(s.slots[0]!.kittenId).toBe(kitten.id);
+  });
+
+  it('малыша можно отдать «в добрые руки» прямо из слота — слот освобождается', () => {
+    const { s, kitten } = bornKitten(106);
+    const r = adoptCat(s, kitten.id);
+    expect(r.ok).toBe(true);
+    expect(s.slots[0]!.kittenId).toBeNull();           // висячей ссылки не осталось
+    expect(s.cats.some((c) => c.id === kitten.id)).toBe(false);
+  });
+
+  it('родителя из слота (вязка не идёт) тоже можно отдать «в добрые руки»', () => {
+    const { s, female, male } = bornKitten(107);
+    s.slots[0]!.kittenId = null;                       // малыша уже пристроили
+    expect(adoptCat(s, female.id).ok).toBe(true);
+    expect(s.slots[0]!.motherId).toBeNull();
+    expect(s.slots[0]!.fatherId).toBe(male.id);        // партнёр остался стоять
+    expect(isInSlot(s, female.id)).toBe(false);
   });
 
   it('keepKittenWithParents включает медленный рост (втрое)', () => {

@@ -18,6 +18,7 @@
  */
 
 import { tierOfBreed, carriedTraitSet } from '../genetics/index.js';
+import { tx, type LocStr } from '../i18n.js';
 import type { KinshipLevel, BreedSide, BreedingContext, RarityTier } from '../genetics/index.js';
 import type { Cat, Ancestor } from './types.js';
 import * as C from './config.js';
@@ -153,10 +154,14 @@ export function buildBreedingContext(mother: Cat, father: Cat): BreedingContext 
   };
 }
 
-/** RU-подписи уровней родства (инкубатор, карточка рождения). */
-export const KINSHIP_RU: Record<KinshipLevel, string> = {
-  none: '',
-  moderate: 'умеренное',
-  high: 'высокое',
-  critical: 'критическое',
+/** Подписи уровней родства (инкубатор, карточка рождения). */
+const KINSHIP_NAME: Record<KinshipLevel, LocStr> = {
+  none: ['', ''],
+  moderate: ['умеренное', 'moderate'],
+  high: ['высокое', 'high'],
+  critical: ['критическое', 'critical'],
 };
+
+export function kinshipName(level: KinshipLevel): string {
+  return tx(KINSHIP_NAME[level]);
+}

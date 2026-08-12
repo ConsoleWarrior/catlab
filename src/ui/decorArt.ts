@@ -87,6 +87,12 @@ export function buildDecor(roomId: string, roomW: number, roomH: number): Contai
     const tex = texs.get(it.sprite);
     if (!tex) continue; // текстура не подгрузилась — пропускаем
     const s = new Sprite(tex);
+    s.label = it.sprite; // комната может найти конкретный предмет (getChildByLabel)
+    // Декор — «прозрачный» для кликов. Без этого спрайт глушит хит-тест всем, кто
+    // за ним: Pixi проверяет детей спереди назад и останавливается на первом, чей
+    // ПРЯМОУГОЛЬНИК накрыл точку, даже если сам он не интерактивен. Кошачий
+    // комплекс так перехватывал тапы по котам на настенной полке.
+    s.eventMode = 'none';
     s.anchor.set(0.5, 1);
     const sc = it.scaleBy === 'w' ? (it.scale * roomW) / tex.width : (it.scale * roomH) / tex.height;
     s.scale.set(it.flip ? -sc : sc, sc * (it.squashY ?? 1));

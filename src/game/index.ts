@@ -58,7 +58,7 @@ export {
 } from './knowledge.js';
 export {
   relatedness, kinshipLevel, rollKittenHearts, softenKinship, buildBreedingContext,
-  ancestorGens, ancestorBreedList, isPureLine, KINSHIP_RU,
+  ancestorGens, ancestorBreedList, isPureLine, kinshipName,
 } from './kinship.js';
 export {
   matchesOrder, generateOrder, initOrders, refreshExpiredOrders, adRefreshOrder, replaceOrder,

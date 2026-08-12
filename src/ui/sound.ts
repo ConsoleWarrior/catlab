@@ -128,6 +128,7 @@ export function setMasterVolume(v: number): void {
  * мурчание и трек продолжаются с того же места.
  */
 export function sfxPause(on: boolean): void {
+  audioPaused = on;
   if (on) {
     sound.pauseAll();
     musicEl?.pause();
@@ -260,6 +261,11 @@ let musicVol = 0; // огибающая фейда 0..1
 let musicRaf = 0;
 let musicPrev = 0;
 let musicUnlockHooked = false;
+// Пауза висит поверх «музыка включена»: игра стоит (реклама, пауза площадки,
+// свёрнутая вкладка), а комната по-прежнему «музыкальная». Держим отдельным
+// флагом, потому что снять паузу вправе только sfxPause — иначе возврат на
+// вкладку во время рекламного ролика запускал бы трек поверх рекламы (п. 4.7).
+let audioPaused = false;
 
 function musicTick(ts: number): void {
   const dt = Math.min(0.1, (ts - musicPrev) / 1000);
@@ -280,6 +286,7 @@ function musicKick(): void {
 }
 
 function tryPlayMusic(): void {
+  if (audioPaused) return; // пока держится пауза, играть нечему — вернёт sfxPause(false)
   musicEl?.play().catch(() => {
     // автоплей заблокирован до первого жеста игрока — повторим по первому тапу
     if (musicUnlockHooked) return;
@@ -309,11 +316,12 @@ export function sfxMusic(on: boolean): void {
       });
       el.src = musicList[musicIdx]!;
       musicEl = el;
-      // вкладку свернули — пауза (сами эффекты @pixi/sound делают это за себя)
+      // Вкладку свернули — пауза (сами эффекты @pixi/sound делают это за себя).
+      // Возобновление отсюда НЕ делаем: вернуть звук вправе только sfxPause, когда
+      // ушла последняя причина паузы (см. Game.setPause). Иначе возврат на вкладку
+      // поверх открытого рекламного ролика включал бы музыку — нарушение п. 4.7.
       document.addEventListener('visibilitychange', () => {
-        if (!musicEl) return;
-        if (document.hidden) musicEl.pause();
-        else if (musicOn) tryPlayMusic();
+        if (document.hidden) musicEl?.pause();
       });
     }
     tryPlayMusic();

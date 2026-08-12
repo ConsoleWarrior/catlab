@@ -14,14 +14,15 @@
  */
 
 import type { RarityTier } from './types.js';
+import { tx, type LocStr } from '../i18n.js';
 
 export type BreedKind = 'base' | 'breed';
 
 export interface BreedDef {
   /** Ключ (совпадает с именем файла арта: `<key>__<n>.webp`). */
   key: string;
-  /** Отображаемое имя (RU). */
-  name: string;
+  /** Отображаемое имя, пара [ru, en] — разворачивать через `breedName()`/`tx()`. */
+  name: LocStr;
   tier: RarityTier;
   kind: BreedKind;
 }
@@ -38,90 +39,90 @@ export const LEVEL_TIER: readonly RarityTier[] = [
 // T2 (14) — популярные; T3 (22) — редкие; T4 (21) — эксклюзивные;
 // T5 (10) — легендарные (вершина селекции). Ключ породы — имя файлов арта
 // `src/assets/breeds/<key>__<n>.webp` (несколько вариантов, без привязки к полу).
-const RAW: ReadonlyArray<readonly [string, string, RarityTier]> = [
+const RAW: ReadonlyArray<readonly [key: string, ru: string, en: string, tier: RarityTier]> = [
   // --- Tier 1 — Обычные ---
-  ['moggie', 'Дворовый', 'common'],
-  ['domestic_shorthair', 'Домашняя короткошёрстная', 'common'],
-  ['domestic_longhair', 'Домашняя длинношёрстная', 'common'],
+  ['moggie', 'Дворовый', 'Moggie', 'common'],
+  ['domestic_shorthair', 'Домашняя короткошёрстная', 'Domestic Shorthair', 'common'],
+  ['domestic_longhair', 'Домашняя длинношёрстная', 'Domestic Longhair', 'common'],
 
   // --- Tier 2 — Популярные ---
-  ['british_shorthair', 'Британская короткошёрстная', 'uncommon'],
-  ['scottish_fold', 'Шотландская вислоухая', 'uncommon'],
-  ['persian', 'Персидская', 'uncommon'],
-  ['siamese', 'Сиамская', 'uncommon'],
-  ['thai', 'Тайская', 'uncommon'],
-  ['russian_blue', 'Русская голубая', 'uncommon'],
-  ['turkish_angora', 'Турецкая ангора', 'uncommon'],
-  ['siberian', 'Сибирская', 'uncommon'],
-  ['neva_masquerade', 'Невская маскарадная', 'uncommon'],
-  ['american_shorthair', 'Американская короткошёрстная', 'uncommon'],
-  ['exotic_shorthair', 'Экзот', 'uncommon'],
-  ['abyssinian', 'Абиссинская', 'uncommon'],
-  ['birman', 'Священная бирма', 'uncommon'],
-  ['european_shorthair', 'Европейская короткошёрстная', 'uncommon'],
+  ['british_shorthair', 'Британская короткошёрстная', 'British Shorthair', 'uncommon'],
+  ['scottish_fold', 'Шотландская вислоухая', 'Scottish Fold', 'uncommon'],
+  ['persian', 'Персидская', 'Persian', 'uncommon'],
+  ['siamese', 'Сиамская', 'Siamese', 'uncommon'],
+  ['thai', 'Тайская', 'Thai', 'uncommon'],
+  ['russian_blue', 'Русская голубая', 'Russian Blue', 'uncommon'],
+  ['turkish_angora', 'Турецкая ангора', 'Turkish Angora', 'uncommon'],
+  ['siberian', 'Сибирская', 'Siberian', 'uncommon'],
+  ['neva_masquerade', 'Невская маскарадная', 'Neva Masquerade', 'uncommon'],
+  ['american_shorthair', 'Американская короткошёрстная', 'American Shorthair', 'uncommon'],
+  ['exotic_shorthair', 'Экзот', 'Exotic Shorthair', 'uncommon'],
+  ['abyssinian', 'Абиссинская', 'Abyssinian', 'uncommon'],
+  ['birman', 'Священная бирма', 'Birman', 'uncommon'],
+  ['european_shorthair', 'Европейская короткошёрстная', 'European Shorthair', 'uncommon'],
 
   // --- Tier 3 — Редкие ---
-  ['maine_coon', 'Мейн-кун', 'rare'],
-  ['norwegian_forest', 'Норвежская лесная', 'rare'],
-  ['ragdoll', 'Рэгдолл', 'rare'],
-  ['bengal', 'Бенгальская', 'rare'],
-  ['donskoy', 'Донской сфинкс', 'rare'],
-  ['sphynx', 'Канадский сфинкс', 'rare'],
-  ['cornish_rex', 'Корниш-рекс', 'rare'],
-  ['devon_rex', 'Девон-рекс', 'rare'],
-  ['munchkin', 'Манчкин', 'rare'],
-  ['kurilian_bobtail', 'Курильский бобтейл', 'rare'],
-  ['japanese_bobtail', 'Японский бобтейл', 'rare'],
-  ['burmese', 'Бурманская', 'rare'],
-  ['bombay', 'Бомбейская', 'rare'],
-  ['somali', 'Сомали', 'rare'],
-  ['ocicat', 'Оцикет', 'rare'],
-  ['chartreux', 'Шартрез', 'rare'],
-  ['oriental_shorthair', 'Ориентальная', 'rare'],
-  ['tonkinese', 'Тонкинская', 'rare'],
-  ['himalayan', 'Гималайская', 'rare'],
-  ['manx', 'Мэнкс', 'rare'],
-  ['balinese', 'Балинезийская', 'rare'],
-  ['turkish_van', 'Турецкий ван', 'rare'],
+  ['maine_coon', 'Мейн-кун', 'Maine Coon', 'rare'],
+  ['norwegian_forest', 'Норвежская лесная', 'Norwegian Forest Cat', 'rare'],
+  ['ragdoll', 'Рэгдолл', 'Ragdoll', 'rare'],
+  ['bengal', 'Бенгальская', 'Bengal', 'rare'],
+  ['donskoy', 'Донской сфинкс', 'Donskoy', 'rare'],
+  ['sphynx', 'Канадский сфинкс', 'Sphynx', 'rare'],
+  ['cornish_rex', 'Корниш-рекс', 'Cornish Rex', 'rare'],
+  ['devon_rex', 'Девон-рекс', 'Devon Rex', 'rare'],
+  ['munchkin', 'Манчкин', 'Munchkin', 'rare'],
+  ['kurilian_bobtail', 'Курильский бобтейл', 'Kurilian Bobtail', 'rare'],
+  ['japanese_bobtail', 'Японский бобтейл', 'Japanese Bobtail', 'rare'],
+  ['burmese', 'Бурманская', 'Burmese', 'rare'],
+  ['bombay', 'Бомбейская', 'Bombay', 'rare'],
+  ['somali', 'Сомали', 'Somali', 'rare'],
+  ['ocicat', 'Оцикет', 'Ocicat', 'rare'],
+  ['chartreux', 'Шартрез', 'Chartreux', 'rare'],
+  ['oriental_shorthair', 'Ориентальная', 'Oriental Shorthair', 'rare'],
+  ['tonkinese', 'Тонкинская', 'Tonkinese', 'rare'],
+  ['himalayan', 'Гималайская', 'Himalayan', 'rare'],
+  ['manx', 'Мэнкс', 'Manx', 'rare'],
+  ['balinese', 'Балинезийская', 'Balinese', 'rare'],
+  ['turkish_van', 'Турецкий ван', 'Turkish Van', 'rare'],
 
   // --- Tier 4 — Эксклюзивные ---
-  ['american_curl', 'Американский кёрл', 'epic'],
-  ['elf', 'Эльф', 'epic'],
-  ['bambino', 'Бамбино', 'epic'],
-  ['skookum', 'Скукум', 'epic'],
-  ['minskin', 'Минскин', 'epic'],
-  ['lykoi', 'Ликой', 'epic'],
-  ['chausie', 'Чаузи', 'epic'],
-  ['khao_manee', 'Као-мани', 'epic'],
-  ['singapura', 'Сингапура', 'epic'],
-  ['selkirk_rex', 'Селкирк-рекс', 'epic'],
-  ['pixiebob', 'Пиксибоб', 'epic'],
-  ['toyger', 'Тойгер', 'epic'],
-  ['kinkalow', 'Кинкалоу', 'epic'],
-  ['peterbald', 'Петерболд', 'epic'],
-  ['egyptian_mau', 'Египетская мау', 'epic'],
-  ['laperm', 'Лаперм', 'epic'],
-  ['american_wirehair', 'Американская жесткошёрстная', 'epic'],
-  ['sokoke', 'Сококе', 'epic'],
-  ['burmilla', 'Бурмилла', 'epic'],
-  ['havana', 'Гавана', 'epic'],
-  ['ojos_azules', 'Охос азулес', 'epic'],
+  ['american_curl', 'Американский кёрл', 'American Curl', 'epic'],
+  ['elf', 'Эльф', 'Elf', 'epic'],
+  ['bambino', 'Бамбино', 'Bambino', 'epic'],
+  ['skookum', 'Скукум', 'Skookum', 'epic'],
+  ['minskin', 'Минскин', 'Minskin', 'epic'],
+  ['lykoi', 'Ликой', 'Lykoi', 'epic'],
+  ['chausie', 'Чаузи', 'Chausie', 'epic'],
+  ['khao_manee', 'Као-мани', 'Khao Manee', 'epic'],
+  ['singapura', 'Сингапура', 'Singapura', 'epic'],
+  ['selkirk_rex', 'Селкирк-рекс', 'Selkirk Rex', 'epic'],
+  ['pixiebob', 'Пиксибоб', 'Pixiebob', 'epic'],
+  ['toyger', 'Тойгер', 'Toyger', 'epic'],
+  ['kinkalow', 'Кинкалоу', 'Kinkalow', 'epic'],
+  ['peterbald', 'Петерболд', 'Peterbald', 'epic'],
+  ['egyptian_mau', 'Египетская мау', 'Egyptian Mau', 'epic'],
+  ['laperm', 'Лаперм', 'LaPerm', 'epic'],
+  ['american_wirehair', 'Американская жесткошёрстная', 'American Wirehair', 'epic'],
+  ['sokoke', 'Сококе', 'Sokoke', 'epic'],
+  ['burmilla', 'Бурмилла', 'Burmilla', 'epic'],
+  ['havana', 'Гавана', 'Havana Brown', 'epic'],
+  ['ojos_azules', 'Охос азулес', 'Ojos Azules', 'epic'],
 
   // --- Tier 5 — Легендарные ---
-  ['savannah', 'Саванна', 'legendary'],
-  ['caracat', 'Каракет', 'legendary'],
-  ['ashera', 'Ашера', 'legendary'],
-  ['dwelf', 'Двэльф', 'legendary'],
-  ['serengeti', 'Серенгети', 'legendary'],
-  ['cheetoh', 'Чито', 'legendary'],
-  ['safari', 'Сафари', 'legendary'],
-  ['california_spangled', 'Калифорнийская сияющая', 'legendary'],
-  ['khao_manee_diamond', 'Као-мани «Алмаз»', 'legendary'],
-  ['lykoi_elf', 'Ликой-эльф', 'legendary'],
+  ['savannah', 'Саванна', 'Savannah', 'legendary'],
+  ['caracat', 'Каракет', 'Caracat', 'legendary'],
+  ['ashera', 'Ашера', 'Ashera', 'legendary'],
+  ['dwelf', 'Двэльф', 'Dwelf', 'legendary'],
+  ['serengeti', 'Серенгети', 'Serengeti', 'legendary'],
+  ['cheetoh', 'Чито', 'Cheetoh', 'legendary'],
+  ['safari', 'Сафари', 'Safari', 'legendary'],
+  ['california_spangled', 'Калифорнийская сияющая', 'California Spangled', 'legendary'],
+  ['khao_manee_diamond', 'Као-мани «Алмаз»', 'Khao Manee "Diamond"', 'legendary'],
+  ['lykoi_elf', 'Ликой-эльф', 'Lykoi Elf', 'legendary'],
 ];
 
-export const BREEDS: readonly BreedDef[] = RAW.map(([key, name, tier]) => ({
-  key, name, tier, kind: tier === 'common' ? 'base' : 'breed',
+export const BREEDS: readonly BreedDef[] = RAW.map(([key, ru, en, tier]) => ({
+  key, name: [ru, en] as LocStr, tier, kind: tier === 'common' ? 'base' : 'breed',
 }));
 
 export const BREED_BY_KEY: Record<string, BreedDef> = Object.fromEntries(
@@ -144,7 +145,8 @@ export function tierOfBreed(key: string): RarityTier {
 }
 
 export function breedName(key: string): string {
-  return BREED_BY_KEY[key]?.name ?? key;
+  const def = BREED_BY_KEY[key];
+  return def ? tx(def.name) : key;
 }
 
 export function isBaseBreed(key: string): boolean {
@@ -158,7 +160,7 @@ export function isBaseBreed(key: string): boolean {
  */
 export interface BreedBoosts {
   tierUp?: boolean;  // 🔼 гарантированный успех рецепта тира выше (если условия выполнены)
-  luckyUp?: boolean; // 🍀 шансы всех подходящих рецептов ×2
+  luckyUp?: boolean; // 🍀 из исходов вычёркиваются серые (T1): родится цветной (T2+)
   noDown?: boolean;  // 🛡 котёнок не опустится ниже старшего родителя
-  degrade?: boolean; // ⬇ шансы дворовых пород (T1) ×10 — и рецепты T1, и «неудача»-метис
+  degrade?: boolean; // ⬇ из исходов вычёркиваются цветные (T2+): родится серый дворовый
 }

@@ -51,11 +51,12 @@ import {
 import type { OfflineReport, LevelUpInfo } from './overlays.js';
 import { buildRoomHelpPanel } from './roomHelp.js';
 import {
-  initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler,
+  initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler, platformLang,
 } from '../platform/ysdk.js';
 import { loadSaveCandidates, writeSave, writeSaveAwait } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
 import { setAdPauseHandler } from '../platform/ads.js';
+import { initLang, t, onLangChange, setLang } from '../i18n.js';
 
 // --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
 // Сцена всегда DESIGN_H виртуальных пикселей в высоту; ширина = высота × аспект
@@ -109,6 +110,9 @@ export class Game implements UiContext {
   // позиции и «уезжает» от центра или обрезается краем экрана.
   private overlayDim: Graphics | null = null;
   private overlayContent: Container | null = null;
+  // Открыты ли ⚙️ Настройки: единственная панель, которую нужно вернуть на место
+  // после пересборки сцены (смена языка происходит как раз из неё).
+  private settingsOpen = false;
   private readonly toastBox = new Container();
   // Обучение новичка (FTUE): мягкая подсветка цели + плашка с подсказкой.
   // Слой лежит ВЫШЕ оверлеев: на шаге «второго кота» подсказка обязана читаться
@@ -199,6 +203,7 @@ export class Game implements UiContext {
     document.getElementById('app')!.appendChild(this.app.canvas);
 
     await platform;
+    initLang(platformLang()); // язык игрока из SDK (п. 2.14) — сразу после подъёма платформы
     await this.loadState(reset);
     this.shownLevel = this.state.level; // база для баннера повышения уровня
     this.wasStarving = isStarving(this.state); // не спамить тостом «корм закончился» на первом кадре
@@ -265,12 +270,16 @@ export class Game implements UiContext {
       anchorIn: (i, key) => this.rooms[i]?.anchor?.(key) ?? null,
       navDot: (i) => this.dots[i] ?? null,
       overlayOpen: () => this.overlayOpen,
-      skip: () => { finishTutorial(this.state); this.commit(); this.toast('Подсказки выключены — справка по кнопке ℹ️ у названия комнаты'); },
+      skip: () => {
+        finishTutorial(this.state); this.commit();
+        this.toast(t('Подсказки выключены — справка по кнопке ℹ️ у названия комнаты',
+          'Hints are off — help is behind the ℹ️ button next to the room title'));
+      },
       finish: () => {
         finishTutorial(this.state);
         this.commit();
         this.save();
-        this.toast('Обучение пройдено! 🎓 Дальше — Генолаб: 📖 Котодекс и рецепты пород');
+        this.toast(t('Обучение пройдено! 🎓 Дальше — Генолаб: 📖 Котодекс и рецепты пород', 'Tutorial complete! 🎓 Next stop — the Genolab: 📖 Catdex and breed recipes'));
       },
     });
     this.root.addChild(
@@ -310,6 +319,19 @@ export class Game implements UiContext {
     // окно поверх неё.
     if (this.pendingOffline) setTimeout(() => this.showOfflineReport(), 700);
 
+    // Смена языка (⚙️ Настройки): тексты уже созданы объектами Pixi, поэтому
+    // сцену пересобираем целиком — как при ресайзе. Панель настроек открываем
+    // заново, чтобы игрок увидел результат там же, где переключал.
+    onLangChange(() => {
+      const wasSettings = this.settingsOpen;
+      this.closeOverlay();
+      this.layout();
+      // Панель возвращаем СЛЕДУЮЩИМ тиком: сейчас мы внутри обработки тапа по
+      // кнопке языка, и общий «тап мимо панели закрывает оверлей» успел бы
+      // захлопнуть только что открытое окно.
+      if (wasSettings) setTimeout(() => this.openSettings(), 0);
+    });
+
     // Пауза на время рекламы 📺 за награду (п. 4.7). Висит на общей обвязке
     // показа, поэтому работает для всех восьми кнопок 📺, где бы их ни звали.
     setAdPauseHandler((on) => this.setPause('ad', on));
@@ -331,7 +353,7 @@ export class Game implements UiContext {
     }).then((restored) => {
       if (!restored) return;
       this.commit();
-      this.toast(`Покупка зачислена: 💎 +${restored}`);
+      this.toast(t(`Покупка зачислена: 💎 +${restored}`, `Purchase credited: 💎 +${restored}`));
     });
 
     // Автосейв при сворачивании/закрытии — с flush: облачная запись уходит
@@ -366,6 +388,7 @@ export class Game implements UiContext {
         openOrders: () => this.openOrders(),
         openRoomHelp: (id = 'incubator') => this.openRoomHelp(id),
         openSettings: () => this.openSettings(),
+        setLang: (l: 'ru' | 'en') => setLang(l), // DEV: проверка переключения языка
         openShop: () => this.openShop(),
         shopAvailable: () => shopAvailable(),
         buyPack: (id: string) => buyPack(id).then((r) => { this.commit(); return r; }),
@@ -585,10 +608,10 @@ export class Game implements UiContext {
       return;
     }
     const parts: string[] = [];
-    if (born) parts.push(`родилось котят: ${born} 🐱`);
+    if (born) parts.push(t(`родилось котят: ${born} 🐱`, `kittens born: ${born} 🐱`));
     if (rep) parts.push(`+${rep} ⭐`);
-    if (inc.coins) parts.push(`доход: +💰${inc.coins}`);
-    if (parts.length) setTimeout(() => this.toast('С возвращением! ' + parts.join(', ')), 600);
+    if (inc.coins) parts.push(t(`доход: +💰${inc.coins}`, `income: +💰${inc.coins}`));
+    if (parts.length) setTimeout(() => this.toast(t('С возвращением! ', 'Welcome back! ') + parts.join(', ')), 600);
   }
 
   /** Показать посчитанный отчёт «С возвращением» (сцена к этому моменту уже собрана). */
@@ -652,8 +675,8 @@ export class Game implements UiContext {
     // Единственная подсказка про магазин: отказ «не хватает кристаллов» приходит из
     // десятка мест ядра — дописываем, куда идти, ровно здесь, ничего не открывая
     // насильно поверх действия игрока.
-    if (msg.includes('не хватает кристаллов') && shopAvailable()) {
-      msg = 'Не хватает 💎 — пополнить можно кнопкой «+» в шапке';
+    if (msg.includes(t('не хватает кристаллов', 'not enough crystals')) && shopAvailable()) {
+      msg = t('Не хватает 💎 — пополнить можно кнопкой «+» в шапке', 'Not enough 💎 — top up with the «+» button in the header');
     }
     this.toastT.text = msg;
     this.toastUntil = this.now() + 2400;
@@ -830,7 +853,10 @@ export class Game implements UiContext {
 
   openSettings(): void {
     const close = (): void => this.closeOverlay();
+    // Флаг ставим ПОСЛЕ показа: showOverlay начинается с closeOverlay(), который
+    // его же и сбрасывает (нужен для возврата панели после смены языка).
     this.showOverlay(buildSettingsPanel(this, close));
+    this.settingsOpen = true;
   }
 
   /** Магазин 💎 — только когда покупки реально доступны (без мёртвых кнопок). */
@@ -975,7 +1001,7 @@ export class Game implements UiContext {
     if (!r.ok) { this.toast(r.reason); return false; } // нет места → вернётся в слот
     clearBreederSlot(this.state, cat.id); // если был родителем — снять (для малыша no-op)
     this.commit();
-    this.toast(room === 'shelter' ? 'Котик в приюте 🏠' : 'Котик в питомнике 🏆');
+    this.toast(room === 'shelter' ? t('Котик в приюте 🏠', 'The cat is in the shelter 🏠') : t('Котик в питомнике 🏆', 'The cat is in the cattery 🏆'));
     return true;
   }
 
@@ -1180,10 +1206,10 @@ export class Game implements UiContext {
     const rate = netIncomePerMin(this.state);
     this.coinsT.text = `💰 ${fmt(this.state.coins)}`;
     // при голоде доход стоит — показываем это прямо в шапке вместо ставки
-    this.rateT.text = isStarving(this.state) ? '🍽 голод' : rate > 0 ? `+${rate.toFixed(rate < 10 ? 1 : 0)}/мин` : '';
+    this.rateT.text = isStarving(this.state) ? t('🍽 голод', '🍽 starving') : rate > 0 ? t(`+${rate.toFixed(rate < 10 ? 1 : 0)}/мин`, `+${rate.toFixed(rate < 10 ? 1 : 0)}/min`) : '';
     this.crystalsT.text = `💎 ${fmt(this.state.crystals)}`;
     this.dnaT.text = `🧬 ${fmt(this.state.dna)}`;
-    this.levelT.text = `⭐ Ур. ${this.state.level}`;
+    this.levelT.text = t(`⭐ Ур. ${this.state.level}`, `⭐ Lv. ${this.state.level}`);
 
     // ряд ресурсов слева: деньги и доход/мин стоят рядом, дальше кристаллы/ДНК/уровень.
     // Раскладка по реальной ширине текста — компактнее фиксированных слотов и без наезда.
@@ -1387,6 +1413,7 @@ export class Game implements UiContext {
     this.overlayLayer.removeChildren();
     this.overlayDim = null;
     this.overlayContent = null;
+    this.settingsOpen = false;
     // меню закрыто — кот больше не «заморожен»; отсюда отсчитываем 3 сек до
     // исчезновения значка ℹ️ (пока меню было открыто, iconUntil = Infinity)
     if (this.catInfoFocus) {
@@ -1523,7 +1550,7 @@ export class Game implements UiContext {
     }
     // тост ровно в момент опустошения кормушки (не спамим каждый кадр)
     const starving = isStarving(this.state);
-    if (starving && !this.wasStarving) this.toast('Корм закончился! 🍽 Покорми котов в Питомнике');
+    if (starving && !this.wasStarving) this.toast(t('Корм закончился! 🍽 Покорми котов в Питомнике', 'The food ran out! 🍽 Feed the cats in the Cattery'));
     this.wasStarving = starving;
 
     // пассивный доход (живое накопление; при голоде netIncomePerMin = 0)
@@ -1548,16 +1575,16 @@ export class Game implements UiContext {
         // первую в Котодексе породу отмечаем отдельной фанфарой — событие редкое,
         // обычное рождение звучит скромнее (на выводок один звук, а не по малышу)
         sfxEvent(events.some((e) => e.kitten && e.newBreed) ? 'newbreed' : 'birth');
-        const base = born > 1 ? `Малыши родились: ${born} 🐾` : 'Малыш родился! 🐾';
+        const base = born > 1 ? t(`Малыши родились: ${born} 🐾`, `Kittens born: ${born} 🐾`) : t('Малыш родился! 🐾', 'A kitten is born! 🐾');
         this.toast(rep ? `${base} +${rep} ⭐` : base);
-      } else if (dead) this.toast('Котёнок не выжил 😿');
+      } else if (dead) this.toast(t('Котёнок не выжил 😿', 'The kitten did not make it 😿'));
     }
 
     // доска заказов: заказ, чей 6-часовой таймер жизни истёк, сам сменяется свежим
     // (внутри — no-op, если ничего не просрочено, поэтому проверяем каждый кадр)
     if (refreshExpiredOrders(this.state, this.rng, this.now())) {
       this.commit();
-      this.toast('📋 Заказ на доске сменился! Загляни в Приют');
+      this.toast(t('📋 Заказ на доске сменился! Загляни в Приют', '📋 An order on the board has changed! Check the Shelter'));
     }
 
     // стол исследований (Генолаб → Исследования): таймер дошёл → открываем
@@ -1565,8 +1592,8 @@ export class Game implements UiContext {
     if (this.state.recipeResearch?.readyAt > 0 && this.now() >= this.state.recipeResearch.readyAt) {
       const res = finishRecipeResearch(this.state, this.now(), this.rng);
       this.commit();
-      if (res.recipe) this.toast(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`);
-      else if (res.refunded) this.toast('Исследовать нечего — все рецепты открыты, ресурсы возвращены ↩');
+      if (res.recipe) this.toast(t(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`, `📜 Recipe researched: «${breedName(res.recipe.result)}»! Check the Catdex`));
+      else if (res.refunded) this.toast(t('Исследовать нечего — все рецепты открыты, ресурсы возвращены ↩', 'Nothing left to research — every recipe is known, resources refunded ↩'));
     }
 
     // Панель повышения уровня — когда экран свободен: не поверх другого оверлея и

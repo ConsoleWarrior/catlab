@@ -21,6 +21,11 @@
  * котёнка — один бросок по этому распределению, поэтому превью 🔮 в инкубаторе
  * показывает ровно те вероятности, по которым рождается котёнок.
  *
+ * УСИЛИТЕЛИ 🍀/⬇ — не множители шанса, а фильтр половины пород (keepGroup):
+ * 🍀 вычёркивает из исходов серых (T1), ⬇ — цветных (T2+); шансы вычеркнутых
+ * раздаются оставшимся пропорционально. То есть каждый из них — гарантия «рода»
+ * котёнка, а конкретная порода внутри своей половины по-прежнему лотерея.
+ *
  * Все числа шансов — здесь же в таблице RECIPES (это конфиг баланса рецептов).
  */
 
@@ -318,30 +323,13 @@ export function recipeMatches(r: Recipe, ctx: BreedingContext): boolean {
 }
 
 /**
- * ⬇ Деградатор: во сколько раз растёт СУММАРНЫЙ шанс дворового (T1) исхода пары.
- * 🍀 Катализатор: во сколько раз растёт СУММАРНЫЙ шанс рецептного исхода (любая
- * порода, полученная по рецепту, а не наследованием/метисом).
- *
- * Оба множителя применяются не к отдельным рецептам, а к массе своей группы в готовом
- * распределении (см. boostMass) — соотношения ВНУТРИ группы при этом сохраняются, все
- * её исходы поднимаются одинаково. Гарантией НЕ становятся: итог упирается в CHANCE_CAP.
- */
-export const DEGRADE_MULT = 10;
-export const LUCKY_MULT = 2;
-
-/** Рецепт, чей шанс уже поднят родством пары — с таким Катализатор не стекается. */
-function inbreedBoosted(r: Recipe, kinship: KinshipLevel): boolean {
-  const inbreedRecipe = isPedigreeRecipe(r) || !!r.kinshipBoost || !!r.minKinship;
-  return inbreedRecipe && KINSHIP_RECIPE_MULT[kinship] > 1;
-}
-
-/**
  * Итоговый шанс рецепта: базовый × инбридинг × `chanceMult` (глобальный множитель от
  * исследований «Селекции»). Кап CHANCE_CAP. Усилители 🍀/⬇ сюда НЕ входят — они
- * перевзвешивают готовое распределение целиком (boostMass).
+ * вычёркивают из готового распределения целую половину пород (см. keepGroup).
  */
 export function recipeChance(r: Recipe, kinship: KinshipLevel, chanceMult = 1): number {
-  const kMult = inbreedBoosted(r, kinship) ? KINSHIP_RECIPE_MULT[kinship] : 1;
+  const inbreedRecipe = isPedigreeRecipe(r) || !!r.kinshipBoost || !!r.minKinship;
+  const kMult = inbreedRecipe ? KINSHIP_RECIPE_MULT[kinship] : 1;
   return Math.min(CHANCE_CAP, r.chance * kMult * chanceMult);
 }
 
@@ -384,16 +372,15 @@ export function tierUpTarget(ctx: BreedingContext): string | undefined {
 
 /**
  * «Выстрелит» ли усилитель на этой паре — подсказка ⚡ на чипах Инкубатора (UI,
- * механику не меняет): 🔼 — есть цель для гарантии; 🍀/⬇ — их группа исходов есть
- * в распределении и ещё не упёрлась в кап (иначе множить нечего);
+ * механику не меняет): 🔼 — есть цель для гарантии; 🍀/⬇ — в исходах пары есть и то,
+ * что усилитель оставляет, и то, что он вычёркивает (иначе фильтровать нечего);
  * 🛡 — фолбэк способен опустить котёнка ниже старшего родителя.
  */
 export function boostCanFire(id: keyof BreedBoosts, ctx: BreedingContext): boolean {
   if (id === 'tierUp') return tierUpTarget(ctx) !== undefined;
   if (id === 'degrade' || id === 'luckyUp') {
-    const pick = id === 'degrade' ? isCommonOutcome : luckyPick(ctx);
-    const mass = massOf(outcomesBase(ctx), pick);
-    return mass > 0 && mass < CHANCE_CAP;
+    const mass = massOf(outcomesBase(ctx), id === 'degrade' ? isCommonOutcome : isColorOutcome);
+    return mass > 0 && mass < 1;
   }
   // noDown: одинаковая пара рискует только «метисом-сюрпризом» (базовые породы его
   // не бросают); разные породы — младшим родителем или метисом. Дворовым (T1,
@@ -427,18 +414,17 @@ export function resolveBreeding(
     }
   }
 
-  // Распределение исходов + перевзвешивание активными усилителями (см. boostMass).
+  // Распределение исходов + отсев пород активными усилителями (см. keepGroup).
   const base = outcomesBase(ctx, chanceMult);
-  const lucky = boosts.luckyUp ? boostMass(base, LUCKY_MULT, luckyPick(ctx)) : base;
-  const dist = boosts.degrade ? boostMass(lucky, DEGRADE_MULT, isCommonOutcome) : lucky;
+  const lucky = boosts.luckyUp ? keepGroup(base, isColorOutcome) : base;
+  const dist = boosts.degrade ? keepGroup(lucky, isCommonOutcome) : lucky;
   const pick = pickOutcome(dist, rng());
   let out = pick?.breed ?? ctx.mother.breed;
 
-  // Заряд списываем, только если исход принадлежит группе усилителя И усилитель
-  // реально сдвинул распределение (boostMass отдаёт исходный список, когда группа
-  // уже упёрлась в кап или пуста — тогда бустер ничего не дал, заряд цел).
-  if (boosts.luckyUp && used && pick && lucky !== base && luckyPick(ctx)(pick)) used.luckyUp = true;
-  if (boosts.degrade && used && pick && dist !== lucky && isCommonOutcome(pick)) used.degrade = true;
+  // Заряд списываем, только если усилитель реально сузил выбор (keepGroup отдаёт
+  // исходный список, когда вычёркивать нечего — тогда бустер не сработал, заряд цел).
+  if (boosts.luckyUp && used && lucky !== base) used.luckyUp = true;
+  if (boosts.degrade && used && dist !== lucky) used.degrade = true;
 
   // 🛡 Стабилизатор: котёнок не опускается ниже старшего родителя.
   if (boosts.noDown && TIER_LEVEL[tierOfBreed(out)] < maxParentTier(ctx)) {
@@ -499,21 +485,13 @@ function outcomesBase(ctx: BreedingContext, chanceMult = 1): BreedingOutcome[] {
   return out;
 }
 
-/** Группа исходов усилителя: какие строки распределения он поднимает. */
+/** Половина пород, которую усилитель оставляет в исходах пары. */
 type OutcomePick = (o: BreedingOutcome) => boolean;
 
-/** ⬇ Деградатор поднимает дворовые (T1) исходы — по тиру породы, не по рецепту. */
+/** ⬇ Деградатор оставляет серых дворовых (T1) — по тиру породы, не по рецепту. */
 const isCommonOutcome: OutcomePick = (o) => tierOfBreed(o.breed) === 'common';
-
-/**
- * 🍀 Катализатор поднимает исходы, полученные ПО РЕЦЕПТУ (наследование породы
- * родителя и метис-неудача — не его забота, это работа 🛡). Рецепты, которым шанс уже
- * подняло родство, в группу не входят: игрок выбирает ЛИБО риск-награду инбридинга,
- * ЛИБО бустер, но не ×2 поверх ×2.5 (иначе родословные рецепты всегда были бы на капе).
- */
-function luckyPick(ctx: BreedingContext): OutcomePick {
-  return (o) => !!o.recipe && !inbreedBoosted(o.recipe, ctx.kinship);
-}
+/** 🍀 Катализатор оставляет цветных — всё от зелёных (T2) и выше. */
+const isColorOutcome: OutcomePick = (o) => tierOfBreed(o.breed) !== 'common';
 
 /** Суммарная вероятность исходов группы. */
 function massOf(list: readonly BreedingOutcome[], pick: OutcomePick): number {
@@ -521,23 +499,18 @@ function massOf(list: readonly BreedingOutcome[], pick: OutcomePick): number {
 }
 
 /**
- * Перевзвешивание ГОТОВОГО распределения усилителем: суммарная масса его группы
- * растёт ×`mult` (кап CHANCE_CAP), остальные исходы ужимаются пропорционально.
- * Ключевое свойство — внутри группы соотношения НЕ меняются: усилитель поднимает
- * все её породы одинаково. (Прежняя схема множила шанс каждого рецепта по отдельности,
- * а исход выбирался перебором по очереди — первый же рецепт упирался в кап и съедал
- * шансы остальных.) Сумма вероятностей остаётся единицей. Если усиливать нечего или
- * группа уже на капе — возвращается ИСХОДНЫЙ список (признак «бустер не сработал»).
+ * Усилитель-фильтр (🍀/⬇): в исходах остаётся ТОЛЬКО его половина пород, шанс всех
+ * остальных обнуляется и раздаётся оставшимся — пропорционально их собственным шансам
+ * (редкий рецепт остаётся редким относительно частого, меняется лишь масштаб).
+ * Поэтому усилитель — гарантия «какого рода будет котёнок», а не множитель шанса:
+ * прежняя схема множителей раздувала первый же рецепт в очереди до капа и съедала
+ * шансы остальных. Если вычёркивать нечего (вся масса уже в группе) или оставлять
+ * нечего (группа пуста) — возвращается ИСХОДНЫЙ список: бустер не сработал.
  */
-function boostMass(
-  list: BreedingOutcome[], mult: number, pick: OutcomePick,
-): BreedingOutcome[] {
+function keepGroup(list: BreedingOutcome[], pick: OutcomePick): BreedingOutcome[] {
   const mass = massOf(list, pick);
-  const target = Math.min(CHANCE_CAP, mass * mult);
-  if (mass <= 0 || target <= mass) return list;
-  const up = target / mass;
-  const down = (1 - target) / (1 - mass);
-  return list.map((o) => ({ ...o, p: o.p * (pick(o) ? up : down) }));
+  if (mass <= 0 || mass >= 1) return list;
+  return list.filter(pick).map((o) => ({ ...o, p: o.p / mass }));
 }
 
 /** Исход по броску rng ∈ [0,1) на распределении (сумма p = 1). */
@@ -555,15 +528,15 @@ function pickOutcome(
 /**
  * Распределение исходов пары для превью в инкубаторе — та же математика, что в
  * resolveBreeding, но без броска. Механику НЕ меняет (чистая функция). `luckyUp` —
- * активен Катализатор (🍀 рецептная масса ×2), `chanceMult` — множитель исследований
- * «Селекции», `degrade` — активен ⬇ Деградатор (дворовая масса ×10) — как при рождении.
- * Усилители tierUp/noDown в превью не учитываются (гарантии, а не вероятности).
+ * активен 🍀 Катализатор (остаются только цветные породы), `degrade` — активен
+ * ⬇ Деградатор (остаются только серые дворовые), `chanceMult` — множитель исследований
+ * «Селекции». Усилители tierUp/noDown в превью не учитываются (гарантии, а не вероятности).
  */
 export function breedingOutcomes(
   ctx: BreedingContext, luckyUp = false, chanceMult = 1, degrade = false,
 ): BreedingOutcome[] {
   let list = outcomesBase(ctx, chanceMult);
-  if (luckyUp) list = boostMass(list, LUCKY_MULT, luckyPick(ctx));
-  if (degrade) list = boostMass(list, DEGRADE_MULT, isCommonOutcome);
+  if (luckyUp) list = keepGroup(list, isColorOutcome);
+  if (degrade) list = keepGroup(list, isCommonOutcome);
   return list;
 }

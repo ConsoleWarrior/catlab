@@ -1,30 +1,36 @@
 /**
- * Человекочитаемые (RU) описания котов и требований заказов для UI.
+ * Человекочитаемые описания котов и требований заказов для UI (ru + en).
  * Идентичность кота теперь — ПОРОДА из каталога + пол; редкость — тир породы.
  */
 
 import { breedName, breedTraits, sortTraits, traitTag } from '../genetics/index.js';
 import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, OrderReq } from '../game/index.js';
-import { KINSHIP_RU } from '../game/index.js';
-import { TIER_RU, TIER_RU_GEN } from './theme.js';
+import { kinshipName } from '../game/index.js';
+import { tierName, tierNameGen } from './theme.js';
+import { t, tx, type LocStr } from '../i18n.js';
 
-const PATTERN_RU: Record<string, string> = {
-  ticked: 'тикированный', spotted: 'пятнистый', mackerel: 'тигровый',
-  classic: 'мраморный', solid: 'сплошной',
+const PATTERN_NAME: Record<string, LocStr> = {
+  ticked: ['тикированный', 'ticked'], spotted: ['пятнистый', 'spotted'],
+  mackerel: ['тигровый', 'tabby'], classic: ['мраморный', 'marbled'],
+  solid: ['сплошной', 'solid'],
 };
-const COLOR_RU: Record<string, string> = {
-  black: 'чёрный', blue: 'голубой', chocolate: 'шоколадный', lilac: 'лиловый',
-  cinnamon: 'циннамон', fawn: 'фавн', red: 'рыжий', cream: 'кремовый',
-  white: 'белый', tortoiseshell: 'черепаховый', 'blue-cream': 'голубо-кремовый',
+const COLOR_NAME: Record<string, LocStr> = {
+  black: ['чёрный', 'black'], blue: ['голубой', 'blue'], chocolate: ['шоколадный', 'chocolate'],
+  lilac: ['лиловый', 'lilac'], cinnamon: ['циннамон', 'cinnamon'], fawn: ['фавн', 'fawn'],
+  red: ['рыжий', 'red'], cream: ['кремовый', 'cream'], white: ['белый', 'white'],
+  tortoiseshell: ['черепаховый', 'tortoiseshell'], 'blue-cream': ['голубо-кремовый', 'blue-cream'],
 };
 
-function colorRu(name: string): string { return COLOR_RU[name] ?? name; }
+function colorName(name: string): string {
+  const c = COLOR_NAME[name];
+  return c ? tx(c) : name;
+}
 
 /** Короткая строка-облик кота (для карточек/меню). */
 export function describeCat(cat: Cat): string {
   const sex = cat.genotype.sex === 'female' ? '♀' : '♂';
-  return `${breedName(cat.breed)} ${sex} · ${TIER_RU[cat.rarityTier]}`;
+  return `${breedName(cat.breed)} ${sex} · ${tierName(cat.rarityTier)}`;
 }
 
 /**
@@ -39,13 +45,16 @@ export function catVisibleTraits(cat: Cat): string[] {
 
 /** Детальные строки признаков кота (для меню). Редкость показывают цветные звёзды. */
 export function catTraits(cat: Cat): string[] {
-  const sex = cat.genotype.sex === 'female' ? 'пол: самка ♀' : 'пол: самец ♂';
+  const sex = cat.genotype.sex === 'female'
+    ? t('пол: самка ♀', 'sex: female ♀')
+    : t('пол: самец ♂', 'sex: male ♂');
   // порода не дублируется — она уже в заголовке меню кота (единственный потребитель)
   const lines = [sex];
   const vis = catVisibleTraits(cat);
-  if (vis.length) lines.push(`признаки: ${vis.join(' · ')}`);
+  if (vis.length) lines.push(t(`признаки: ${vis.join(' · ')}`, `traits: ${vis.join(' · ')}`));
   if (cat.motherBreed && cat.fatherBreed) {
-    lines.push(`родители: ${breedName(cat.motherBreed)} ♀ × ${breedName(cat.fatherBreed)} ♂`);
+    const pair = `${breedName(cat.motherBreed)} ♀ × ${breedName(cat.fatherBreed)} ♂`;
+    lines.push(t(`родители: ${pair}`, `parents: ${pair}`));
   }
   return lines;
 }
@@ -63,7 +72,7 @@ function sideRu(s: SideSpec): string {
 }
 
 /**
- * RU-описание рецепта для Котодекса-рецептурника: строка пары + список доп. условий.
+ * Описание рецепта для Котодекса-рецептурника: строка пары + список доп. условий.
  * Базовый шанс подписывает вызывающая сторона (breedCard/превью) — здесь только условия.
  */
 export function describeRecipe(r: Recipe): { pair: string; conds: string[] } {
@@ -71,18 +80,36 @@ export function describeRecipe(r: Recipe): { pair: string; conds: string[] } {
     ? `♀ ${sideRu(r.a)} × ♂ ${sideRu(r.b)}`
     : `${sideRu(r.a)} × ${sideRu(r.b)}`;
   const conds: string[] = [];
-  if (r.sexLinked) conds.push('строго по полу: мать и отец — как указано');
-  if (r.traitAny) conds.push(`скрытый ген: ${traitTag(r.traitAny)} — хотя бы у одного родителя`);
-  if (r.traitBoth) conds.push(`скрытый ген: ${traitTag(r.traitBoth)} — у ОБОИХ родителей`);
-  if (r.ancestorAny) conds.push(`скрытый ген: предок ${r.ancestorAny.map(breedName).join(' / ')} хотя бы у одного`);
-  if (r.ancestorBoth) conds.push(`скрытый ген у ОБОИХ: предок ${r.ancestorBoth.map(breedName).join(' / ')}`);
-  if (r.ancestorTotal) conds.push(`суммарно ≥${r.ancestorTotal.count} предков «${breedName(r.ancestorTotal.breed)}» у пары`);
-  if (r.distinctTiers) {
-    conds.push(`≥${r.distinctTiers.count} разных пород (${r.distinctTiers.tiers.map((t) => TIER_RU[t]).join(' / ')}) среди пары и предков`);
+  if (r.sexLinked) conds.push(t('строго по полу: мать и отец — как указано', 'sex matters: mother and father exactly as shown'));
+  if (r.traitAny) conds.push(t(`скрытый ген: ${traitTag(r.traitAny)} — хотя бы у одного родителя`, `hidden gene: ${traitTag(r.traitAny)} — in at least one parent`));
+  if (r.traitBoth) conds.push(t(`скрытый ген: ${traitTag(r.traitBoth)} — у ОБОИХ родителей`, `hidden gene: ${traitTag(r.traitBoth)} — in BOTH parents`));
+  if (r.ancestorAny) {
+    const list = r.ancestorAny.map(breedName).join(' / ');
+    conds.push(t(`скрытый ген: предок ${list} хотя бы у одного`, `hidden gene: a ${list} ancestor in at least one parent`));
   }
-  if (r.pureLine) conds.push('обе родословные чистые — без дворовых кровей');
-  if (r.minKinship) conds.push(`нужно родство пары: ${KINSHIP_RU[r.minKinship]} и выше`);
-  else if (r.kinshipBoost) conds.push('инбридинг повышает шанс');
+  if (r.ancestorBoth) {
+    const list = r.ancestorBoth.map(breedName).join(' / ');
+    conds.push(t(`скрытый ген у ОБОИХ: предок ${list}`, `hidden gene in BOTH: a ${list} ancestor`));
+  }
+  if (r.ancestorTotal) {
+    const { count } = r.ancestorTotal;
+    const breed = breedName(r.ancestorTotal.breed);
+    conds.push(t(`суммарно ≥${count} предков «${breed}» у пары`, `≥${count} ${breed} ancestors between the pair`));
+  }
+  if (r.distinctTiers) {
+    const tiers = r.distinctTiers.tiers.map((x) => tierName(x)).join(' / ');
+    const { count } = r.distinctTiers;
+    conds.push(t(
+      `≥${count} разных пород (${tiers}) среди пары и предков`,
+      `≥${count} different breeds (${tiers}) among the pair and their ancestors`,
+    ));
+  }
+  if (r.pureLine) conds.push(t('обе родословные чистые — без дворовых кровей', 'both pedigrees are pure — no moggie blood'));
+  if (r.minKinship) {
+    conds.push(t(`нужно родство пары: ${kinshipName(r.minKinship)} и выше`, `pair kinship required: ${kinshipName(r.minKinship)} or higher`));
+  } else if (r.kinshipBoost) {
+    conds.push(t('инбридинг повышает шанс', 'inbreeding raises the chance'));
+  }
   return { pair, conds };
 }
 
@@ -90,8 +117,10 @@ export function describeRecipe(r: Recipe): { pair: string; conds: string[] } {
 export function describeReq(req: OrderReq): string {
   const parts: string[] = [];
   if (req.breed) parts.push(breedName(req.breed));
-  if (req.minRarity) parts.push(`любой кот от ${TIER_RU_GEN[req.minRarity]}`);
-  if (req.baseColor) parts.push(colorRu(req.baseColor));
-  if (req.pattern) parts.push(PATTERN_RU[req.pattern] ?? req.pattern);
-  return parts.length ? parts.join(', ') : 'любой котик';
+  if (req.minRarity) {
+    parts.push(t(`любой кот от ${tierNameGen(req.minRarity)}`, `any ${tierNameGen(req.minRarity)} cat or better`));
+  }
+  if (req.baseColor) parts.push(colorName(req.baseColor));
+  if (req.pattern) parts.push(PATTERN_NAME[req.pattern] ? tx(PATTERN_NAME[req.pattern]!) : req.pattern);
+  return parts.length ? parts.join(', ') : t('любой котик', 'any cat');
 }

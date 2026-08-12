@@ -36,6 +36,7 @@ import { createLivingFloor } from '../livingFloor.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { attachBlink, type Blinker } from '../eyeBlink.js';
 import { darken, lighten } from '../../render/palette.js';
+import { t } from '../../i18n.js';
 
 // Всегда показываем все 5 пьедесталов (база 1 + до 4 апгрейдов); запертые — с замком.
 function pedCountFor(_ctx: UiContext): number {
@@ -106,7 +107,7 @@ interface ChampAnim {
 }
 
 export function createNursery(ctx: UiContext): Room {
-  const shell = roomShell(ctx, 'nursery', '🏆 Питомник');
+  const shell = roomShell(ctx, 'nursery', t('🏆 Питомник', '🏆 Cattery'));
   // живые цифры кормушки: обновляем раз в FEEDER_UPDATE_S, а не каждый кадр
   const FEEDER_UPDATE_S = 0.5;
   let feederUpdate: (() => void) | null = null;
@@ -155,7 +156,7 @@ export function createNursery(ctx: UiContext): Room {
       .fill({ color: 0xbfe6f2, alpha: 0.6 });
     const snow = label('🧊', sw * 0.42, COLORS.ink, '700');
     snow.position.set(cryoCx, y + sh * 0.5);
-    const badge = stationBadge(cryoCx, y, '❄️ криокапсула');
+    const badge = stationBadge(cryoCx, y, t('❄️ криокапсула', '❄️ cryo capsule'));
     cryoLayer.addChild(box, snow, badge);
   }
 
@@ -253,7 +254,7 @@ export function createNursery(ctx: UiContext): Room {
         if (!levelAllows) {
           const need = nextPedestalUnlockLevel(ctx.state);
           if (need) {
-            const cap = label(`Откроется\nна ур. ${need}`, 12, COLORS.inkSoft, '800');
+            const cap = label(t(`Откроется\nна ур. ${need}`, `Unlocks\nat lv. ${need}`), 12, COLORS.inkSoft, '800');
             cap.position.set(cx, standY - catSize - 4);
             c.addChild(cap);
           }
@@ -261,7 +262,7 @@ export function createNursery(ctx: UiContext): Room {
           const cost = upgradeCost(ctx.state, 'championSlots');
           const afford = !!cost && ctx.state.coins >= cost.amount;
           const btn = new Button({
-            text: cost ? `Открыть · ${cost.amount} 💰` : 'Открыть',
+            text: cost ? t(`Открыть · ${cost.amount} 💰`, `Unlock · ${cost.amount} 💰`) : t('Открыть', 'Unlock'),
             w: pedW + 8, h: 30, color: afford ? COLORS.good : COLORS.cardEdge,
             textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 12,
           });
@@ -271,9 +272,9 @@ export function createNursery(ctx: UiContext): Room {
             const r = buyUpgrade(ctx.state, 'championSlots');
             if (r.ok) {
               ctx.commit();
-              ctx.toast(`Открыт пьедестал — ${place} место 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% дохода)`);
+              ctx.toast(t(`Открыт пьедестал — ${place} место 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% дохода)`, `Pedestal unlocked — place ${place} 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% income)`));
             }
-            else ctx.toast(r.reason === 'locked' ? 'Пьедестал ещё заперт 🔒' : r.reason);
+            else ctx.toast(r.reason === 'locked' ? t('Пьедестал ещё заперт 🔒', 'The pedestal is still locked 🔒') : r.reason);
           };
           c.addChild(btn);
         }
@@ -317,14 +318,14 @@ export function createNursery(ctx: UiContext): Room {
 
       const rate = championIncomePerMin(ctx.state, champ, i); // с бонусом места
       const inc = label(
-        `+${rate.toFixed(rate < 10 ? 1 : 0)} 💰/мин`, 13, COLORS.good, '800',
+        t(`+${rate.toFixed(rate < 10 ? 1 : 0)} 💰/мин`, `+${rate.toFixed(rate < 10 ? 1 : 0)} 💰/min`), 13, COLORS.good, '800',
         { color: 0x000000, width: 1 },
       );
       inc.position.set(cx, standY - catSize - 10);
       c.addChild(inc);
     } else {
       // открытый, но пустой пьедестал — приглашение поставить кота
-      const hint = label('🏆 сюда', 13, COLORS.inkSoft, '800');
+      const hint = label(t('🏆 сюда', '🏆 here'), 13, COLORS.inkSoft, '800');
       hint.position.set(cx, standY - catSize * 0.5);
       c.addChild(hint);
     }
@@ -525,15 +526,15 @@ export function createNursery(ctx: UiContext): Room {
     const idx = pedestalAt(lp.x, lp.y);
     const wasChampion = isChampion(ctx.state, cat.id);
     if (idx >= 0) {
-      if (idx >= championSlots(ctx.state)) { ctx.toast('Пьедестал заперт 🔒'); return false; }
+      if (idx >= championSlots(ctx.state)) { ctx.toast(t('Пьедестал заперт 🔒', 'The pedestal is locked 🔒')); return false; }
       if (championAt(ctx.state, idx)?.id === cat.id) return false; // вернулся на свой же пьедестал
       const r = setChampion(ctx.state, cat.id, idx, ctx.now());
       if (!r.ok) {
-        ctx.toast(r.reason === 'нет места в лаборатории' ? 'Нет места в лаборатории 🚫' : r.reason);
+        ctx.toast(r.reason === t('нет места в лаборатории', 'no room in the lab') ? t('Нет места в лаборатории 🚫', 'No room in the lab 🚫') : r.reason);
         return false;
       }
       ctx.commit();
-      ctx.toast('Кот на выставке 🏆 приносит доход');
+      ctx.toast(t('Кот на выставке 🏆 приносит доход', 'The cat is at the show 🏆 and brings income'));
       return true;
     }
     // криокапсула (справа): уронили кота на станцию → диалог заморозки (📺/💰/💎).
@@ -549,7 +550,7 @@ export function createNursery(ctx: UiContext): Room {
       const r = moveCat(ctx.state, cat.id, 'nursery'); // тоже проверяет вместимость пола
       if (!r.ok) { ctx.toast(r.reason); return false; } // нет места → вернётся на пьедестал
       ctx.commit();
-      ctx.toast('Кот снят с выставки');
+      ctx.toast(t('Кот снят с выставки', 'The cat is off the show'));
       return true;
     }
     return false;
@@ -571,7 +572,7 @@ export function createNursery(ctx: UiContext): Room {
     c.addChild(bg);
 
     if (!foodEnabled(ctx.state)) {
-      const lock = label(`🍽 Запас корма — с ур. ${unlockLevelOf('food')} 🔒`, 12.5, COLORS.inkSoft, '700');
+      const lock = label(t(`🍽 Запас корма — с ур. ${unlockLevelOf('food')} 🔒`, `🍽 Food supply — from lv. ${unlockLevelOf('food')} 🔒`), 12.5, COLORS.inkSoft, '700');
       lock.anchor.set(0, 0.5);
       lock.position.set(12, fh / 2);
       c.addChild(lock);
@@ -580,7 +581,7 @@ export function createNursery(ctx: UiContext): Room {
 
     const PAD_X = 12;
     // ряд 1: заголовок карточки — по центру блока
-    const title = label('🍽 Запас корма', 13, COLORS.ink, '800');
+    const title = label(t('🍽 Запас корма', '🍽 Food supply'), 13, COLORS.ink, '800');
     title.anchor.set(0.5);
     title.position.set(fw / 2, 17);
     c.addChild(title);
@@ -611,20 +612,20 @@ export function createNursery(ctx: UiContext): Room {
       btn.position.set(x + btnW / 2, 86);
       btn.onTap = () => {
         const r = buyFood(ctx.state, mode);
-        if (r.ok) { ctx.commit(); ctx.toast(`Корм +${Math.round(r.added)} 🍽`); }
+        if (r.ok) { ctx.commit(); ctx.toast(t(`Корм +${Math.round(r.added)} 🍽`, `Food +${Math.round(r.added)} 🍽`)); }
         else ctx.toast(r.reason);
       };
       c.addChild(btn);
       return () => {
         const quote = foodBuyQuote(ctx.state, mode);
         const full = quote.units <= 0;
-        btn.setText(full ? 'полно' : `${text} · ${quote.cost}💰`);
+        btn.setText(full ? t('полно', 'full') : `${text} · ${quote.cost}💰`);
         btn.enabled = !full && ctx.state.coins >= quote.cost;
       };
     };
     const buyUpdates = [
       mkBuy('pack', `＋${FOOD_PACK_UNITS}`, PAD_X),
-      mkBuy('full', 'Полная', PAD_X + btnW + btnGap),
+      mkBuy('full', t('Полная', 'Full'), PAD_X + btnW + btnGap),
     ];
 
     // Корм тает каждый кадр, поэтому цифры перерисовываем по таймеру комнаты, а не
@@ -639,8 +640,8 @@ export function createNursery(ctx: UiContext): Room {
       amt.text = `${Math.round(food)}/${cap}`;
 
       const mins = foodMinutesLeft(ctx.state);
-      const left = starving ? 'голод!' : mins === Infinity ? 'расхода нет' : `хватит на ~${Math.round(mins)} мин`;
-      info.text = `🐱 ${feedingCatCount(ctx.state)} · ${foodRatePerMin(ctx.state).toFixed(1)} 🍽/мин · ${left}`;
+      const left = starving ? t('голод!', 'starving!') : mins === Infinity ? t('расхода нет', 'nothing eaten') : t(`хватит на ~${Math.round(mins)} мин`, `lasts ~${Math.round(mins)} min`);
+      info.text = t(`🐱 ${feedingCatCount(ctx.state)} · ${foodRatePerMin(ctx.state).toFixed(1)} 🍽/мин · ${left}`, `🐱 ${feedingCatCount(ctx.state)} · ${foodRatePerMin(ctx.state).toFixed(1)} 🍽/min · ${left}`);
       info.style.fill = starving ? 0xd9534f : COLORS.inkSoft;
       for (const u of buyUpdates) u();
     };
@@ -675,7 +676,7 @@ export function createNursery(ctx: UiContext): Room {
   }
 
   return {
-    id: 'nursery', title: '🏆 Питомник', container: shell.container,
+    id: 'nursery', title: t('🏆 Питомник', '🏆 Cattery'), container: shell.container,
     refresh,
     tick: (dt) => {
       floor.tick(dt);

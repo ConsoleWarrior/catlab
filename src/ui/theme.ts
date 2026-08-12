@@ -4,6 +4,7 @@
  */
 
 import { Container, Graphics, Rectangle, Text } from 'pixi.js';
+import { tx, type LocStr } from '../i18n.js';
 import type { RarityTier } from '../genetics/index.js';
 
 export const FONT = 'system-ui, "Segoe UI", sans-serif';
@@ -44,15 +45,24 @@ export const ROOM_ACCENT: Record<string, number> = {
 };
 
 export const TIERS: readonly RarityTier[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
-export const TIER_RU: Record<RarityTier, string> = {
-  common: 'обычный', uncommon: 'необычный', rare: 'редкий',
-  epic: 'эпический', legendary: 'легендарный',
+// Названия тиров — функциями, а не константами: язык может смениться на лету
+// (⚙️ Настройки), а таблица вычислилась бы один раз при импорте модуля.
+const TIER_NAME: Record<RarityTier, LocStr> = {
+  common: ['обычный', 'common'], uncommon: ['необычный', 'uncommon'], rare: ['редкий', 'rare'],
+  epic: ['эпический', 'epic'], legendary: ['легендарный', 'legendary'],
 };
 /** Тир в родительном падеже — для подписей вида «любой кот от необычного». */
-export const TIER_RU_GEN: Record<RarityTier, string> = {
-  common: 'обычного', uncommon: 'необычного', rare: 'редкого',
-  epic: 'эпического', legendary: 'легендарного',
+const TIER_NAME_GEN: Record<RarityTier, LocStr> = {
+  common: ['обычного', 'common'], uncommon: ['необычного', 'uncommon'], rare: ['редкого', 'rare'],
+  epic: ['эпического', 'epic'], legendary: ['легендарного', 'legendary'],
 };
+
+export function tierName(tier: RarityTier): string {
+  return tx(TIER_NAME[tier]);
+}
+export function tierNameGen(tier: RarityTier): string {
+  return tx(TIER_NAME_GEN[tier]);
+}
 export const TIER_COLOR: Record<RarityTier, number> = {
   common: 0xb9a99c, uncommon: 0x7bbf86, rare: 0x5aa9e6,
   epic: 0xb07be0, legendary: 0xf2a93b,

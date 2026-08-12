@@ -26,6 +26,7 @@ import {
   PEDIGREE_BREEDS, TIER_LEVEL, tierOfBreed, breedValueMult, breedLevel,
 } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
+import { t } from '../i18n.js';
 import type { Cat, GameState, Order, OrderKind, OrderReq } from './types.js';
 import * as C from './config.js';
 
@@ -200,9 +201,9 @@ export function adRefreshOrder(
   state: GameState, rng: Rng, orderId: string, now: number,
 ): { ok: true } | { ok: false; reason: string } {
   const i = state.orders.findIndex((x) => x.id === orderId);
-  if (i < 0) return { ok: false, reason: 'заказ не найден' };
+  if (i < 0) return { ok: false, reason: t('заказ не найден', 'order not found') };
   if (!canAdRefreshOrder(state.orders[i]!, now)) {
-    return { ok: false, reason: 'обновление этого заказа ещё на кулдауне' };
+    return { ok: false, reason: t('обновление этого заказа ещё на кулдауне', 'this order refresh is still on cooldown') };
   }
   state.orders[i] = generateOrder(state, rng, now, slotKind(i), now + C.ORDER_AD_REFRESH_COOLDOWN_MS);
   return { ok: true };

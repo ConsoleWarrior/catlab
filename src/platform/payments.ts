@@ -19,6 +19,7 @@
 import { loadPayments } from './ysdk.js';
 import type { YaPayments, YaProduct, YaPurchase } from './ysdk.js';
 import { CRYSTAL_PACKS, packBonusPct } from '../game/config.js';
+import { t } from '../i18n.js';
 
 /** Что игра делает с подтверждённой покупкой. Реализует Game (см. ui/game.ts). */
 export interface PurchaseHost {
@@ -86,12 +87,12 @@ export function shopItems(): readonly ShopItem[] {
 
 /** Купить пак. Отмена окна, нехватка янов и отсутствие товара неразличимы. */
 export async function buyPack(id: string): Promise<PurchaseResult> {
-  if (!api || !host) return { ok: false, reason: 'магазин недоступен' };
+  if (!api || !host) return { ok: false, reason: t('магазин недоступен', 'the shop is unavailable') };
   let purchase: YaPurchase;
   try {
     purchase = await api.purchase({ id });
   } catch {
-    return { ok: false, reason: 'покупка не завершена' };
+    return { ok: false, reason: t('покупка не завершена', 'the purchase was not completed') };
   }
   return settle(purchase);
 }
@@ -122,7 +123,7 @@ async function settle(purchase: YaPurchase): Promise<PurchaseResult> {
 
   // Товар этой версии игры неизвестен: не начисляем и НЕ гасим — пусть дождётся
   // сборки, которая про него знает, чем пропадёт бесследно.
-  if (granted.status === 'unknown') return { ok: false, reason: 'неизвестный товар' };
+  if (granted.status === 'unknown') return { ok: false, reason: t('неизвестный товар', 'unknown product') };
 
   if (granted.status === 'granted' && !await host!.saveAwait()) {
     // Не сохранилось — гасить нельзя: покупка останется у платформы и доначислится

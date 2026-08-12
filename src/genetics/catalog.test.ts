@@ -27,7 +27,8 @@ describe('каталог пород (70, 5 тиров)', () => {
   it('каждая порода имеет имя, валидный тир и уникальный ключ', () => {
     const keys = new Set<string>();
     for (const b of BREEDS) {
-      expect(b.name.length).toBeGreaterThan(0);
+      expect(b.name[0].length).toBeGreaterThan(0); // русское имя
+      expect(b.name[1].length).toBeGreaterThan(0); // английское имя
       expect(BREED_BY_KEY[b.key]).toBe(b);
       expect(keys.has(b.key)).toBe(false);
       keys.add(b.key);

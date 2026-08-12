@@ -20,8 +20,8 @@ import {
   startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, activeBoostId, growthScale,
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
   buyUpgrade, upgradeCost, upgradeMaxed,
-  maxSlotsForLevel, nextSlotUnlockLevel, isUnlocked, unlockLevelOf,
-  kinshipLevel, KINSHIP_RU, buildBreedingContext,
+  maxSlotsForLevel, nextSlotUnlockLevel, isUnlocked,
+  kinshipLevel, kinshipName, buildBreedingContext,
   speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS, BREED_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
 import { freeSkipBreeding, tutorialActive } from '../../game/index.js';
@@ -34,6 +34,7 @@ import { catSprite, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { decorTexture } from '../decorArt.js';
 import { sfxMeow } from '../sound.js';
 import { darken } from '../../render/palette.js';
+import { t, tx } from '../../i18n.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
 
@@ -162,7 +163,7 @@ function fitLabel(t: Text, maxW: number): void {
 }
 
 export function createIncubator(ctx: UiContext): Room {
-  const shell = roomShell(ctx, 'incubator', '🧬 Инкубатор');
+  const shell = roomShell(ctx, 'incubator', t('🧬 Инкубатор', '🧬 Incubator'));
   let live: LiveSlot[] = [];
   // id малышей, чьё «рождение» уже отпраздновали эффектом — чтобы не повторять
   // вспышку на каждом пересборе. Эффект играет один раз, когда малыш виден.
@@ -225,7 +226,7 @@ export function createIncubator(ctx: UiContext): Room {
 
     // название — белым с тёмной обводкой: читается на любой текстуре
     const name = new Text({
-      text: def.label,
+      text: tx(def.label),
       style: {
         fontFamily: FONT, fontSize: 13.5, fontWeight: '800', fill: 0xffffff,
         stroke: { color: 0x2c2438, width: 3, join: 'round' }, align: 'center',
@@ -259,8 +260,8 @@ export function createIncubator(ctx: UiContext): Room {
       bgP.roundRect(-pw / 2, -ph / 2, pw, ph, ph / 2)
         .fill({ color: accent })
         .stroke({ width: 1.5, color: 0xffffff, alpha: 0.9 });
-      const t = label('⚡ готов', 10, 0xffffff, '800');
-      pill.addChild(bgP, t);
+      const txt = label(t('⚡ готов', '⚡ ready'), 10, 0xffffff, '800');
+      pill.addChild(bgP, txt);
       pill.position.set(0, h / 2 + 1);
       c.addChild(pill);
       readyPulses.push({ view: pill, phase: Math.random() * 6 });
@@ -281,9 +282,10 @@ export function createIncubator(ctx: UiContext): Room {
     // чипы стоят справа от плашки названия, вплотную (boostBar — в локальных
     // координатах titleBar; plateW — ширина плашки со счётчиком слотов).
     const firstCx = plateW + 12 + CHIP_W / 2;
-    // Генная инженерия открывается уровнем лаборатории — до этого вместо чипов замок.
+    // Генная инженерия открывается покупкой узла «🥼 Учёный» в Улучшениях (Генолаб),
+    // доступного с ур. LAB_UNLOCKS.engineering — до покупки вместо чипов замок.
     if (!isUnlocked(ctx.state, 'engineering')) {
-      const hint = lockHint(`🧪 Усилители — с ур. ${unlockLevelOf('engineering')} 🔒`, 13);
+      const hint = lockHint(t('🧪 Усилители — открой «Учёного» 🔒', '🧪 Boosters — unlock the «Scientist» 🔒'), 13);
       hint.anchor.set(0, 0.5);
       hint.position.set(firstCx - CHIP_W / 2, shell.titleH / 2);
       boostBar.addChild(hint);
@@ -417,8 +419,8 @@ export function createIncubator(ctx: UiContext): Room {
     // подписи ролей сторон: куда нести самца, куда самку. Под ними — белые
     // плашки, чтобы надписи «Отец/Мать» читались на любом ИИ-фоне бокса.
     const roleY = ty(BOX_ROLE_Y);
-    const dadRole = label('Отец ♂', 11, COLORS.ink, '700');
-    const momRole = label('Мать ♀', 11, COLORS.ink, '700');
+    const dadRole = label(t('Отец ♂', 'Father ♂'), 11, COLORS.ink, '700');
+    const momRole = label(t('Мать ♀', 'Mother ♀'), 11, COLORS.ink, '700');
     dadRole.position.set(dadHomeX, roleY);
     momRole.position.set(momHomeX, roleY);
     const rolePlate = new Graphics();
@@ -589,7 +591,7 @@ export function createIncubator(ctx: UiContext): Room {
       const remain0 = Math.max(0, slot.readyAt - now);
       const cost = speedUpCost(remain0, BREED_SPEEDUP_CRYSTAL_PER_MIN);
       const skipMin = Math.round(AD_SKIP_MS / 60_000);
-      const bw2 = Math.round(w * 0.38);
+      const bw2 = Math.round(w * 0.45); // хватает на «📺 Реклама −5 мин» (см. п. 4.5.1)
       const yy = barY + 50;
 
       // Подарок обучения: первую вязку новичок пропускает бесплатно, чтобы не
@@ -597,39 +599,41 @@ export function createIncubator(ctx: UiContext): Room {
       // только пока подарок цел (freeSkipBreeding), дальше остаются 📺 и 💎.
       if (tutorialActive(ctx.state) && !ctx.state.tutorial.freeSkipUsed) {
         const freeBtn = new Button({
-          text: '⚡ Ускорить бесплатно', w: Math.round(w * 0.86), h: 30,
+          text: t('⚡ Ускорить бесплатно', '⚡ Speed up for free'), w: Math.round(w * 0.86), h: 30,
           color: COLORS.warn, fontSize: 12,
         });
         freeBtn.position.set(w / 2, yy);
         freeBtn.onTap = () => {
           const r = freeSkipBreeding(ctx.state, i, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast('Подарок лаборатории: готово! 🥚'); } else ctx.toast(r.reason);
+          if (r.ok) { ctx.commit(); ctx.toast(t('Подарок лаборатории: готово! 🥚', 'A gift from the lab: done! 🥚')); } else ctx.toast(r.reason);
         };
         card.addChild(freeBtn);
         // 📺/💎 пока не показываем: у новичка ровно одно очевидное действие
         anchors.set('freeSkip', freeBtn);
       } else {
-        const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw2, h: 30, color: COLORS.secondary, fontSize: 12 });
+        // «Реклама» в тексте — требование п. 4.5.1: кнопка обязана говорить и что
+        // будет показан ролик, и что за него дадут (одного 📺 для этого мало).
+        const adBtn = new Button({ text: t(`📺 Реклама −${skipMin} мин`, `📺 Ad −${skipMin} min`), w: bw2, h: 30, color: COLORS.secondary, fontSize: 11 });
         adBtn.position.set(w / 2 - bw2 / 2 - 4, yy);
         adBtn.onTap = () => {
           void showRewarded().then((watched) => {
-            if (!watched) { ctx.toast('Реклама недоступна'); return; }
+            if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
             const r = adSkipBreeding(ctx.state, i, ctx.now());
-            if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+            if (r.ok) { ctx.commit(); ctx.toast(t(`Реклама: −${skipMin} мин ⏩`, `Ad: −${skipMin} min ⏩`)); } else ctx.toast(r.reason);
           });
         };
-        const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
+        const crBtn = new Button({ text: t(`💎 ${cost} сразу`, `💎 ${cost} now`), w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
         crBtn.position.set(w / 2 + bw2 / 2 + 4, yy);
         crBtn.onTap = () => {
           const r = speedUpBreeding(ctx.state, i, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast('Готово! 🥚'); } else ctx.toast(r.reason);
+          if (r.ok) { ctx.commit(); ctx.toast(t('Готово! 🥚', 'Done! 🥚')); } else ctx.toast(r.reason);
         };
         card.addChild(adBtn, crBtn);
       }
     } else if (hasKitten) {
       // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
       // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
-      const hint = label('🐾 малыш с роднёй — пристрой его', 12, COLORS.inkSoft, '700');
+      const hint = label(t('🐾 малыш с роднёй — пристрой его', '🐾 the kitten is with family — move it out'), 12, COLORS.inkSoft, '700');
       fitLabel(hint, w - 12);
       hint.position.set(w / 2, stripY + 14);
       card.addChild(hint);
@@ -642,15 +646,15 @@ export function createIncubator(ctx: UiContext): Room {
           const r = moveCat(ctx.state, heldKitten.id, room);
           if (!r.ok) { ctx.toast(r.reason); return; }
           ctx.commit();
-          ctx.toast(room === 'shelter' ? 'Малыш в приюте 🏠' : 'Малыш в питомнике 🏆');
+          ctx.toast(room === 'shelter' ? t('Малыш в приюте 🏠', 'The kitten is in the shelter 🏠') : t('Малыш в питомнике 🏆', 'The kitten is in the cattery 🏆'));
         };
         card.addChild(b);
         // якорь подсветки обучения: шаг «унеси малыша в Приют»
         if (i === 0 && room === 'shelter') anchors.set('toShelter', b);
       };
-      placeBtn(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
+      placeBtn(t(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`, `🏠 To the cattery (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`),
         'nursery', COLORS.primary, stripY + 38);
-      placeBtn(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
+      placeBtn(t(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`, `🏚️ To the shelter (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`),
         'shelter', COLORS.secondary, stripY + 70);
     } else {
       // пара = поставленные в слот коты (или превью глобального выбора)
@@ -665,7 +669,7 @@ export function createIncubator(ctx: UiContext): Room {
           // На золотисто-розовой полосе кнопок бледный COLORS.warn не читался:
           // критическое родство — тревожный красный, остальное — тёмная охра,
           // и обоим белая обводка-ореол, чтобы буквы отделялись от полосы.
-          const warn = label(`⚠️ родство: ${KINSHIP_RU[kin]}`, 12,
+          const warn = label(t(`⚠️ родство: ${kinshipName(kin)}`, `⚠️ kinship: ${kinshipName(kin)}`), 12,
             kin === 'critical' ? 0xd42a2a : 0x8a5a1e, '800', { color: 0xffffff, width: 3 });
           fitLabel(warn, w - 12);
           warn.position.set(w / 2, stripY + 36);
@@ -675,7 +679,7 @@ export function createIncubator(ctx: UiContext): Room {
         const rowW = Math.round(w * 0.78);
         const pvW = 46;
         const btn = new Button({
-          text: 'Свести 🐾',
+          text: t('Свести 🐾', 'Breed 🐾'),
           w: rowW - pvW - 8, h: 38, color: COLORS.primary,
           textColor: 0xffffff, fontSize: 15,
         });
@@ -683,7 +687,7 @@ export function createIncubator(ctx: UiContext): Room {
         if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
-          if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast('Вязка началась 🐾'); }
+          if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast(t('Вязка началась 🐾', 'Breeding has started 🐾')); }
           else ctx.toast(r.reason);
         };
         const pv = new Button({ text: '🔮', w: pvW, h: 38, color: COLORS.secondary, fontSize: 17 });
@@ -692,7 +696,7 @@ export function createIncubator(ctx: UiContext): Room {
         pv.onTap = () => ctx.openPairPreview(mother!, father!);
         card.addChild(btn, pv);
       } else {
-        const hint = label('Добавь котов для скрещивания', 13, COLORS.inkSoft, '600');
+        const hint = label(t('Добавь котов для скрещивания', 'Add cats to breed'), 13, COLORS.inkSoft, '600');
         fitLabel(hint, w - 12);
         hint.position.set(w / 2, stripY + 64);
         card.addChild(hint);
@@ -747,14 +751,14 @@ export function createIncubator(ctx: UiContext): Room {
       if (!levelAllows) {
         // слот заперт уровнем лаборатории — подсказка «Откроется на ур. N»
         const need = nextSlotUnlockLevel(ctx.state);
-        const hint = lockHint(need ? `Откроется на ур. ${need}` : 'Максимум слотов');
+        const hint = lockHint(need ? t(`Откроется на ур. ${need}`, `Unlocks at lv. ${need}`) : t('Максимум слотов', 'All slots unlocked'));
         hint.position.set(w / 2, h - 26);
         card.addChild(hint);
       } else {
         const cost = upgradeCost(ctx.state, 'slots');
         const afford = !!cost && ctx.state.coins >= cost.amount;
         const btn = new Button({
-          text: cost ? `Открыть · ${cost.amount} 💰` : 'Открыть слот',
+          text: cost ? t(`Открыть · ${cost.amount} 💰`, `Unlock · ${cost.amount} 💰`) : t('Открыть слот', 'Unlock slot'),
           w: w - 24, h: 38, color: afford ? COLORS.good : COLORS.cardEdge,
           textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 14,
         });
@@ -762,13 +766,13 @@ export function createIncubator(ctx: UiContext): Room {
         btn.position.set(w / 2, h - 26);
         btn.onTap = () => {
           const r = buyUpgrade(ctx.state, 'slots');
-          if (r.ok) { ctx.commit(); ctx.toast('Новый слот вязки 💞'); }
-          else ctx.toast(r.reason === 'locked' ? 'Слот ещё заперт 🔒' : r.reason);
+          if (r.ok) { ctx.commit(); ctx.toast(t('Новый слот вязки 💞', 'A new breeding slot 💞')); }
+          else ctx.toast(r.reason === 'locked' ? t('Слот ещё заперт 🔒', 'The slot is still locked 🔒') : r.reason);
         };
         card.addChild(btn);
       }
     } else {
-      const hint = lockHint('откроется после предыдущего', 11.5);
+      const hint = lockHint(t('откроется после предыдущего', 'unlocks after the previous one'), 11.5);
       hint.position.set(w / 2, h - 26);
       card.addChild(hint);
     }
@@ -938,7 +942,7 @@ export function createIncubator(ctx: UiContext): Room {
     if (syrArtNode) syrArtNode.visible = true;
     const uiP = ctx.uiRoot.toLocal(e.global);
     const target = healTargetAt(uiP.x, uiP.y);
-    if (!target) { ctx.toast('Наведи шприц на кота в слоте вязки 💉'); return; }
+    if (!target) { ctx.toast(t('Наведи шприц на кота в слоте вязки 💉', 'Point the syringe at a cat in a breeding slot 💉')); return; }
     const healed = target.cat;
     // «рабочее меню ветеринара»; вылечили — играем плюсики над этим котом
     ctx.openHealConfirm(healed, (hearts) => playHealFx(healed.id, hearts));
@@ -947,7 +951,7 @@ export function createIncubator(ctx: UiContext): Room {
   function startSyringeDrag(e: FederatedPointerEvent): void {
     if (syrGhost) return;
     e.stopPropagation();                 // не даём начаться свайпу комнат
-    if (!isUnlocked(ctx.state, 'clinic')) { ctx.toast('Открой «Ветеринара» в Генолабе 🔬'); return; }
+    if (!isUnlocked(ctx.state, 'clinic')) { ctx.toast(t('Открой «Ветеринара» в Генолабе 🔬', 'Unlock the «Vet» in the Genolab 🔬')); return; }
     ctx.app.canvas.style.cursor = 'grabbing';
     if (syrArtNode) syrArtNode.visible = false; // прячем домашний шприц на время виса
     syrGhost = syringeArt(SYRINGE_H * 1.15, false);
@@ -971,8 +975,8 @@ export function createIncubator(ctx: UiContext): Room {
     hit.circle(0, 0, SYRINGE_H * 0.95).fill({ color: 0xffffff, alpha: 0.001 });
     const art = syringeArt(SYRINGE_H, !unlocked);
     const cap = unlocked
-      ? label('💉 лечить', 12, 0xffffff, '800', { color: 0x2c2438, width: 3 })
-      : lockHint('🔒 в Генолабе', 11);
+      ? label(t('💉 лечить', '💉 heal'), 12, 0xffffff, '800', { color: 0x2c2438, width: 3 })
+      : lockHint(t('🔒 в Генолабе', '🔒 in the Genolab'), 11);
     cap.position.set(0, SYRINGE_H * 0.98);
     wrap.addChild(hit, art, cap);
     syrArtNode = art;
@@ -1093,7 +1097,7 @@ export function createIncubator(ctx: UiContext): Room {
         ls.bar.clear();
         ls.bar.roundRect(ls.barX, ls.barY, Math.max(2, ls.barW * prog), 12, 6)
           .fill(remain <= 0 ? COLORS.good : COLORS.primary);
-        ls.time.text = remain <= 0 ? 'Готово! 🥚' : mmss(remain);
+        ls.time.text = remain <= 0 ? t('Готово! 🥚', 'Done! 🥚') : mmss(remain);
       }
 
       if (ls.busy && ls.mom && ls.dad) {
@@ -1240,16 +1244,16 @@ export function createIncubator(ctx: UiContext): Room {
         const r = assignBreeder(ctx.state, ls.index, cat.id, ctx.now());
         if (!r.ok) { ctx.toast(r.reason); return false; }
         ctx.commit();
-        ctx.toast(cat.genotype.sex === 'female' ? 'Кошка в слоте 💞' : 'Кот в слоте 💞');
+        ctx.toast(cat.genotype.sex === 'female' ? t('Кошка в слоте 💞', 'The female is in a slot 💞') : t('Кот в слоте 💞', 'The male is in a slot 💞'));
         return true;
       }
     }
-    ctx.toast('перетащи кота на слот вязки');
+    ctx.toast(t('перетащи кота на слот вязки', 'drag a cat onto a breeding slot'));
     return false;
   }
 
   return {
-    id: 'incubator', title: '🧬 Инкубатор', container: shell.container, refresh, tick, tryDropCat,
+    id: 'incubator', title: t('🧬 Инкубатор', '🧬 Incubator'), container: shell.container, refresh, tick, tryDropCat,
     // Обучение новичка: 'slot' — карточка первого слота, 'breed' — «Свести»,
     // 'preview' — 🔮 прогноз пары, 'freeSkip' — подарочный ускоритель,
     // 'toShelter' — «🏚️ В приют» у родившегося малыша (см. ui/tutorial.ts).

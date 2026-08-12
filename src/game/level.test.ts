@@ -87,26 +87,26 @@ describe('гейты уровня: что открыто когда', () => {
     expect(unlockLevelOf('food')).toBe(1);        // коты едят сразу
     expect(unlockLevelOf('research')).toBe(1);    // дерево «Улучшений» открыто с 1-го уровня
     expect(unlockLevelOf('recipeLab')).toBe(2);   // стол «Исследований» — с ур.2
-    expect(unlockLevelOf('engineering')).toBe(4); // усилители вязки — с ур.4
+    expect(unlockLevelOf('engineering')).toBe(3); // усилители: мин. уровень покупки узла «Учёный»
     expect(isUnlocked(s, 'food')).toBe(true);        // ур.1 — кормушка уже работает
     expect(isUnlocked(s, 'research')).toBe(true);    // ур.1 — «Улучшения» уже открыты
     expect(isUnlocked(s, 'recipeLab')).toBe(false);  // ур.1 — стол «Исследований» ещё заперт
     s.level = 2;
     expect(isUnlocked(s, 'recipeLab')).toBe(true);
-    expect(isUnlocked(s, 'engineering')).toBe(false); // ещё ур.2
-    s.level = 4;
-    expect(isUnlocked(s, 'engineering')).toBe(true);
   });
 
-  it('labStation/clinic открываются ПОКУПКОЙ узла «Лаборатории», а не уровнем', () => {
+  it('labStation/clinic/engineering открываются ПОКУПКОЙ узла «Лаборатории», а не уровнем', () => {
     const s = createInitialState(makeRng(2), 0);
     s.level = 10;                                  // даже на максимуме — заперто без узла
     expect(isUnlocked(s, 'labStation')).toBe(false);
     expect(isUnlocked(s, 'clinic')).toBe(false);
+    expect(isUnlocked(s, 'engineering')).toBe(false);
     s.research.r_lab_station = 1;                   // куплен узел «На эксперименты»
     expect(isUnlocked(s, 'labStation')).toBe(true);
     s.research.r_lab_vet = 1;                       // куплен узел «Ветеринар»
     expect(isUnlocked(s, 'clinic')).toBe(true);
+    s.research.r_lab_boosts = 1;                    // куплен узел «Учёный»
+    expect(isUnlocked(s, 'engineering')).toBe(true);
   });
 
   it('maxSlotsForLevel растёт по SLOT_UNLOCK_LEVELS [3,6]', () => {
@@ -167,12 +167,16 @@ describe('гейты уровня блокируют действия', () => {
     expect(buyBoost(s, 'tierUp')).toMatchObject({ ok: false, reason: 'locked' });
     // r_sel_markers — корень ветки Селекции (без пререквизитов), заперт деревом до ур.2
     expect(unlockResearch(s, 'r_sel_markers')).toMatchObject({ ok: false, reason: 'locked' });
-    s.level = 5; // research(2)+engineering(4) открыты
-    expect(buyBoost(s, 'tierUp').ok).toBe(true);
+    s.level = 5;
     expect(unlockResearch(s, 'r_sel_markers').ok).toBe(true);
-    // станция «на эксперименты» открывается ПОКУПКОЙ узла, а не уровнем
+    // станция «на эксперименты», ветеринар и усилители открываются ПОКУПКОЙ узлов, не уровнем
     expect(sendToLab(s, cat.id)).toMatchObject({ ok: false, reason: 'locked' });
+    expect(buyBoost(s, 'tierUp')).toMatchObject({ ok: false, reason: 'locked' });
     expect(unlockResearch(s, 'r_lab_station').ok).toBe(true);
+    expect(unlockResearch(s, 'r_lab_vet').ok).toBe(true);
+    expect(unlockResearch(s, 'r_lab_boosts').ok).toBe(true); // «Учёный» — гейт усилителей
+    expect(buyBoost(s, 'tierUp').ok).toBe(true);
+    // сдачу в лабораторию проверяем последней: она даёт ⭐ и пересчитывает уровень
     expect(sendToLab(s, cat.id).ok).toBe(true);
   });
 

@@ -19,7 +19,7 @@ import {
   healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cloneCostCoins, cryoCount, cryoCapacity,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
-  analyzeCat, freeAnalyzeCat, analyzeCoinCost, tutorialActive, KINSHIP_RU,
+  analyzeCat, freeAnalyzeCat, analyzeCoinCost, tutorialActive, kinshipName,
   claimOfflineAdBonus, offlineAdBonus, OFFLINE_AD_BONUS,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
@@ -32,10 +32,11 @@ import { showRewarded } from '../platform/ads.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, tierUpTarget, dormantTraits, traitTag } from '../genetics/index.js';
 import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, TIER_RU, TIER_COLOR, UI_SCALE } from './theme.js';
+import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, tierName, TIER_COLOR, UI_SCALE } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
 import { getMasterVolume, setMasterVolume, sfxEvent, sfxMeow } from './sound.js';
+import { t, tx, lang, setLang, type Lang } from '../i18n.js';
 
 /**
  * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
@@ -61,7 +62,7 @@ function askText(title: string, initial: string, maxLen: number, onDone: (v: str
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
   const cancel = document.createElement('button');
-  cancel.textContent = 'Отмена';
+  cancel.textContent = t('Отмена', 'Cancel');
   cancel.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
     + 'cursor:pointer;background:#e9d8c6;color:#5a4a42;';
   const ok = document.createElement('button');
@@ -100,18 +101,18 @@ function askBreedSpawn(spawn: (breedKey: string) => string): void {
   box.style.cssText = 'background:#fffaf3;padding:18px;border-radius:16px;display:flex;flex-direction:column;'
     + 'gap:12px;min-width:260px;box-shadow:0 10px 32px rgba(0,0,0,.3);';
   const lab = document.createElement('div');
-  lab.textContent = '🐈 Заспавнить породу в питомник';
+  lab.textContent = t('🐈 Заспавнить породу в питомник', '🐈 Spawn a breed into the cattery');
   lab.style.cssText = 'font-weight:700;color:#5a4a42;font-size:16px;';
   const select = document.createElement('select');
   select.style.cssText = 'font-size:16px;padding:9px 11px;border:2px solid #e9d8c6;border-radius:10px;'
     + 'outline:none;color:#5a4a42;background:#fff;';
   for (const tier of TIERS) {
     const group = document.createElement('optgroup');
-    group.label = TIER_RU[tier];
+    group.label = tierName(tier);
     for (const b of BREEDS.filter((x) => x.tier === tier)) {
       const opt = document.createElement('option');
       opt.value = b.key;
-      opt.textContent = b.name;
+      opt.textContent = tx(b.name);
       group.append(opt);
     }
     if (group.children.length) select.append(group);
@@ -121,11 +122,11 @@ function askBreedSpawn(spawn: (breedKey: string) => string): void {
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
   const close = document.createElement('button');
-  close.textContent = 'Закрыть';
+  close.textContent = t('Закрыть', 'Close');
   close.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
     + 'cursor:pointer;background:#e9d8c6;color:#5a4a42;';
   const ok = document.createElement('button');
-  ok.textContent = 'Заспавнить';
+  ok.textContent = t('Заспавнить', 'Spawn');
   ok.style.cssText = 'font-size:15px;font-weight:700;padding:8px 16px;border:none;border-radius:10px;'
     + 'cursor:pointer;background:#ff9eb5;color:#fff;';
   row.append(close, ok);
@@ -224,12 +225,12 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   const pad = 24;
   const root = new Container();
 
-  const title = label('⚙️ Настройки', 20, COLORS.ink, '800');
+  const title = label(t('⚙️ Настройки', '⚙️ Settings'), 20, COLORS.ink, '800');
   title.position.set(W / 2, 30);
 
   let y = 66;
 
-  const volCap = label('🔊 Громкость', 15, COLORS.ink, '800');
+  const volCap = label(t('🔊 Громкость', '🔊 Volume'), 15, COLORS.ink, '800');
   volCap.anchor.set(0, 0.5);
   volCap.position.set(pad, y);
   const pctT = label(`${Math.round(getMasterVolume() * 100)}%`, 15, COLORS.inkSoft, '800');
@@ -245,12 +246,36 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   sl.position.set(pad, y);
   y += 42;
 
-  const closeBtn = new Button({ text: 'Готово', w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
+  // Язык: определяется автоматически через SDK (п. 2.14), но игрок вправе
+  // переключить его сам — рекомендация п. 6.9. Флаги, а не названия языков:
+  // выбрать свой язык должно быть можно, не зная текущего.
+  const langCap = label(t('🌐 Язык', '🌐 Language'), 15, COLORS.ink, '800');
+  langCap.anchor.set(0, 0.5);
+  langCap.position.set(pad, y + 4);
+  const langBtns: Button[] = [];
+  const LANGS: { code: Lang; text: string }[] = [
+    { code: 'ru', text: '🇷🇺 RU' },
+    { code: 'en', text: '🇬🇧 EN' },
+  ];
+  LANGS.forEach((l, i) => {
+    const on = lang() === l.code;
+    const b = new Button({
+      text: l.text, w: 84, h: 38,
+      color: on ? COLORS.primary : COLORS.card,
+      textColor: on ? 0xffffff : COLORS.ink, fontSize: 15,
+    });
+    b.position.set(W - pad - 42 - (LANGS.length - 1 - i) * 92, y + 4);
+    b.onTap = () => { if (!on) setLang(l.code); }; // Game пересоберёт сцену (onLangChange)
+    langBtns.push(b);
+  });
+  y += 52;
+
+  const closeBtn = new Button({ text: t('Готово', 'Done'), w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
   closeBtn.position.set(W / 2, y + 23);
   closeBtn.onTap = close;
   y += 58;
 
-  root.addChild(panel(W, y, COLORS.hud, 18), title, volCap, pctT, sl, closeBtn);
+  root.addChild(panel(W, y, COLORS.hud, 18), title, volCap, pctT, sl, langCap, ...langBtns, closeBtn);
   return root;
 }
 
@@ -273,11 +298,11 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
     const items = shopItems();
     const parts: Container[] = [];
 
-    const title = label('💎 Кристаллы', 20, COLORS.ink, '800');
+    const title = label(t('💎 Кристаллы', '💎 Crystals'), 20, COLORS.ink, '800');
     title.position.set(W / 2, 30);
     parts.push(title);
 
-    const sub = label('Ускоряют вязку и рост, лечат котов, заряжают усилители', 11.5, COLORS.inkSoft, '600');
+    const sub = label(t('Ускоряют вязку и рост, лечат котов, заряжают усилители', 'Speed up breeding and growth, heal cats, charge boosters'), 11.5, COLORS.inkSoft, '600');
     sub.position.set(W / 2, 50);
     parts.push(sub);
 
@@ -287,7 +312,7 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
       const bonus = Math.round(FIRST_PURCHASE_BONUS * 100);
       const banner = panel(W - pad * 2, 30, COLORS.warn, 12);
       banner.position.set(pad, y);
-      const bt = label(`🎁 Первая покупка: +${bonus}% кристаллов`, 13, COLORS.ink, '800');
+      const bt = label(t(`🎁 Первая покупка: +${bonus}% кристаллов`, `🎁 First purchase: +${bonus}% crystals`), 13, COLORS.ink, '800');
       bt.position.set(W / 2, y + 15);
       parts.push(banner, bt);
       y += 38;
@@ -307,7 +332,7 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
       parts.push(amount);
 
       if (item.bonusPct > 0) {
-        const badge = label(`выгоднее на ${item.bonusPct}%`, 11, COLORS.inkSoft, '700');
+        const badge = label(t(`выгоднее на ${item.bonusPct}%`, `${item.bonusPct}% better value`), 11, COLORS.inkSoft, '700');
         badge.anchor.set(0, 0.5);
         badge.position.set(pad + 14, y + h / 2 + 11);
         parts.push(badge);
@@ -326,7 +351,7 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
           busy = false;
           if (r.ok) {
             ctx.commit();
-            ctx.toast(`Спасибо! 💎 +${r.crystals ?? 0}`);
+            ctx.toast(t(`Спасибо! 💎 +${r.crystals ?? 0}`, `Thank you! 💎 +${r.crystals ?? 0}`));
           } else if (r.reason) {
             ctx.toast(r.reason);
           }
@@ -338,18 +363,18 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
     }
 
     if (busy) {
-      const wait = label('Оплата…', 12, COLORS.inkSoft, '700');
+      const wait = label(t('Оплата…', 'Paying…'), 12, COLORS.inkSoft, '700');
       wait.position.set(W / 2, y + 8);
       parts.push(wait);
       y += 22;
     }
 
-    const note = label('Покупки проходят через Яндекс Игры', 10.5, COLORS.inkSoft, '600');
+    const note = label(t('Покупки проходят через Яндекс Игры', 'Purchases go through Yandex Games'), 10.5, COLORS.inkSoft, '600');
     note.position.set(W / 2, y + 8);
     parts.push(note);
     y += 24;
 
-    const closeBtn = new Button({ text: 'Закрыть', w: W - pad * 2, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+    const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: W - pad * 2, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
     closeBtn.enabled = !busy;
     closeBtn.position.set(W / 2, y + 21);
     closeBtn.onTap = close;
@@ -377,11 +402,11 @@ function fmtAway(min: number): string {
   if (h >= 24) {
     const d = Math.floor(h / 24);
     const rh = h % 24;
-    return rh ? `${d} д ${rh} ч` : `${d} д`;
+    return rh ? t(`${d} д ${rh} ч`, `${d}d ${rh}h`) : t(`${d} д`, `${d}d`);
   }
   const m = total % 60;
-  if (h <= 0) return `${m} мин`;
-  return m ? `${h} ч ${m} мин` : `${h} ч`;
+  if (h <= 0) return t(`${m} мин`, `${m} min`);
+  return m ? t(`${h} ч ${m} мин`, `${h}h ${m} min`) : t(`${h} ч`, `${h}h`);
 }
 
 /**
@@ -399,11 +424,11 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
   const root = new Container();
   const parts: Container[] = [];
 
-  const title = label('🌙 С возвращением!', 20, COLORS.ink, '800');
+  const title = label(t('🌙 С возвращением!', '🌙 Welcome back!'), 20, COLORS.ink, '800');
   title.position.set(W / 2, 32);
   parts.push(title);
 
-  const away = label(`Вас не было ${fmtAway(report.awayMin)}`, 13, COLORS.inkSoft, '700');
+  const away = label(t(`Вас не было ${fmtAway(report.awayMin)}`, `You were away ${fmtAway(report.awayMin)}`), 13, COLORS.inkSoft, '700');
   away.position.set(W / 2, 56);
   parts.push(away);
 
@@ -412,7 +437,7 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
   // главная строка отчёта — заработок на плашке цвета монет
   const plate = panel(W - pad * 2, 64, COLORS.card, 14);
   plate.position.set(pad, y);
-  const cap = label('Лаборатория заработала', 12, COLORS.inkSoft, '700');
+  const cap = label(t('Лаборатория заработала', 'Your lab earned'), 12, COLORS.inkSoft, '700');
   cap.position.set(W / 2, y + 18);
   const sum = label(`💰 +${report.coins}`, 28, COLORS.coins, '800');
   sum.position.set(W / 2, y + 42);
@@ -422,9 +447,9 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
   // почему не больше: потолок офлайна важнее (его лечат улучшением), пустая
   // кормушка — вторым, показываем что-то одно, чтобы окно не превращалось в стену
   const limitNote = report.cappedByTime
-    ? `⏳ Доход копился ${fmtAway(report.incomeMin)} — это потолок офлайна`
+    ? t(`⏳ Доход копился ${fmtAway(report.incomeMin)} — это потолок офлайна`, `⏳ Income piled up for ${fmtAway(report.incomeMin)} — that is the offline cap`)
     : report.cappedByFood
-      ? `🍽 Корм закончился — доход шёл ${fmtAway(report.incomeMin)}`
+      ? t(`🍽 Корм закончился — доход шёл ${fmtAway(report.incomeMin)}`, `🍽 The food ran out — income lasted ${fmtAway(report.incomeMin)}`)
       : '';
   if (limitNote) {
     const note = label(limitNote, 11.5, COLORS.warn, '800');
@@ -432,7 +457,9 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
     parts.push(note);
     y += 22;
     const hint = label(
-      report.cappedByTime ? 'поднять потолок: 🌙 «Ночной смотритель» в Улучшениях' : 'кормушка в Питомнике',
+      report.cappedByTime
+        ? t('поднять потолок: 🌙 «Ночной смотритель» в Улучшениях', 'raise the cap: 🌙 «Night keeper» in Upgrades')
+        : t('кормушка в Питомнике', 'the feeder is in the Cattery'),
       10.5, COLORS.inkSoft, '600',
     );
     hint.position.set(W / 2, y + 6);
@@ -441,7 +468,8 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
   }
 
   if (report.born) {
-    const b = label(`🐱 Родилось котят: ${report.born}${report.rep ? `  ⭐ +${report.rep}` : ''}`, 13, COLORS.ink, '800');
+    const rep = report.rep ? `  ⭐ +${report.rep}` : '';
+    const b = label(t(`🐱 Родилось котят: ${report.born}${rep}`, `🐱 Kittens born: ${report.born}${rep}`), 13, COLORS.ink, '800');
     b.position.set(W / 2, y + 10);
     parts.push(b);
     y += 26;
@@ -454,17 +482,20 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
   const bonus = offlineAdBonus(report.coins);
   if (bonus > 0) {
     const adBtn = new Button({
-      text: `📺 +${Math.round(OFFLINE_AD_BONUS * 100)}%  ·  💰 +${bonus}`,
-      w: btnW, h: 48, color: COLORS.good, textColor: 0xffffff, fontSize: 16,
+      text: t(
+        `📺 Реклама · +${Math.round(OFFLINE_AD_BONUS * 100)}%  ·  💰 +${bonus}`,
+        `📺 Ad · +${Math.round(OFFLINE_AD_BONUS * 100)}%  ·  💰 +${bonus}`,
+      ),
+      w: btnW, h: 48, color: COLORS.good, textColor: 0xffffff, fontSize: 15,
     });
     adBtn.position.set(W / 2, y + 24);
     adBtn.onTap = () => {
       adBtn.enabled = false; // ролик уже показывается — второй тап награды не даст
       void showRewarded().then((watched) => {
-        if (!watched) { adBtn.enabled = true; ctx.toast('Реклама недоступна'); return; }
+        if (!watched) { adBtn.enabled = true; ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
         const got = claimOfflineAdBonus(ctx.state, report.coins);
         ctx.commit();
-        ctx.toast(`Надбавка за просмотр: 💰 +${got}`);
+        ctx.toast(t(`Надбавка за просмотр: 💰 +${got}`, `Bonus for watching: 💰 +${got}`));
         close();
       });
     };
@@ -472,7 +503,7 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
     y += 56;
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
   closeBtn.position.set(W / 2, y + 21);
   closeBtn.onTap = close;
   parts.push(closeBtn);
@@ -502,7 +533,7 @@ export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () =
   const root = new Container();
   const parts: Container[] = [];
 
-  const title = label('🎉 Новый уровень!', 20, COLORS.ink, '800');
+  const title = label(t('🎉 Новый уровень!', '🎉 New level!'), 20, COLORS.ink, '800');
   title.position.set(W / 2, 32);
   parts.push(title);
 
@@ -511,9 +542,9 @@ export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () =
   // Главная плашка: «Поздравляем! Достигнут ⭐ Уровень N лаборатории».
   const plate = panel(W - pad * 2, 62, COLORS.card, 14);
   plate.position.set(pad, y);
-  const cong = label('Поздравляем! Достигнут', 12.5, COLORS.inkSoft, '700');
+  const cong = label(t('Поздравляем! Достигнут', 'Congratulations! You reached'), 12.5, COLORS.inkSoft, '700');
   cong.position.set(W / 2, y + 17);
-  const lvlT = label(`⭐ Уровень ${info.level} лаборатории`, 19, COLORS.ink, '800');
+  const lvlT = label(t(`⭐ Уровень ${info.level} лаборатории`, `⭐ Lab level ${info.level}`), 19, COLORS.ink, '800');
   lvlT.position.set(W / 2, y + 41);
   parts.push(plate, cong, lvlT);
   y += 74;
@@ -522,7 +553,7 @@ export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () =
   if (info.crystals > 0) {
     const gift = panel(W - pad * 2, 40, COLORS.crystals, 12);
     gift.position.set(pad, y);
-    const gt = label(`🎁 Подарок: 💎 +${info.crystals}`, 16, 0xffffff, '800');
+    const gt = label(t(`🎁 Подарок: 💎 +${info.crystals}`, `🎁 Gift: 💎 +${info.crystals}`), 16, 0xffffff, '800');
     gt.position.set(W / 2, y + 20);
     parts.push(gift, gt);
     y += 50;
@@ -530,7 +561,7 @@ export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () =
 
   // Что открылось на этом уровне (бывает пусто — тогда просто поздравление + 💎).
   if (info.unlocks.length) {
-    const head = label('Стало доступно:', 14, COLORS.ink, '800');
+    const head = label(t('Стало доступно:', 'Now available:'), 14, COLORS.ink, '800');
     head.anchor.set(0, 0.5);
     head.position.set(pad, y + 8);
     parts.push(head);
@@ -553,7 +584,7 @@ export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () =
     y += 4;
   }
 
-  const closeBtn = new Button({ text: 'Отлично!', w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
+  const closeBtn = new Button({ text: t('Отлично!', 'Great!'), w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
   closeBtn.position.set(W / 2, y + 23);
   closeBtn.onTap = close;
   parts.push(closeBtn);
@@ -579,7 +610,7 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     const cat = ev.kitten!;
 
     const title = label(
-      births.length > 1 ? `🎉 Пополнение! (${idx + 1}/${births.length})` : '🎉 Малыш родился!',
+      births.length > 1 ? t(`🎉 Пополнение! (${idx + 1}/${births.length})`, `🎉 New arrivals! (${idx + 1}/${births.length})`) : t('🎉 Малыш родился!', '🎉 A kitten is born!'),
       19, COLORS.ink, '800',
     );
     title.position.set(W / 2, 30);
@@ -604,16 +635,16 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     const st = stars(cat.rarityTier, 16);
     st.position.set(W / 2, y); y += 22;
 
-    const tierT = label(TIER_RU[cat.rarityTier], 13, TIER_COLOR[cat.rarityTier], '800');
+    const tierT = label(tierName(cat.rarityTier), 13, TIER_COLOR[cat.rarityTier], '800');
     tierT.position.set(W / 2, y); y += 22;
 
-    const grow = label('пол и имя проявятся, когда подрастёт 🌱', 12, COLORS.inkSoft, '600');
+    const grow = label(t('пол и имя проявятся, когда подрастёт 🌱', 'sex and name appear once it grows up 🌱'), 12, COLORS.inkSoft, '600');
     grow.position.set(W / 2, y); y += 24;
 
     const extra: Container[] = [];
     if (ev.motherBreed && ev.fatherBreed) {
       const line = label(
-        `от: ${breedName(ev.motherBreed)} ♀ × ${breedName(ev.fatherBreed)} ♂`,
+        t(`от: ${breedName(ev.motherBreed)} ♀ × ${breedName(ev.fatherBreed)} ♂`, `from: ${breedName(ev.motherBreed)} ♀ × ${breedName(ev.fatherBreed)} ♂`),
         12, COLORS.inkSoft, '600',
       );
       line.position.set(W / 2, y); extra.push(line); y += 22;
@@ -623,7 +654,7 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
         TIER_LEVEL[tierOfBreed(ev.fatherBreed)],
       );
       if (TIER_LEVEL[cat.rarityTier] > parentMax) {
-        const up = label('🌟 редкость выше родителей!', 13, COLORS.good, '800');
+        const up = label(t('🌟 редкость выше родителей!', '🌟 rarer than its parents!'), 13, COLORS.good, '800');
         up.position.set(W / 2, y); extra.push(up); y += 24;
       }
     }
@@ -637,17 +668,17 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
 
     // всплывающая исчезающая надпись «нет места» у кнопки переполненной комнаты
     const flashNoSpace = (atY: number): void => {
-      const t = label('нет места', 16, 0xe06a6a, '800');
-      t.position.set(W / 2, atY);
-      root.addChild(t);
+      const txt = label(t('нет места', 'no room'), 16, 0xe06a6a, '800');
+      txt.position.set(W / 2, atY);
+      root.addChild(txt);
       let life = 0;
       const fn = (tk: { deltaMS: number }): void => {
-        if (t.destroyed) { ctx.app.ticker.remove(fn); return; }
+        if (txt.destroyed) { ctx.app.ticker.remove(fn); return; }
         const d = tk.deltaMS / 1000;
         life += d;
-        t.y -= d * 26;
-        t.alpha = Math.max(0, 1 - life / 0.9);
-        if (life >= 0.9) { ctx.app.ticker.remove(fn); t.destroy(); }
+        txt.y -= d * 26;
+        txt.alpha = Math.max(0, 1 - life / 0.9);
+        if (life >= 0.9) { ctx.app.ticker.remove(fn); txt.destroy(); }
       };
       ctx.app.ticker.add(fn);
     };
@@ -663,18 +694,18 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
         const r = moveCat(ctx.state, cat.id, room);
         if (!r.ok) { flashNoSpace(b.y - 4); return; }
         ctx.commit();
-        ctx.toast(room === 'shelter' ? 'Малыш в приюте 🏠' : 'Малыш в питомнике 🏆');
+        ctx.toast(room === 'shelter' ? t('Малыш в приюте 🏠', 'The kitten is in the shelter 🏠') : t('Малыш в питомнике 🏆', 'The kitten is in the cattery 🏆'));
         advance();
       };
       y += 54;
       return b;
     };
     btns.push(mkPlace(
-      `🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`,
+      t(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`, `🏠 To the cattery (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`),
       COLORS.primary, 'nursery',
     ));
     btns.push(mkPlace(
-      `🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`,
+      t(`🏚️ В приют (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`, `🏚️ To the shelter (${roomCount(ctx.state, 'shelter')}/${shelterCapacity(ctx.state)})`),
       COLORS.secondary, 'shelter',
     ));
 
@@ -682,14 +713,14 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     // растёт втрое медленнее и блокирует слот, пока его не унесут в комнату.
     if (held) {
       const keep = new Button({
-        text: '🐾 Оставить с родителями', w: W - 60, h: 44, color: COLORS.warn,
+        text: t('🐾 Оставить с родителями', '🐾 Leave it with the parents'), w: W - 60, h: 44, color: COLORS.warn,
         textColor: COLORS.ink, fontSize: 15,
       });
       keep.position.set(W / 2, y + 22);
       keep.onTap = () => {
         keepKittenWithParents(ctx.state, cat.id, ctx.now());
         ctx.commit();
-        ctx.toast('Малыш остался с роднёй 🐾 (растёт медленно)');
+        ctx.toast(t('Малыш остался с роднёй 🐾 (растёт медленно)', 'The kitten stayed with its family 🐾 (grows slowly)'));
         advance();
       };
       btns.push(keep);
@@ -701,6 +732,15 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
 
   render();
   return root;
+}
+
+/**
+ * Причина отказа зарядки — на человеческом языке. Ядро отдаёт 'locked' кодом
+ * (замок общий для нескольких проверок), а показывать игроку служебное слово
+ * нельзя: п. 1.14 требований — «нет технических сообщений».
+ */
+function boostReasonText(reason: string | undefined): string {
+  return reason === 'locked' ? t('Генная инженерия ещё заперта 🔒', 'Gene engineering is still locked 🔒') : reason ?? t('не получилось', 'did not work');
 }
 
 /**
@@ -724,12 +764,12 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     const activeDef = activeId ? BOOSTS.find((b) => b.id === activeId) : undefined;
     const items: Container[] = [];
 
-    const title = label(`${def.glyph} ${def.label}`, 19, COLORS.ink, '800');
+    const title = label(`${def.glyph} ${tx(def.label)}`, 19, COLORS.ink, '800');
     title.position.set(W / 2, 30);
     items.push(title);
 
     const desc = new Text({
-      text: def.desc,
+      text: tx(def.desc),
       style: {
         fontFamily: FONT, fontSize: 14, fontWeight: '600', fill: COLORS.inkSoft,
         align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 19,
@@ -742,7 +782,7 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
 
     // Склад зарядов (не зависит от активности — заряды копятся, тратятся в вязке).
     const stock = label(
-      charges > 0 ? `📦 В запасе: ×${charges}` : '📦 В запасе: нет зарядов',
+      charges > 0 ? t(`📦 В запасе: ×${charges}`, `📦 In stock: ×${charges}`) : t('📦 В запасе: нет зарядов', '📦 In stock: no charges'),
       13, charges > 0 ? COLORS.ink : COLORS.inkSoft, '800',
     );
     stock.position.set(W / 2, y);
@@ -752,10 +792,10 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     // Статус активности: активен сейчас / заряжён, но не активен / другой активен.
     const status = label(
       active
-        ? '⚡ активен · сработает на следующей вязке'
+        ? t('⚡ активен · сработает на следующей вязке', '⚡ active · fires on the next breeding')
         : charges > 0
-          ? (activeDef ? `не активен · сейчас активен ${activeDef.glyph} ${activeDef.label}` : 'не активен · включи, чтобы работал')
-          : 'нет зарядов · сначала заряди',
+          ? (activeDef ? t(`не активен · сейчас активен ${activeDef.glyph} ${tx(activeDef.label)}`, `not active · ${activeDef.glyph} ${tx(activeDef.label)} is active instead`) : t('не активен · включи, чтобы работал', 'not active · switch it on to use it'))
+          : t('нет зарядов · сначала заряди', 'no charges · charge it first'),
       12, active ? COLORS.good : COLORS.inkSoft, '700',
     );
     status.position.set(W / 2, y);
@@ -763,25 +803,25 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     y += 20;
 
     // Правило: одновременно активен только один усилитель.
-    const rule = label('⚖️ Активен только один усилитель за раз', 11, COLORS.inkSoft, '600');
+    const rule = label(t('⚖️ Активен только один усилитель за раз', '⚖️ Only one booster can be active at a time'), 11, COLORS.inkSoft, '600');
     rule.position.set(W / 2, y);
     items.push(rule);
     y += 22;
 
     const buyWith = (currency: 'dna' | 'crystals'): void => {
       const r = buyBoost(ctx.state, def.id, currency);
-      if (r.ok) { ctx.commit(); ctx.toast(`${def.glyph} ${def.label}: +1 заряд`); render(); }
-      else ctx.toast(r.reason);
+      if (r.ok) { ctx.commit(); ctx.toast(t(`${def.glyph} ${tx(def.label)}: +1 заряд`, `${def.glyph} ${tx(def.label)}: +1 charge`)); render(); }
+      else ctx.toast(boostReasonText(r.reason));
     };
 
     const pad = 24, gap = 12;
     // Зарядка (любых типов, помногу) — доступна всегда.
     const bw = (W - pad * 2 - gap) / 2;
-    const geneBtn = new Button({ text: `Заряд\n🧬 ${def.dna}`, w: bw, h: 54, color: COLORS.dna, fontSize: 14 });
+    const geneBtn = new Button({ text: t(`Заряд\n🧬 ${def.dna}`, `Charge\n🧬 ${def.dna}`), w: bw, h: 54, color: COLORS.dna, fontSize: 14 });
     geneBtn.enabled = ctx.state.dna >= def.dna;
     geneBtn.onTap = () => buyWith('dna');
     geneBtn.position.set(pad + bw / 2, y + 27);
-    const crysBtn = new Button({ text: `Заряд\n💎 ${def.crystals}`, w: bw, h: 54, color: COLORS.crystals, fontSize: 14 });
+    const crysBtn = new Button({ text: t(`Заряд\n💎 ${def.crystals}`, `Charge\n💎 ${def.crystals}`), w: bw, h: 54, color: COLORS.crystals, fontSize: 14 });
     crysBtn.enabled = ctx.state.crystals >= def.crystals;
     crysBtn.onTap = () => buyWith('crystals');
     crysBtn.position.set(pad + bw + gap + bw / 2, y + 27);
@@ -796,7 +836,7 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
         ? BOOST_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastBoostAdAt) : 0;
       const adReady = adLeft <= 0;
       const adBtn = new Button({
-        text: adReady ? '📺 Заряд за рекламу · бесплатно' : `📺 Заряд за рекламу · через ${Math.ceil(adLeft / 60_000)} мин`,
+        text: adReady ? t('📺 Заряд за рекламу · бесплатно', '📺 Charge for an ad · free') : t(`📺 Заряд за рекламу · через ${Math.ceil(adLeft / 60_000)} мин`, `📺 Charge for an ad · in ${Math.ceil(adLeft / 60_000)} min`),
         w: W - pad * 2, h: 40,
         color: adReady ? COLORS.good : COLORS.cardEdge,
         textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 13.5,
@@ -805,16 +845,16 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
       adBtn.position.set(W / 2, y + 20);
       adBtn.onTap = () => {
         void showRewarded().then((watched) => {
-          if (!watched) { ctx.toast('Реклама недоступна'); return; }
+          if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
           const r = adChargeBoost(ctx.state, def.id, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast(`📺 ${def.glyph} ${def.label}: +1 заряд`); render(); }
-          else ctx.toast(r.reason);
+          if (r.ok) { ctx.commit(); ctx.toast(t(`📺 ${def.glyph} ${tx(def.label)}: +1 заряд`, `📺 ${def.glyph} ${tx(def.label)}: +1 charge`)); render(); }
+          else ctx.toast(boostReasonText(r.reason));
         });
       };
       items.push(adBtn);
       y += 50;
     } else {
-      const noAd = label('📺-зарядка недоступна — только за 🧬/💎', 11, COLORS.inkSoft, '600');
+      const noAd = label(t('📺-зарядка недоступна — только за 🧬/💎', 'no ad charge for this one — only 🧬/💎'), 11, COLORS.inkSoft, '600');
       noAd.position.set(W / 2, y + 8);
       items.push(noAd);
       y += 24;
@@ -823,7 +863,7 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     // Переключатель активности (заряды НЕ тратит). Активировать можно только при
     // наличии зарядов; активный — выключить. Включение снимает активность с другого.
     const toggleBtn = new Button({
-      text: active ? '🟢 Активен · выключить' : charges > 0 ? '⚡ Сделать активным' : 'Заряди, чтобы активировать',
+      text: active ? t('🟢 Активен · выключить', '🟢 Active · switch off') : charges > 0 ? t('⚡ Сделать активным', '⚡ Make it active') : t('Заряди, чтобы активировать', 'Charge it to activate'),
       w: W - pad * 2, h: 42,
       color: active ? COLORS.good : charges > 0 ? COLORS.primary : COLORS.cardEdge,
       textColor: active || charges > 0 ? 0xffffff : COLORS.inkSoft, fontSize: 14.5,
@@ -833,15 +873,15 @@ export function buildBoostMenu(ctx: UiContext, boostId: string, close: () => voi
     toggleBtn.onTap = () => {
       const wasActive = active;
       const r = toggleBoost(ctx.state, def.id);
-      if (!r.ok) { ctx.toast(r.reason === 'нет зарядов' ? 'Нет зарядов — сначала заряди' : r.reason); return; }
+      if (!r.ok) { ctx.toast(r.reason === t('нет зарядов', 'no charges') ? t('Нет зарядов — сначала заряди', 'No charges — charge it first') : boostReasonText(r.reason)); return; }
       ctx.commit();
-      ctx.toast(wasActive ? `${def.glyph} ${def.label} выключен` : `${def.glyph} ${def.label} активен ⚡`);
+      ctx.toast(wasActive ? t(`${def.glyph} ${tx(def.label)} выключен`, `${def.glyph} ${tx(def.label)} switched off`) : t(`${def.glyph} ${tx(def.label)} активен ⚡`, `${def.glyph} ${tx(def.label)} is active ⚡`));
       render();
     };
     items.push(toggleBtn);
     y += 52;
 
-    const closeBtn = new Button({ text: 'Закрыть', w: W - pad * 2, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+    const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: W - pad * 2, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
     closeBtn.position.set(W / 2, y + 20);
     closeBtn.onTap = close;
     items.push(closeBtn);
@@ -877,16 +917,16 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
   const items: Container[] = [];
 
   let y = 24;
-  const title = label(`${def.glyph} ${def.title}`, 20, COLORS.ink, '800');
+  const title = label(`${def.glyph} ${tx(def.title)}`, 20, COLORS.ink, '800');
   title.position.set(W / 2, y); items.push(title); y += 26;
 
   if (total > 1) {
-    const lvl = label(`Уровень ${owned + 1} из ${total}`, 13, COLORS.inkSoft, '700');
+    const lvl = label(t(`Уровень ${owned + 1} из ${total}`, `Level ${owned + 1} of ${total}`), 13, COLORS.inkSoft, '700');
     lvl.position.set(W / 2, y); items.push(lvl); y += 24;
   }
 
   const desc = new Text({
-    text: next?.desc ?? def.desc,   // описание покупаемого уровня (с итогом), иначе общий
+    text: tx(next?.desc ?? def.desc),   // описание покупаемого уровня (с итогом), иначе общий
     style: {
       fontFamily: FONT, fontSize: 15, fontWeight: '600', fill: COLORS.ink,
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 20,
@@ -896,36 +936,36 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
   desc.position.set(W / 2, y); items.push(desc);
   y += desc.height + 16;
 
-  const priceText = extraCoins > 0 ? `Цена: ${curGlyph} ${cost} + 💰 ${extraCoins}` : `Цена: ${curGlyph} ${cost}`;
+  const priceText = extraCoins > 0 ? t(`Цена: ${curGlyph} ${cost} + 💰 ${extraCoins}`, `Price: ${curGlyph} ${cost} + 💰 ${extraCoins}`) : t(`Цена: ${curGlyph} ${cost}`, `Price: ${curGlyph} ${cost}`);
   const price = label(priceText, 17, afford ? curColor : COLORS.warn, '800');
   price.position.set(W / 2, y); items.push(price); y += 24;
   const balText = extraCoins > 0
-    ? `У вас: ${curGlyph} ${fmt(balance)} · 💰 ${fmt(ctx.state.coins)}`
-    : `У вас: ${curGlyph} ${fmt(balance)}`;
+    ? t(`У вас: ${curGlyph} ${fmt(balance)} · 💰 ${fmt(ctx.state.coins)}`, `You have: ${curGlyph} ${fmt(balance)} · 💰 ${fmt(ctx.state.coins)}`)
+    : t(`У вас: ${curGlyph} ${fmt(balance)}`, `You have: ${curGlyph} ${fmt(balance)}`);
   const bal = label(balText, 13, COLORS.inkSoft, '700');
   bal.position.set(W / 2, y); items.push(bal); y += 30;
 
   const pad = 24, gap = 12;
   const bw = (W - pad * 2 - gap) / 2;
-  const noBtn = new Button({ text: 'Отмена', w: bw, h: 50, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  const noBtn = new Button({ text: t('Отмена', 'Cancel'), w: bw, h: 50, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
   noBtn.onTap = close;
   noBtn.position.set(pad + bw / 2, y + 25);
-  const buyBtn = new Button({ text: afford ? 'Купить' : 'Не хватает', w: bw, h: 50, color: curColor, fontSize: 16 });
+  const buyBtn = new Button({ text: afford ? t('Купить', 'Buy') : t('Не хватает', 'Not enough'), w: bw, h: 50, color: curColor, fontSize: 16 });
   buyBtn.enabled = afford;
   buyBtn.onTap = () => {
     const r = unlockResearch(ctx.state, def.id);
     if (!r.ok) {
       ctx.toast(
-        r.reason === 'locked' ? 'Улучшения ещё заперты 🔒'
-          : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
-            : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason,
+        r.reason === 'locked' ? t('Улучшения ещё заперты 🔒', 'Upgrades are still locked 🔒')
+          : r.reason === t('не хватает ДНК', 'not enough DNA') ? t('Не хватает 🧬 ДНК', 'Not enough 🧬 DNA')
+            : r.reason === t('не хватает монет', 'not enough coins') ? t('Не хватает 💰 монет', 'Not enough 💰 coins') : r.reason,
       );
       return;
     }
     ctx.commit();
     const lvlNow = researchLevel(ctx.state, def.id);
-    ctx.toast(total > 1 ? `${def.glyph} ${def.title} · ур. ${lvlNow}/${total} ✅`
-      : `${def.glyph} ${def.title} изучено ✅`);
+    ctx.toast(total > 1 ? t(`${def.glyph} ${tx(def.title)} · ур. ${lvlNow}/${total} ✅`, `${def.glyph} ${tx(def.title)} · lv. ${lvlNow}/${total} ✅`)
+      : t(`${def.glyph} ${tx(def.title)} изучено ✅`, `${def.glyph} ${tx(def.title)} researched ✅`));
     close();
   };
   buyBtn.position.set(pad + bw + gap + bw / 2, y + 25);
@@ -956,11 +996,23 @@ function addMoveButtons(ctx: UiContext, cat: Cat, close: () => void, addBtn: Add
       if (!r.ok) { ctx.toast(r.reason); return; }
       clearBreederSlot(ctx.state, cat.id); // если стоял в слоте — снять со слота
       close(); ctx.commit();
-      ctx.toast(room === 'nursery' ? 'Котик в питомнике 🏆' : 'Котик в приюте 🏚️');
+      ctx.toast(room === 'nursery' ? t('Котик в питомнике 🏆', 'The cat is in the cattery 🏆') : t('Котик в приюте 🏚️', 'The cat is in the shelter 🏚️'));
     });
   };
-  if (inSlot || cat.location === 'shelter') move('nursery', '🏠 В питомник', COLORS.primary);
-  if (inSlot || cat.location === 'nursery') move('shelter', '🏚️ В приют', COLORS.secondary);
+  if (inSlot || cat.location === 'shelter') move('nursery', t('🏠 В питомник', '🏠 To the cattery'), COLORS.primary);
+  if (inSlot || cat.location === 'nursery') move('shelter', t('🏚️ В приют', '🏚️ To the shelter'), COLORS.secondary);
+}
+
+/**
+ * Кнопка «в добрые руки» для кота, стоящего в слоте вязки (родитель или «малыш с
+ * роднёй»). Такого кота нет на полу комнаты, значит его не перетащить на переноску
+ * Приюта — пристраиваем прямо из меню. Диалог и награда те же (openAdoptConfirm →
+ * adoptCat), кот при этом освобождает слот (см. removeCat). Занятого активной
+ * вязкой не отдаём — его и adoptCat не пустит.
+ */
+function addAdoptButton(ctx: UiContext, cat: Cat, addBtn: AddBtn): void {
+  if (!isInSlot(ctx.state, cat.id) || isBusy(ctx.state, cat.id)) return;
+  addBtn(t('🤝 В добрые руки', '🤝 Give away'), COLORS.good, true, () => ctx.openAdoptConfirm(cat));
 }
 
 function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container {
@@ -975,9 +1027,9 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   let y = 16 + title.height + 16;
   const st = stars(cat.rarityTier, 15);
   st.position.set(W / 2, y); y += 22;
-  const tierT = label(`🍼 котёнок · ${TIER_RU[cat.rarityTier]}`, 13, tierCol, '800');
+  const tierT = label(t(`🍼 котёнок · ${tierName(cat.rarityTier)}`, `🍼 kitten · ${tierName(cat.rarityTier)}`), 13, tierCol, '800');
   tierT.position.set(W / 2, y); y += 22;
-  const hint = label('пол и имя проявятся, когда подрастёт 🌱', 12, COLORS.inkSoft, '600');
+  const hint = label(t('пол и имя проявятся, когда подрастёт 🌱', 'sex and name appear once it grows up 🌱'), 12, COLORS.inkSoft, '600');
   hint.position.set(W / 2, y); y += 24;
 
   // шкала взросления (заполняется в реальном времени)
@@ -1002,15 +1054,16 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   };
 
   if (cat.motherBreed || cat.fatherBreed) {
-    addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+    addBtn(t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
   // Ускорение роста: одно подменю «Вырастить сейчас» — там выбор 📺 реклама или 💎 кристаллы.
-  addBtn('🌱 Вырастить сейчас', COLORS.primary, true, () => ctx.openGrowConfirm(cat));
+  addBtn(t('🌱 Вырастить сейчас', '🌱 Grow up now'), COLORS.primary, true, () => ctx.openGrowConfirm(cat));
 
   addMoveButtons(ctx, cat, close, addBtn);
+  addAdoptButton(ctx, cat, addBtn); // малыша из окошка вязки можно сразу пристроить
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   y += 50;
@@ -1025,7 +1078,7 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
     const p = growthProgress(cat, ctx.now());
     bar.clear();
     bar.roundRect(barX, barY, Math.max(2, barW * p), barH, 7).fill(COLORS.primary);
-    timeT.text = `до взросления: ${mmss(growthRemainingMs(cat, ctx.now()))}`;
+    timeT.text = t(`до взросления: ${mmss(growthRemainingMs(cat, ctx.now()))}`, `grows up in: ${mmss(growthRemainingMs(cat, ctx.now()))}`);
   };
   redraw();
   // живое обновление шкалы; как только вырос — переоткрываем как взрослого
@@ -1049,7 +1102,7 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   const W = 320;
   const root = new Container();
 
-  const title = label('🌱 Вырастить сейчас', 18, COLORS.ink, '800');
+  const title = label(t('🌱 Вырастить сейчас', '🌱 Grow up now'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
 
   const sp = catSprite(ctx.app, cat, 84);
@@ -1057,7 +1110,7 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
 
   const remain = growthRemainingMs(cat, ctx.now());
   const mm = Math.max(0, Math.ceil(remain / 60_000));
-  const sub = label(`до взросления ≈ ${mm} мин`, 13, COLORS.inkSoft, '700');
+  const sub = label(t(`до взросления ≈ ${mm} мин`, `grows up in ≈ ${mm} min`), 13, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 162);
 
   let y = 186;
@@ -1065,13 +1118,13 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
 
   const btnW = W - 48;
   const adBtn = new Button({
-    text: '📺 Бесплатно', w: btnW, h: 44,
-    color: COLORS.good, textColor: 0xffffff, fontSize: 15,
+    text: t('📺 Реклама · вырастить бесплатно', '📺 Ad · grow up for free'), w: btnW, h: 44,
+    color: COLORS.good, textColor: 0xffffff, fontSize: 14,
   });
   adBtn.position.set(W / 2, y + 22);
   adBtn.onTap = () => {
     void showRewarded().then((watched) => {
-      if (!watched) { ctx.toast('Реклама недоступна'); return; }
+      if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
       const r = adSkipGrowth(ctx.state, cat.id, ctx.now());
       if (!r.ok) { ctx.toast(r.reason); return; }
       ctx.commit(); close(); ctx.openCatMenu(cat);
@@ -1083,7 +1136,7 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   const gcost = speedUpCost(remain, GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
   const afford = ctx.state.crystals >= gcost;
   const crysBtn = new Button({
-    text: `💎 Вырастить сразу · ${gcost}`, w: btnW, h: 44,
+    text: t(`💎 Вырастить сразу · ${gcost}`, `💎 Grow up instantly · ${gcost}`), w: btnW, h: 44,
     color: afford ? COLORS.secondary : COLORS.cardEdge,
     textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
   });
@@ -1097,7 +1150,7 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   root.addChild(crysBtn);
   y += 52;
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -1200,7 +1253,7 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   };
 
   // заголовки колонок поколений
-  const COL_RU = ['', 'родители', 'деды', 'прадеды'];
+  const COL_RU = ['', t('родители', 'parents'), t('деды', 'grandparents'), t('прадеды', 'great-grandparents')];
   const headers: Container[] = [];
   for (let d = 1; d <= usedDepth; d++) {
     const h = label(COL_RU[d] ?? '', 12, COLORS.inkSoft, '800');
@@ -1208,7 +1261,7 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
     headers.push(h);
   }
 
-  const title = label('🌳 Родословная', 18, COLORS.ink, '800');
+  const title = label(t('🌳 Родословная', '🌳 Pedigree'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 26 * k);
 
   let y = treeBottom + 8;
@@ -1233,23 +1286,23 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
     const hidden = dormantTraits(cat.breed, knownAncestorBreeds(cat));
     footNote(
       hidden.length > 0
-        ? `🧬 скрытые гены: ${hidden.map(traitTag).join(' · ')}`
-        : '🧬 скрытых генов в роду нет — родословная чистая по признакам',
+        ? t(`🧬 скрытые гены: ${hidden.map(traitTag).join(' · ')}`, `🧬 hidden genes: ${hidden.map(traitTag).join(' · ')}`)
+        : t('🧬 скрытых генов в роду нет — родословная чистая по признакам', '🧬 no hidden genes in the line — the pedigree is clean'),
       hidden.length > 0 ? COLORS.ink : COLORS.inkSoft,
     );
   } else if (fog) {
-    footNote('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', COLORS.inkSoft);
-    const anBtn = new Button({ text: '🧬 Анализ', w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
+    footNote(t('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', '«???» nodes are hidden — a Genetic analysis reveals the whole pedigree and its hidden genes'), COLORS.inkSoft);
+    const anBtn = new Button({ text: t('🧬 Анализ', '🧬 Analyse'), w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
     anBtn.position.set(W / 2, y + 20);
     anBtn.onTap = () => ctx.openAnalyzeConfirm(cat);
     footer.push(anBtn);
     y += 48;
   }
   if (known < maxDepth) {
-    footNote('родословная пополняется с каждым поколением', COLORS.inkSoft);
+    footNote(t('родословная пополняется с каждым поколением', 'the pedigree grows with every generation'), COLORS.inkSoft);
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: 160, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 160, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 24);
   closeBtn.onTap = close;
   y += 44;
@@ -1272,9 +1325,9 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   const W = 340;
   const root = new Container();
 
-  const title = label('🧬 Генетический анализ', 18, COLORS.ink, '800');
+  const title = label(t('🧬 Генетический анализ', '🧬 Genetic analysis'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
-  const sub = label('вскроет родословную и скрытые гены', 12.5, COLORS.inkSoft, '700');
+  const sub = label(t('вскроет родословную и скрытые гены', 'reveals the pedigree and hidden genes'), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 50);
 
   const sp = catSprite(ctx.app, cat, 84);
@@ -1283,8 +1336,8 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   who.position.set(W / 2, 180);
 
   const note = new Text({
-    text: 'Знание не меняет исход вязок — скрытые гены работали и в тумане. '
-      + 'Анализ раскрывает родословную и признаки предков для рецептов и превью пары.',
+    text: t('Знание не меняет исход вязок — скрытые гены работали и в тумане. ', 'Knowing changes no outcome — hidden genes worked in the fog too. ')
+      + t('Анализ раскрывает родословную и признаки предков для рецептов и превью пары.', 'The analysis reveals ancestors and their traits for recipes and the pair forecast.'),
     style: {
       fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 16,
@@ -1297,7 +1350,7 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   root.addChild(title, sub, sp, who, note);
 
   const btnW = W - 48;
-  const done = (): void => { ctx.commit(); ctx.toast('Анализ готов 🧬 родословная вскрыта'); close(); ctx.openPedigree(cat); };
+  const done = (): void => { ctx.commit(); ctx.toast(t('Анализ готов 🧬 родословная вскрыта', 'Analysis done 🧬 pedigree revealed')); close(); ctx.openPedigree(cat); };
 
   // Подарок обучения: САМЫЙ ПЕРВЫЙ анализ бесплатный (см. freeAnalyzeCat) — новичок
   // должен увидеть, что именно даёт анализ, прежде чем платить за него 💰 или 📺.
@@ -1305,7 +1358,7 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   const gift = tutorialActive(ctx.state) && !ctx.state.tutorial.freeAnalyzeUsed && !cat.analyzed;
   if (gift) {
     const freeBtn = new Button({
-      text: '🎁 Бесплатно — подарок лаборатории',
+      text: t('🎁 Бесплатно — подарок лаборатории', '🎁 Free — a gift from the lab'),
       w: btnW, h: 44, color: COLORS.warn, textColor: COLORS.ink, fontSize: 14,
     });
     freeBtn.position.set(W / 2, y + 22);
@@ -1321,7 +1374,7 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
     const cost = analyzeCoinCost(cat.rarityTier);
     const afford = ctx.state.coins >= cost;
     const coinBtn = new Button({
-      text: `💰 Провести анализ · ${cost}`,
+      text: t(`💰 Провести анализ · ${cost}`, `💰 Run the analysis · ${cost}`),
       w: btnW, h: 44, color: afford ? COLORS.primary : COLORS.cardEdge,
       textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
@@ -1337,13 +1390,13 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
 
     // 📺 бесплатная альтернатива (кулдауна больше нет — анализ инфо-действие)
     const adBtn = new Button({
-      text: '📺 Бесплатно за рекламу',
+      text: t('📺 Бесплатно за рекламу', '📺 Free for an ad'),
       w: btnW, h: 44, color: COLORS.good, textColor: 0xffffff, fontSize: 15,
     });
     adBtn.position.set(W / 2, y + 22);
     adBtn.onTap = () => {
       void showRewarded().then((watched) => {
-        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
         const r = analyzeCat(ctx.state, cat.id, 'ad', ctx.now());
         if (!r.ok) { ctx.toast(r.reason); return; }
         done();
@@ -1353,7 +1406,7 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
     y += 52;
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -1385,7 +1438,7 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
   st.position.set(W / 2, y);
   root.addChild(st);
   y += 20;
-  const tierT = label(TIER_RU[tier], 12.5, tierCol, '800');
+  const tierT = label(tierName(tier), 12.5, tierCol, '800');
   tierT.position.set(W / 2, y);
   root.addChild(tierT);
   y += 16;
@@ -1404,7 +1457,7 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
   y += boxH + 12;
 
   const status = label(
-    opened ? '✅ порода выведена' : '📜 рецепт изучен — порода ещё не выведена',
+    opened ? t('✅ порода выведена', '✅ breed obtained') : t('📜 рецепт изучен — порода ещё не выведена', '📜 recipe known — breed not obtained yet'),
     12.5, opened ? COLORS.good : COLORS.inkSoft, '800',
   );
   status.position.set(W / 2, y);
@@ -1437,8 +1490,8 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
 
   if (recipes.length === 0) {
     addLine(breedKey === 'moggie'
-      ? '🐾 Стартовая порода: дворовых котов покупают в питомнике, рецепт не нужен.'
-      : '🐾 Рецептов у породы нет.', 12.5, COLORS.inkSoft, '600');
+      ? t('🐾 Стартовая порода: дворовых котов покупают в питомнике, рецепт не нужен.', '🐾 Starter breed: moggies are bought in the cattery, no recipe needed.')
+      : t('🐾 Рецептов у породы нет.', '🐾 This breed has no recipes.'), 12.5, COLORS.inkSoft, '600');
   }
   recipes.forEach((r, i) => {
     if (i > 0) {
@@ -1451,14 +1504,14 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
     // инбридинг) → базовый шанс. Справка о породе — выше, над рецептами.
     const { pair, conds } = describeRecipe(r);
     addLine(`🧪 ${pair}`, 13.5, COLORS.ink, '800');
-    if (conds.length === 0) addLine('· без доп. условий — только породы родителей', 11.5, COLORS.inkSoft, '700');
+    if (conds.length === 0) addLine(t('· без доп. условий — только породы родителей', '· no extra conditions — parent breeds only'), 11.5, COLORS.inkSoft, '700');
     for (const cLine of conds) addLine(`· ${cLine}`, 11.5, COLORS.inkSoft, '700');
-    addLine(`базовый шанс: ${pct(r.chance)}`, 12, COLORS.dna, '800');
+    addLine(t(`базовый шанс: ${pct(r.chance)}`, `base chance: ${pct(r.chance)}`), 12, COLORS.dna, '800');
     y += 4;
   });
   y += 6;
 
-  const closeBtn = new Button({ text: 'Закрыть', w: 180, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 180, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -1473,20 +1526,20 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
  * последовательные шансы рецептов + фолбэк-наследование (breedingOutcomes, та же
  * математика, что при рождении). Раскрытый исход показывает породу; нераскрытый —
  * только «❓ тир — X%»: рецепт надо открыть в Котодексе, а скрытые гены пары
- * вскрыть анализом. Заряженный Катализатор и бонусы «Селекции» учтены.
+ * вскрыть анализом. Активный усилитель-фильтр (🍀/⬇) и бонусы «Селекции» учтены.
  */
 export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close: () => void): Container {
   const W = 380;
   const root = new Container();
 
   const bctx = buildBreedingContext(mother, father);
-  // ×2 Катализатора учитываем только когда он АКТИВЕН (склад ≠ активность): заряд
+  // Отсев пород усилителем учитываем только когда он АКТИВЕН (склад ≠ активность): заряд
   // на складе при другом активном усилителе на вязку не влияет — превью не должно врать.
-  const lucky = activeBoostId(ctx.state) === 'luckyUp';
-  const degrade = activeBoostId(ctx.state) === 'degrade'; // ⬇ дворовые исходы ×10
+  const lucky = activeBoostId(ctx.state) === 'luckyUp';   // 🍀 остаются только цветные
+  const degrade = activeBoostId(ctx.state) === 'degrade'; // ⬇ остаются только серые
   const outcomes = breedingOutcomes(bctx, lucky, breedChanceMult(ctx.state), degrade);
 
-  const title = label('🔮 Прогноз пары', 18, COLORS.ink, '800');
+  const title = label(t('🔮 Прогноз пары', '🔮 Pair forecast'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
   root.addChild(title);
   // Самец первым; если пара не влезает в одну строку блока — самка переносится
@@ -1501,20 +1554,20 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
 
   let y = who.y + who.height / 2 + 12;
   if (bctx.kinship !== 'none') {
-    const kin = label(`⚠️ родство: ${KINSHIP_RU[bctx.kinship]} — родословные рецепты усилены`, 11.5,
+    const kin = label(t(`⚠️ родство: ${kinshipName(bctx.kinship)} — родословные рецепты усилены`, `⚠️ kinship: ${kinshipName(bctx.kinship)} — pedigree recipes are boosted`), 11.5,
       bctx.kinship === 'critical' ? COLORS.warn : COLORS.inkSoft, '800');
     kin.position.set(W / 2, y);
     root.addChild(kin);
     y += 20;
   }
   if (lucky) {
-    const lk = label('🍀 Катализатор активен — шанс рецептов ×2 (учтено)', 11.5, COLORS.good, '800');
+    const lk = label(t('🍀 Катализатор активен — серые породы исключены', '🍀 Catalyst is active — grey breeds are excluded'), 11.5, COLORS.good, '800');
     lk.position.set(W / 2, y);
     root.addChild(lk);
     y += 20;
   }
   if (degrade) {
-    const dg = label('⬇ Деградатор активен — шанс дворовых ×10 (учтено)', 11.5, COLORS.good, '800');
+    const dg = label(t('⬇ Деградатор активен — цветные породы исключены', '⬇ Degrader is active — coloured breeds are excluded'), 11.5, COLORS.good, '800');
     dg.position.set(W / 2, y);
     root.addChild(dg);
     y += 20;
@@ -1527,8 +1580,8 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
     const gRevealed = !gOutcome?.recipe || outcomeRevealed(ctx.state, mother, father, gOutcome.recipe);
     const gl = label(
       gRevealed
-        ? `🔼 Активатор гарантирует: ${breedName(guaranteed)}`
-        : `🔼 Активатор гарантирует: ❓ ${TIER_RU[tierOfBreed(guaranteed)]}`,
+        ? t(`🔼 Активатор гарантирует: ${breedName(guaranteed)}`, `🔼 Activator guarantees: ${breedName(guaranteed)}`)
+        : t(`🔼 Активатор гарантирует: ❓ ${tierName(tierOfBreed(guaranteed))}`, `🔼 Activator guarantees: ❓ ${tierName(tierOfBreed(guaranteed))}`),
       11.5, COLORS.good, '800',
     );
     gl.position.set(W / 2, y);
@@ -1545,7 +1598,7 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
     const tierO = tierOfBreed(o.breed);
     const name = revealed
       ? `${o.recipe ? '🧪' : '🐾'} ${breedName(o.breed)}`
-      : `🧪 ❓ ${TIER_RU[tierO]}`;
+      : `🧪 ❓ ${tierName(tierO)}`;
     const nameT = label(name, 13.5, revealed ? TIER_COLOR[tierO] : COLORS.inkSoft, '800');
     nameT.anchor.set(0, 0.5);
     nameT.position.set(28, y + 9);
@@ -1557,14 +1610,14 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
   }
   y += 4;
 
-  const legend = label('🧪 рецепт · 🐾 наследование породы', 11, COLORS.inkSoft, '600');
+  const legend = label(t('🧪 рецепт · 🐾 наследование породы', '🧪 recipe · 🐾 breed inheritance'), 11, COLORS.inkSoft, '600');
   legend.position.set(W / 2, y + 6);
   root.addChild(legend);
   y += 20;
 
   if (anyHidden) {
     const hint = new Text({
-      text: '🧬 Генетический анализ обоих котов + рецепт в Котодексе раскроют названия «❓» исходов',
+      text: t('🧬 Генетический анализ обоих котов + рецепт в Котодексе раскроют названия «❓» исходов', '🧬 Analyse both cats and learn the recipe in the Catdex to reveal the «❓» outcomes'),
       style: {
         fontFamily: FONT, fontSize: 11, fontWeight: '600', fill: COLORS.inkSoft,
         align: 'center', wordWrap: true, wordWrapWidth: W - 40, lineHeight: 15,
@@ -1576,7 +1629,7 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
     y += hint.height + 10;
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: 180, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 180, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 22);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -1633,11 +1686,11 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   const left = breedsLeft(cat);
   const used = Math.max(0, total - left);
   const heartsStr = total > 0 ? '🖤'.repeat(used) + '❤️'.repeat(left) : '∅';
-  const ageLabel = label('Здоровье ' + heartsStr, 14, COLORS.inkSoft, '700');
+  const ageLabel = label(t('Здоровье ', 'Health ') + heartsStr, 14, COLORS.inkSoft, '700');
   ageLabel.position.set(W / 2, y);
   root.addChild(ageLabel);
   if (isOld(cat)) {
-    const oldT = label(isSterile(cat) ? 'Бесплодный' : 'Старый', 12, COLORS.warn, '800');
+    const oldT = label(isSterile(cat) ? t('Бесплодный', 'Sterile') : t('Старый', 'Old'), 12, COLORS.warn, '800');
     oldT.anchor.set(0, 0.5);
     oldT.position.set(W / 2 + ageLabel.width / 2 + 8, y);
     root.addChild(oldT);
@@ -1661,7 +1714,7 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   y += 10;
 
   if (busy) {
-    const note = label('💤 кот занят в вязке', 14, COLORS.warn, '700');
+    const note = label(t('💤 кот занят в вязке', '💤 the cat is busy breeding'), 14, COLORS.warn, '700');
     note.position.set(W / 2, y);
     root.addChild(note);
     y += 26;
@@ -1680,8 +1733,8 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // Постановка на вязку: кнопкой «в свободный слот» (в группе «куда отправить кота»,
   // ниже) либо перетаскиванием — взять кота за шкирку и уронить на нужный слот
   // инкубатора. Переезд между комнатами — там же.
-  addBtn(named ? '✏️ Переименовать' : '✏️ Дать имя', COLORS.warn, true, () => {
-    askText('Имя котика:', cat.name ?? '', 16, (input) => {
+  addBtn(named ? t('✏️ Переименовать', '✏️ Rename') : t('✏️ Дать имя', '✏️ Give a name'), COLORS.warn, true, () => {
+    askText(t('Имя котика:', 'Cat name:'), cat.name ?? '', 16, (input) => {
       if (input === null) return;               // отмена — ничего не делаем
       const r = renameCat(ctx.state, cat.id, input);
       if (!r.ok) { ctx.toast(r.reason); return; }
@@ -1693,12 +1746,12 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
 
   // Родословная: дерево предков до прадедов (есть и у стартовых — скрытая, в тумане).
   if (cat.motherBreed || cat.fatherBreed || cat.pedigree) {
-    addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+    addBtn(t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
   // Генетический анализ (система знаний): вскрыть родословную и скрытые гены.
   if (!cat.analyzed && pedigreeHasFog(cat)) {
-    addBtn('🧬 Генетический анализ', COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
+    addBtn(t('🧬 Генетический анализ', '🧬 Genetic analysis'), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
   }
 
   // Лечение (ветеринар-шприц) и заморозка (криокапсула) — только перетаскиванием кота
@@ -1710,14 +1763,14 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // «Старого»/«Бесплодного» пускаем: свести его нельзя, но именно в слоте его лечит
   // шприц-ветеринар (см. assignBreeder).
   if (!busy && !isInSlot(ctx.state, cat.id)) {
-    addBtn('💞 В свободный слот вязки', COLORS.primary, true, () => {
+    addBtn(t('💞 В свободный слот вязки', '💞 To a free breeding slot'), COLORS.primary, true, () => {
       const idx = freeBreedSlot(ctx.state, cat);
-      if (idx < 0) { ctx.toast('Нет свободных слотов вязки 💞 — освободи слот в Инкубаторе'); return; }
+      if (idx < 0) { ctx.toast(t('Нет свободных слотов вязки 💞 — освободи слот в Инкубаторе', 'No free breeding slots 💞 — clear one in the Incubator')); return; }
       const r = assignBreeder(ctx.state, idx, cat.id, ctx.now());
       if (!r.ok) { ctx.toast(r.reason); return; }
       close();
       ctx.commit();
-      ctx.toast(cat.genotype.sex === 'female' ? 'Кошка в слоте 💞' : 'Кот в слоте 💞');
+      ctx.toast(cat.genotype.sex === 'female' ? t('Кошка в слоте 💞', 'The female is in a slot 💞') : t('Кот в слоте 💞', 'The male is in a slot 💞'));
       ctx.goRoom(0); // Инкубатор — всегда первый в ряду комнат (см. Game.layout)
     });
   }
@@ -1726,7 +1779,10 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // где кота нет). Занятого активной вязкой кота не двигаем — он breeding'ится.
   if (!busy) addMoveButtons(ctx, cat, close, addBtn);
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  // Кот из слота вязки — ещё и «в добрые руки» (на полу для этого есть переноска).
+  addAdoptButton(ctx, cat, addBtn);
+
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -1748,7 +1804,7 @@ export function buildAdoptConfirm(ctx: UiContext, cat: Cat, close: () => void): 
   const root = new Container();
   const { coins, dna } = adoptReward(ctx.state, cat);
 
-  const title = label('Отдать котика в добрые руки?', 18, COLORS.ink, '800');
+  const title = label(t('Отдать котика в добрые руки?', 'Give the cat away to a good home?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 30);
 
   // мини-портрет + имя/описание кота
@@ -1757,23 +1813,24 @@ export function buildAdoptConfirm(ctx: UiContext, cat: Cat, close: () => void): 
   const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
   who.position.set(W / 2, 172);
 
-  const reward = label(`Вы получите:   💰 ${coins}     🧬 ${dna}`, 16, COLORS.ink, '800');
+  const reward = label(t(`Вы получите:   💰 ${coins}     🧬 ${dna}`, `You get:   💰 ${coins}     🧬 ${dna}`), 16, COLORS.ink, '800');
   reward.position.set(W / 2, 206);
 
   const pad = 24, gap = 12;
   const bw = (W - pad * 2 - gap) / 2;
   let y = 236;
-  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  const noBtn = new Button({ text: t('Нет', 'No'), w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
   noBtn.position.set(pad + bw / 2, y + 24);
   noBtn.onTap = close;
-  const yesBtn = new Button({ text: 'Да 🤝', w: bw, h: 48, color: COLORS.good, fontSize: 16 });
+  const yesBtn = new Button({ text: t('Да 🤝', 'Yes 🤝'), w: bw, h: 48, color: COLORS.good, fontSize: 16 });
   yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
   yesBtn.onTap = () => {
     const r = adoptCat(ctx.state, cat.id);
     if (!r.ok) { ctx.toast(r.reason); close(); return; }
     sfxEvent('adopt');
     ctx.commit();
-    ctx.toast(`Котика пристроили 🏠  +💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    const xp = r.rep ? `  +${r.rep} ⭐` : '';
+    ctx.toast(t(`Котика пристроили 🏠  +💰${r.coins}  +🧬${r.dna}${xp}`, `The cat found a home 🏠  +💰${r.coins}  +🧬${r.dna}${xp}`));
     close();
   };
   y += 56;
@@ -1792,9 +1849,9 @@ export function buildLabConfirm(ctx: UiContext, cat: Cat, close: () => void): Co
   const root = new Container();
   const { dna, coins } = labReward(ctx.state, cat);
 
-  const title = label('Сдать котика в лабораторию?', 18, COLORS.ink, '800');
+  const title = label(t('Сдать котика в лабораторию?', 'Send the cat to the lab?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
-  const sub = label('на эксперименты — взамен 🧬 гены', 12.5, COLORS.inkSoft, '700');
+  const sub = label(t('на эксперименты — взамен 🧬 гены', 'for experiments — 🧬 genes in return'), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 50);
 
   const sp = catSprite(ctx.app, cat, 84);
@@ -1802,23 +1859,25 @@ export function buildLabConfirm(ctx: UiContext, cat: Cat, close: () => void): Co
   const who = label(cat.name?.trim() || describeCat(cat), 14, TIER_COLOR[cat.rarityTier], '800');
   who.position.set(W / 2, 180);
 
-  const reward = label(`Вы получите:   🧬 ${dna}${coins > 0 ? `     💰 ${coins}` : ''}`, 16, COLORS.ink, '800');
+  const extra = coins > 0 ? `     💰 ${coins}` : '';
+  const reward = label(t(`Вы получите:   🧬 ${dna}${extra}`, `You get:   🧬 ${dna}${extra}`), 16, COLORS.ink, '800');
   reward.position.set(W / 2, 212);
 
   const pad = 24, gap = 12;
   const bw = (W - pad * 2 - gap) / 2;
   let y = 242;
-  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  const noBtn = new Button({ text: t('Нет', 'No'), w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
   noBtn.position.set(pad + bw / 2, y + 24);
   noBtn.onTap = close;
-  const yesBtn = new Button({ text: 'Да 🧪', w: bw, h: 48, color: COLORS.dna, fontSize: 16 });
+  const yesBtn = new Button({ text: t('Да 🧪', 'Yes 🧪'), w: bw, h: 48, color: COLORS.dna, fontSize: 16 });
   yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
   yesBtn.onTap = () => {
     const r = sendToLab(ctx.state, cat.id);
-    if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Лаборатория ещё заперта 🔒' : r.reason); close(); return; }
+    if (!r.ok) { ctx.toast(r.reason === 'locked' ? t('Лаборатория ещё заперта 🔒', 'The lab is still locked 🔒') : r.reason); close(); return; }
     sfxEvent('lab');
     ctx.commit();
-    ctx.toast(`Кот в лаборатории 🧪  +🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    const gain = `+🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`;
+    ctx.toast(t(`Кот в лаборатории 🧪  ${gain}`, `The cat is in the lab 🧪  ${gain}`));
     close();
   };
   y += 56;
@@ -1837,27 +1896,28 @@ export function buildBulkAdoptConfirm(ctx: UiContext, close: () => void): Contai
   const root = new Container();
   const { count, adopt } = shelterTotals(ctx.state);
 
-  const title = label('Раздать всех в добрые руки?', 18, COLORS.ink, '800');
+  const title = label(t('Раздать всех в добрые руки?', 'Give away every cat?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 30);
-  const sub = label(`Всего в приюте: ${count} 🐱`, 13, COLORS.inkSoft, '700');
+  const sub = label(t(`Всего в приюте: ${count} 🐱`, `In the shelter: ${count} 🐱`), 13, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 54);
-  const reward = label(`Вы получите:   💰 ${adopt.coins}     🧬 ${adopt.dna}`, 16, COLORS.ink, '800');
+  const reward = label(t(`Вы получите:   💰 ${adopt.coins}     🧬 ${adopt.dna}`, `You get:   💰 ${adopt.coins}     🧬 ${adopt.dna}`), 16, COLORS.ink, '800');
   reward.position.set(W / 2, 90);
 
   const pad = 24, gap = 12;
   const bw = (W - pad * 2 - gap) / 2;
   const y = 120;
-  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  const noBtn = new Button({ text: t('Нет', 'No'), w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
   noBtn.position.set(pad + bw / 2, y + 24);
   noBtn.onTap = close;
-  const yesBtn = new Button({ text: `Да 🤝 (${count})`, w: bw, h: 48, color: COLORS.good, fontSize: 16 });
+  const yesBtn = new Button({ text: t(`Да 🤝 (${count})`, `Yes 🤝 (${count})`), w: bw, h: 48, color: COLORS.good, fontSize: 16 });
   yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
   yesBtn.onTap = () => {
     const r = adoptAll(ctx.state);
     if (!r.ok) { ctx.toast(r.reason); close(); return; }
     sfxEvent('adopt'); // на всю партию один звук, а не по коту
     ctx.commit();
-    ctx.toast(`Пристроено ${r.count} 🏠  +💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    const gain = `+💰${r.coins}  +🧬${r.dna}${r.rep ? `  +${r.rep} ⭐` : ''}`;
+    ctx.toast(t(`Пристроено ${r.count} 🏠  ${gain}`, `${r.count} cats rehomed 🏠  ${gain}`));
     close();
   };
 
@@ -1875,27 +1935,29 @@ export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Containe
   const root = new Container();
   const { count, lab } = shelterTotals(ctx.state);
 
-  const title = label('Сдать всех в лабораторию?', 18, COLORS.ink, '800');
+  const title = label(t('Сдать всех в лабораторию?', 'Send every cat to the lab?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 30);
-  const sub = label(`на эксперименты — взамен 🧬 гены · ${count} 🐱`, 12.5, COLORS.inkSoft, '700');
+  const sub = label(t(`на эксперименты — взамен 🧬 гены · ${count} 🐱`, `for experiments — 🧬 genes in return · ${count} 🐱`), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 54);
-  const reward = label(`Вы получите:   🧬 ${lab.dna}${lab.coins > 0 ? `     💰 ${lab.coins}` : ''}`, 16, COLORS.ink, '800');
+  const extra = lab.coins > 0 ? `     💰 ${lab.coins}` : '';
+  const reward = label(t(`Вы получите:   🧬 ${lab.dna}${extra}`, `You get:   🧬 ${lab.dna}${extra}`), 16, COLORS.ink, '800');
   reward.position.set(W / 2, 90);
 
   const pad = 24, gap = 12;
   const bw = (W - pad * 2 - gap) / 2;
   const y = 120;
-  const noBtn = new Button({ text: 'Нет', w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  const noBtn = new Button({ text: t('Нет', 'No'), w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
   noBtn.position.set(pad + bw / 2, y + 24);
   noBtn.onTap = close;
-  const yesBtn = new Button({ text: `Да 🧪 (${count})`, w: bw, h: 48, color: COLORS.dna, fontSize: 16 });
+  const yesBtn = new Button({ text: t(`Да 🧪 (${count})`, `Yes 🧪 (${count})`), w: bw, h: 48, color: COLORS.dna, fontSize: 16 });
   yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
   yesBtn.onTap = () => {
     const r = sendAllToLab(ctx.state);
-    if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Лаборатория ещё заперта 🔒' : r.reason); close(); return; }
+    if (!r.ok) { ctx.toast(r.reason === 'locked' ? t('Лаборатория ещё заперта 🔒', 'The lab is still locked 🔒') : r.reason); close(); return; }
     sfxEvent('lab'); // на всю партию один звук, а не по коту
     ctx.commit();
-    ctx.toast(`В лаборатории ${r.count} 🧪  +🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`);
+    const gain = `+🧬${r.dna}${r.coins > 0 ? `  +💰${r.coins}` : ''}${r.rep ? `  +${r.rep} ⭐` : ''}`;
+    ctx.toast(t(`В лаборатории ${r.count} 🧪  ${gain}`, `${r.count} cats sent to the lab 🧪  ${gain}`));
     close();
   };
 
@@ -1918,9 +1980,9 @@ export function buildHealConfirm(
   const W = 340;
   const root = new Container();
 
-  const title = label('💉 Ветеринар', 18, COLORS.ink, '800');
+  const title = label(t('💉 Ветеринар', '💉 Vet'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
-  const sub = label('восстанавливает потраченные вязки', 12.5, COLORS.inkSoft, '700');
+  const sub = label(t('восстанавливает потраченные вязки', 'restores spent breedings'), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 50);
 
   const sp = catSprite(ctx.app, cat, 84);
@@ -1932,7 +1994,7 @@ export function buildHealConfirm(
   const left = breedsLeft(cat);
   const spent = Math.max(0, total - left);
   const heartsStr = total > 0 ? '🖤'.repeat(spent) + '❤️'.repeat(left) : '∅';
-  const hearts = label('Здоровье ' + heartsStr, 15, COLORS.ink, '800');
+  const hearts = label(t('Здоровье ', 'Health ') + heartsStr, 15, COLORS.ink, '800');
   hearts.position.set(W / 2, 210);
 
   let y = 236;
@@ -1941,32 +2003,32 @@ export function buildHealConfirm(
   const btnW = W - 48;
   if (isSterile(cat)) {
     // родился без сердец — генетический тупик, лечению не подлежит (решение §6)
-    const note = label('Бесплодный — лечению не подлежит 🚫', 13, COLORS.warn, '800');
+    const note = label(t('Бесплодный — лечению не подлежит 🚫', 'Sterile — cannot be healed 🚫'), 13, COLORS.warn, '800');
     note.position.set(W / 2, y);
     root.addChild(note);
     y += 28;
   } else if (spent <= 0) {
-    const note = label('Кот полностью здоров ✨', 13, COLORS.good, '800');
+    const note = label(t('Кот полностью здоров ✨', 'The cat is fully healthy ✨'), 13, COLORS.good, '800');
     note.position.set(W / 2, y);
     root.addChild(note);
     y += 28;
   } else {
     // 📺 реклама: +1 ❤ бесплатно, без кулдауна
     const adBtn = new Button({
-      text: `📺 +${HEAL_AD_HEARTS} ❤ бесплатно`,
+      text: t(`📺 Реклама · +${HEAL_AD_HEARTS} ❤ бесплатно`, `📺 Ad · +${HEAL_AD_HEARTS} ❤ free`),
       w: btnW, h: 44, color: COLORS.good,
       textColor: 0xffffff, fontSize: 15,
     });
     adBtn.position.set(W / 2, y + 22);
     adBtn.onTap = () => {
       void showRewarded().then((watched) => {
-        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
         const r = healCat(ctx.state, cat.id, 'ad', ctx.now());
-        if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
+        if (!r.ok) { ctx.toast(r.reason === 'locked' ? t('Ветеринар ещё заперт 🔒', 'The vet is still locked 🔒') : r.reason); close(); return; }
         sfxEvent('heal');
         ctx.commit();
         onHealed?.(r.healed); // плюсики над котом — после пересбора комнаты
-        ctx.toast(`Кот подлечен 💉 +${r.healed} ❤`);
+        ctx.toast(t(`Кот подлечен 💉 +${r.healed} ❤`, `The cat is healed 💉 +${r.healed} ❤`));
         close();
       });
     };
@@ -1977,7 +2039,7 @@ export function buildHealConfirm(
     const cost = HEAL_CRYSTAL_PER_HEART * spent;
     const afford = ctx.state.crystals >= cost;
     const fullBtn = new Button({
-      text: `💎 Вылечить всё · ${cost}`,
+      text: t(`💎 Вылечить всё · ${cost}`, `💎 Heal everything · ${cost}`),
       w: btnW, h: 44, color: afford ? COLORS.secondary : COLORS.cardEdge,
       textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
@@ -1985,18 +2047,18 @@ export function buildHealConfirm(
     fullBtn.position.set(W / 2, y + 22);
     fullBtn.onTap = () => {
       const r = healCat(ctx.state, cat.id, 'crystals', ctx.now());
-      if (!r.ok) { ctx.toast(r.reason === 'locked' ? 'Ветеринар ещё заперт 🔒' : r.reason); close(); return; }
+      if (!r.ok) { ctx.toast(r.reason === 'locked' ? t('Ветеринар ещё заперт 🔒', 'The vet is still locked 🔒') : r.reason); close(); return; }
       sfxEvent('heal');
       ctx.commit();
       onHealed?.(r.healed);
-      ctx.toast(`Кот полностью здоров 💉 +${r.healed} ❤  −${r.crystals} 💎`);
+      ctx.toast(t(`Кот полностью здоров 💉 +${r.healed} ❤  −${r.crystals} 💎`, `The cat is fully healthy 💉 +${r.healed} ❤  −${r.crystals} 💎`));
       close();
     };
     root.addChild(fullBtn);
     y += 52;
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -2016,9 +2078,9 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
   const W = 340;
   const root = new Container();
 
-  const title = label('🧊 Заморозить кота?', 18, COLORS.ink, '800');
+  const title = label(t('🧊 Заморозить кота?', '🧊 Freeze the cat?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
-  const sub = label('в криокапсулу — витрина коллекции', 12.5, COLORS.inkSoft, '700');
+  const sub = label(t('в криокапсулу — витрина коллекции', 'into a cryo capsule — your collection showcase'), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 50);
 
   const sp = catSprite(ctx.app, cat, 84);
@@ -2027,7 +2089,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
   who.position.set(W / 2, 172);
 
   const note = new Text({
-    text: '❄️ В капсуле кот не ест и не приносит доход. Разморозки нет — освободить капсулу можно клоном 🧬 или утилизацией.',
+    text: t('❄️ В капсуле кот не ест и не приносит доход. Разморозки нет — освободить капсулу можно клоном 🧬 или утилизацией.', '❄️ In a capsule the cat neither eats nor earns. There is no thawing — a capsule is freed by cloning 🧬 or by recycling.'),
     style: {
       fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 16,
@@ -2043,17 +2105,18 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
   const done = (r: { coins: number; crystals: number }): void => {
     sfxEvent('freeze');
     ctx.commit();
-    ctx.toast(`Кот в криокапсуле ❄️${r.coins ? `  −💰${r.coins}` : ''}${r.crystals ? `  −💎${r.crystals}` : ''}`);
+    const paid = `${r.coins ? `  −💰${r.coins}` : ''}${r.crystals ? `  −💎${r.crystals}` : ''}`;
+    ctx.toast(t(`Кот в криокапсуле ❄️${paid}`, `The cat is in a cryo capsule ❄️${paid}`));
     close();
   };
   const fail = (reason: string): void => {
-    ctx.toast(reason === 'locked' ? 'Крио-банк ещё закрыт 🔒'
-      : reason === 'нет свободной капсулы' ? 'Нет свободной капсулы ❄️ (открой ещё в Криогенетике)'
+    ctx.toast(reason === 'locked' ? t('Крио-банк ещё закрыт 🔒', 'The cryobank is still closed 🔒')
+      : reason === t('нет свободной капсулы', 'no free capsule') ? t('Нет свободной капсулы ❄️ (открой ещё в Криогенетике)', 'No free capsule ❄️ (unlock more in Cryogenetics)')
         : reason);
   };
 
   if (cryoCount(ctx.state) >= cryoCapacity(ctx.state)) {
-    const noCap = label('Нет свободной капсулы ❄️ (открой ещё в Криогенетике)', 12, COLORS.warn, '800');
+    const noCap = label(t('Нет свободной капсулы ❄️ (открой ещё в Криогенетике)', 'No free capsule ❄️ (unlock more in Cryogenetics)'), 12, COLORS.warn, '800');
     noCap.position.set(W / 2, y);
     root.addChild(noCap);
     y += 28;
@@ -2063,7 +2126,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
       ? FREEZE_AD_COOLDOWN_MS - (ctx.now() - ctx.state.lastFreezeAdAt) : 0;
     const adReady = cdLeft <= 0;
     const adBtn = new Button({
-      text: adReady ? '📺 Бесплатно за рекламу' : `📺 через ${Math.ceil(cdLeft / 60_000)} мин`,
+      text: adReady ? t('📺 Бесплатно за рекламу', '📺 Free for an ad') : t(`📺 через ${Math.ceil(cdLeft / 60_000)} мин`, `📺 in ${Math.ceil(cdLeft / 60_000)} min`),
       w: btnW, h: 44, color: adReady ? COLORS.good : COLORS.cardEdge,
       textColor: adReady ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
@@ -2071,7 +2134,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
     adBtn.position.set(W / 2, y + 22);
     adBtn.onTap = () => {
       void showRewarded().then((watched) => {
-        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
         const r = freezeCat(ctx.state, cat.id, 'ad', ctx.now());
         if (!r.ok) { fail(r.reason); return; }
         done(r);
@@ -2083,7 +2146,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
     // 💰 монеты
     const affordCoin = ctx.state.coins >= FREEZE_COIN_COST;
     const coinBtn = new Button({
-      text: `💰 Заморозить · ${FREEZE_COIN_COST}`,
+      text: t(`💰 Заморозить · ${FREEZE_COIN_COST}`, `💰 Freeze · ${FREEZE_COIN_COST}`),
       w: btnW, h: 44, color: affordCoin ? COLORS.primary : COLORS.cardEdge,
       textColor: affordCoin ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
@@ -2096,7 +2159,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
     // 💎 кристаллы (премиум, мгновенно)
     const affordCrys = ctx.state.crystals >= FREEZE_CRYSTAL_COST;
     const crysBtn = new Button({
-      text: `💎 Заморозить · ${FREEZE_CRYSTAL_COST}`,
+      text: t(`💎 Заморозить · ${FREEZE_CRYSTAL_COST}`, `💎 Freeze · ${FREEZE_CRYSTAL_COST}`),
       w: btnW, h: 44, color: affordCrys ? COLORS.secondary : COLORS.cardEdge,
       textColor: affordCrys ? 0xffffff : COLORS.inkSoft, fontSize: 15,
     });
@@ -2107,7 +2170,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
     y += 52;
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
   closeBtn.position.set(W / 2, y + 20);
   closeBtn.onTap = close;
   root.addChild(closeBtn);
@@ -2131,7 +2194,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
     root.removeChildren();
     const tierCol = TIER_COLOR[cat.rarityTier];
 
-    const title = label('❄️ Криокапсула', 18, COLORS.ink, '800');
+    const title = label(t('❄️ Криокапсула', '❄️ Cryo capsule'), 18, COLORS.ink, '800');
     title.position.set(W / 2, 26);
 
     const sp = catSprite(ctx.app, cat, 92);
@@ -2147,7 +2210,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
     const left = breedsLeft(cat);
     const spent = Math.max(0, total - left);
     const heartsStr = total > 0 ? '🖤'.repeat(spent) + '❤️'.repeat(left) : '∅';
-    const hearts = label('Здоровье ' + heartsStr, 13, COLORS.inkSoft, '700');
+    const hearts = label(t('Здоровье ', 'Health ') + heartsStr, 13, COLORS.inkSoft, '700');
     hearts.position.set(W / 2, 214);
 
     let y = 234;
@@ -2164,22 +2227,22 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
     };
 
     if (confirmDispose) {
-      const warnT = label('Утилизировать безвозвратно?', 15, COLORS.warn, '800');
+      const warnT = label(t('Утилизировать безвозвратно?', 'Recycle for good?'), 15, COLORS.warn, '800');
       warnT.position.set(W / 2, y + 4);
       root.addChild(warnT);
       y += 24;
       const pad = 24, gap = 12;
       const bw = (W - pad * 2 - gap) / 2;
-      const noBtn = new Button({ text: 'Нет', w: bw, h: 46, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+      const noBtn = new Button({ text: t('Нет', 'No'), w: bw, h: 46, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
       noBtn.position.set(pad + bw / 2, y + 23);
       noBtn.onTap = () => { confirmDispose = false; render(); };
-      const yesBtn = new Button({ text: '♻️ Да', w: bw, h: 46, color: COLORS.warn, textColor: COLORS.ink, fontSize: 16 });
+      const yesBtn = new Button({ text: t('♻️ Да', '♻️ Yes'), w: bw, h: 46, color: COLORS.warn, textColor: COLORS.ink, fontSize: 16 });
       yesBtn.position.set(pad + bw + gap + bw / 2, y + 23);
       yesBtn.onTap = () => {
         const r = disposeCryo(ctx.state, cat.id);
         if (!r.ok) { ctx.toast(r.reason); close(); return; }
         ctx.commit();
-        ctx.toast('Капсула освобождена ♻️');
+        ctx.toast(t('Капсула освобождена ♻️', 'The capsule is free again ♻️'));
         close();
       };
       root.addChild(noBtn, yesBtn);
@@ -2191,33 +2254,33 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
       const noRoom = roomCount(ctx.state, 'nursery') >= nurseryCapacity(ctx.state);
       const afford = ctx.state.dna >= cost && ctx.state.coins >= coinsCost;
       addBtn(
-        noRoom ? '🧬 Клонировать · нет места' : `🧬 Клонировать · ${cost} · 💰${coinsCost}`,
+        noRoom ? t('🧬 Клонировать · нет места', '🧬 Clone · no room') : t(`🧬 Клонировать · ${cost} · 💰${coinsCost}`, `🧬 Clone · ${cost} · 💰${coinsCost}`),
         afford && !noRoom ? COLORS.dna : COLORS.cardEdge,
         afford && !noRoom,
         () => {
           const r = cloneCat(ctx.state, cat.id, ctx.now());
           if (!r.ok) {
-            ctx.toast(r.reason === 'нет места в питомнике' ? 'Нет места в питомнике 🚫'
-              : r.reason === 'не хватает ДНК' ? 'Не хватает 🧬 ДНК'
-              : r.reason === 'не хватает монет' ? 'Не хватает 💰 монет' : r.reason);
+            ctx.toast(r.reason === t('нет места в питомнике', 'no room in the cattery') ? t('Нет места в питомнике 🚫', 'No room in the cattery 🚫')
+              : r.reason === t('не хватает ДНК', 'not enough DNA') ? t('Не хватает 🧬 ДНК', 'Not enough 🧬 DNA')
+              : r.reason === t('не хватает монет', 'not enough coins') ? t('Не хватает 💰 монет', 'Not enough 💰 coins') : r.reason);
             return;
           }
           ctx.commit();
-          ctx.toast(`Клон в питомнике 🐱  −🧬${r.dna} −💰${r.coins}`);
+          ctx.toast(t(`Клон в питомнике 🐱  −🧬${r.dna} −💰${r.coins}`, `The clone is in the cattery 🐱  −🧬${r.dna} −💰${r.coins}`));
           close();
         },
       );
       if (cat.motherBreed || cat.fatherBreed || cat.pedigree) {
-        addBtn('🌳 Родословная', COLORS.secondary, true, () => ctx.openPedigree(cat));
+        addBtn(t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
       }
       // Генетический анализ доступен и в капсуле: вскрыть родословную/скрытые гены.
       if (!cat.analyzed && pedigreeHasFog(cat)) {
-        addBtn('🧬 Генетический анализ', COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
+        addBtn(t('🧬 Генетический анализ', '🧬 Genetic analysis'), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
       }
-      addBtn('♻️ Утилизировать', COLORS.warn, true, () => { confirmDispose = true; render(); });
+      addBtn(t('♻️ Утилизировать', '♻️ Recycle'), COLORS.warn, true, () => { confirmDispose = true; render(); });
     }
 
-    const closeBtn = new Button({ text: 'Закрыть', w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+    const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
     closeBtn.position.set(W / 2, y + 20);
     closeBtn.onTap = close;
     root.addChild(closeBtn);
@@ -2244,12 +2307,12 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 620;
   const root = new Container();
 
-  const title = label('📋 Заказы клиентов', 20, COLORS.ink, '800');
+  const title = label(t('📋 Заказы клиентов', '📋 Client orders'), 20, COLORS.ink, '800');
   title.position.set(W / 2, 26);
 
   const cat = basketCat(ctx.state);
   const basket = label(
-    cat ? `🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}` : '🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Приюте',
+    cat ? t(`🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}`, `🧺 In the basket: ${cat.name?.trim() || describeCat(cat)}`) : t('🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Приюте', '🧺 The basket is empty — drag a cat into the basket under the 📋 button in the Shelter'),
     13, cat ? COLORS.ink : COLORS.inkSoft, '800',
   );
   basket.anchor.set(0.5, 0);
@@ -2261,9 +2324,9 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     const m = Math.floor((ms % 3_600_000) / 60_000);
     return `${h}:${String(m).padStart(2, '0')}`;
   };
-  const fmtMin = (ms: number): string => `${Math.max(1, Math.ceil(ms / 60_000))} мин`;
+  const fmtMin = (ms: number): string => t(`${Math.max(1, Math.ceil(ms / 60_000))} мин`, `${Math.max(1, Math.ceil(ms / 60_000))} min`);
   const adHelp = label(
-    'Не выполнил за 6 ч — заказ сменится сам. 📺 обновляет заказ досрочно (раз в час на заказ).',
+    t('Не выполнил за 6 ч — заказ сменится сам. Просмотр рекламы обновляет заказ досрочно (раз в час на заказ).', 'Not done within 6 h and the order changes by itself. Watching an ad refreshes an order early (once per hour per order).'),
     11.5, COLORS.inkSoft, '600');
   adHelp.anchor.set(0.5, 0);
   adHelp.position.set(W / 2, 66);
@@ -2285,19 +2348,19 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     req.position.set(16, 22);
     row.addChild(req);
 
-    const rew = label('Награда: ' + rewardText(order.reward), 13, COLORS.inkSoft, '700');
+    const rew = label(t('Награда: ', 'Reward: ') + rewardText(order.reward), 13, COLORS.inkSoft, '700');
     rew.anchor.set(0, 0.5);
     rew.position.set(16, 46);
     row.addChild(rew);
 
     // таймер жизни — текстом в правом нижнем углу (под кнопкой «Выполнить»)
-    const timer = label(`⏳ сменятся через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, 11.5, COLORS.inkSoft, '600');
+    const timer = label(t(`⏳ сменятся через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), 11.5, COLORS.inkSoft, '600');
     timer.anchor.set(1, 0.5);
     timer.position.set(cardW - 16, 70);
     row.addChild(timer);
 
     // главная кнопка «Выполнить» — правый верхний угол карточки
-    const btnText = !cat ? 'нужен кот' : busy ? 'кот занят' : fits ? 'Выполнить' : 'не подходит';
+    const btnText = !cat ? t('нужен кот', 'need a cat') : busy ? t('кот занят', 'cat is busy') : fits ? t('Выполнить', 'Complete') : t('не подходит', 'does not match');
     const btn = new Button({
       text: btnText, w: 150, h: 40,
       color: fits && !busy ? COLORS.primary : COLORS.cardEdge,
@@ -2309,7 +2372,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) {
         sfxEvent('order');
-        ctx.commit(); ctx.toast('Заказ выполнен! ' + rewardText(r.reward)); close(); ctx.openOrders();
+        ctx.commit(); ctx.toast(t('Заказ выполнен! ', 'Order complete! ') + rewardText(r.reward)); close(); ctx.openOrders();
       } else ctx.toast(r.reason);
     };
     row.addChild(btn);
@@ -2318,19 +2381,19 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     // Кулдаун свой у каждого заказа, поэтому состояние кнопки считается по строке.
     const adAvail = canAdRefreshOrder(order, ctx.now());
     const refBtn = new Button({
-      text: adAvail ? '📺 обновить' : `⏳ ${fmtMin(msUntilAdRefresh(order, ctx.now()))}`, w: 132, h: 28,
+      text: adAvail ? t('📺 Реклама · обновить', '📺 Ad · refresh') : `⏳ ${fmtMin(msUntilAdRefresh(order, ctx.now()))}`, w: 178, h: 28,
       color: adAvail ? COLORS.secondary : COLORS.cardEdge,
-      textColor: adAvail ? 0xffffff : COLORS.inkSoft, fontSize: 12.5,
+      textColor: adAvail ? 0xffffff : COLORS.inkSoft, fontSize: 11,
     });
     refBtn.enabled = adAvail;
-    refBtn.position.set(16 + 66, 70);
+    refBtn.position.set(16 + 89, 70); // левый край вровень с текстом заказа (отступ 16)
     refBtn.onTap = () => {
       void showRewarded().then((watched) => {
-        if (!watched) { ctx.toast('Реклама недоступна'); return; }
+        if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
         const r = adRefreshOrder(ctx.state, ctx.rng, order.id, ctx.now());
         if (!r.ok) { ctx.toast(r.reason); return; }
         ctx.commit();
-        ctx.toast('Заказ обновлён 📺');
+        ctx.toast(t('Заказ обновлён 📺', 'Order refreshed 📺'));
         close(); ctx.openOrders();
       });
     };
@@ -2341,7 +2404,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     y += rowH;
   }
 
-  const closeBtn = new Button({ text: 'Закрыть', w: 160, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 160, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
   closeBtn.position.set(W / 2, y + 26);
   closeBtn.onTap = close;
 
@@ -2448,7 +2511,7 @@ export function buildDevMenu(ctx: UiContext, close: () => void): Container {
     items.push(spawnBtn);
     y += 52;
 
-    const closeBtn = new Button({ text: 'Закрыть', w: W - 48, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
+    const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: W - 48, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
     closeBtn.position.set(W / 2, y + 21);
     closeBtn.onTap = close;
     items.push(closeBtn);

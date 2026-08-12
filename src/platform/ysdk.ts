@@ -70,6 +70,8 @@ export interface Ysdk {
   getPlayer(opts?: { scopes?: boolean; signed?: boolean }): Promise<YaPlayer>;
   getPayments(opts?: { signed?: boolean }): Promise<YaPayments>;
   features?: YaFeatures;
+  /** Окружение запуска: язык интерфейса игрока, домен портала и т.п. */
+  environment?: { i18n?: { lang?: string; tld?: string } };
   auth?: { openAuthDialog(): Promise<void> };
   adv?: YaAdv;
   /** События платформы (game_api_pause / game_api_resume). */
@@ -135,6 +137,16 @@ export async function openAuthDialog(): Promise<boolean> {
 export async function loadPayments(): Promise<YaPayments | null> {
   if (!sdk) return null;
   try { return await withTimeout(sdk.getPayments({ signed: false })); } catch { return null; }
+}
+
+/**
+ * Язык интерфейса игрока по данным платформы (`environment.i18n.lang`, напр. 'ru',
+ * 'en', 'tr'). Требование п. 2.14 — язык игры определяется автоматически, через SDK,
+ * а не по своим догадкам. null — платформы нет: тогда язык берётся из браузера
+ * (см. src/ui/i18n.ts).
+ */
+export function platformLang(): string | null {
+  try { return sdk?.environment?.i18n?.lang ?? null; } catch { return null; }
 }
 
 /** Объект rewarded-рекламы (adv.showRewardedVideo); null — SDK нет или платформа его не даёт. */

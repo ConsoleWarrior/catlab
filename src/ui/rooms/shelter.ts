@@ -15,10 +15,11 @@ import {
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
+import { roomShell, floorPlane, cornerStation, stationBadge, shelfPlane, buildShelf } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
 import { catArtTexture } from '../catTextures.js';
+import { t } from '../../i18n.js';
 
 /** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
 function fmtLeft(ms: number): string {
@@ -28,7 +29,7 @@ function fmtLeft(ms: number): string {
 }
 
 export function createShelter(ctx: UiContext): Room {
-  const shell = roomShell(ctx, 'shelter', '🏠 Приют');
+  const shell = roomShell(ctx, 'shelter', t('🏠 Приют', '🏠 Shelter'));
 
   // Две drag-станции по нижним углам (общий образец cornerStation — короб жмётся в
   // угол с отступом ≈ полосе навигации, как ветеринар/криокапсула в Питомнике):
@@ -57,7 +58,7 @@ export function createShelter(ctx: UiContext): Room {
       .fill({ color: 0xbfeae6, alpha: unlocked ? 0.55 : 0.3 });
     const flask = label(unlocked ? '🧪' : '🔒', sw * 0.42, COLORS.ink, '700');
     flask.position.set(labCx, y + sh * 0.56);
-    const badge = stationBadge(labCx, y, unlocked ? '🧪 на эксперименты' : '🔒 открой в Генолабе');
+    const badge = stationBadge(labCx, y, unlocked ? t('🧪 на эксперименты', '🧪 to experiments') : t('🔒 открой в Генолабе', '🔒 unlock in the Genolab'));
     labLayer.addChild(box, flask, badge);
   }
 
@@ -81,7 +82,7 @@ export function createShelter(ctx: UiContext): Room {
       .fill({ color: 0xfff3d9, alpha: 0.7 });
     const icon = label('🤝', sw * 0.42, COLORS.ink, '700');
     icon.position.set(adoptCx, y + sh * 0.56);
-    const badge = stationBadge(adoptCx, y, '🤝 в добрые руки');
+    const badge = stationBadge(adoptCx, y, t('🤝 в добрые руки', '🤝 give away'));
     adoptLayer.addChild(box, icon, badge);
   }
 
@@ -111,8 +112,8 @@ export function createShelter(ctx: UiContext): Room {
     const full = roomCount(ctx.state, 'shelter') + (pair ? 2 : 1) > shelterCapacity(ctx.state);
     const buyBtn = new Button({
       text: cost === 0
-        ? (pair ? '🎁 Пара котиков (бесплатно)' : '🛒 Котик (бесплатно)')
-        : `🛒 Купить котика (${cost} 💰)`,
+        ? (pair ? t('🎁 Пара котиков (бесплатно)', '🎁 A pair of cats (free)') : t('🛒 Котик (бесплатно)', '🛒 A cat (free)'))
+        : t(`🛒 Купить котика (${cost} 💰)`, `🛒 Buy a cat (${cost} 💰)`),
       w: BW * 2 + GAP, h: 38, color: COLORS.good, fontSize: 14,
     });
     buyBtn.position.set(rightCx - (BW + GAP) / 2, cy + BH / 2 + 8 + 19);
@@ -121,23 +122,25 @@ export function createShelter(ctx: UiContext): Room {
       const r = buyCat(ctx.state, ctx.rng, ctx.now());
       if (r.ok) {
         ctx.commit();
-        ctx.toast(r.cats.length > 1 ? 'Приют подарил пару: ♀ и ♂ 🐱🐱' : 'Новый котик в приюте 🐱');
+        ctx.toast(r.cats.length > 1 ? t('Приют подарил пару: ♀ и ♂ 🐱🐱', 'The shelter gave you a pair: ♀ and ♂ 🐱🐱') : t('Новый котик в приюте 🐱', 'A new cat is in the shelter 🐱'));
       }
       else ctx.toast(r.reason);
     };
 
+    const adoptSum = `💰${totals.adopt.coins}  🧬${totals.adopt.dna}`;
     const adoptBtn = new Button({
-      text: `🤝 Раздать всех\n💰${totals.adopt.coins}  🧬${totals.adopt.dna}`,
+      text: t(`🤝 Раздать всех\n${adoptSum}`, `🤝 Give all away\n${adoptSum}`),
       w: BW, h: BH, color: COLORS.good, fontSize: 12.5,
     });
     adoptBtn.position.set(leftCx, cy);
     adoptBtn.enabled = totals.count > 0;
     adoptBtn.onTap = () => ctx.openBulkAdoptConfirm();
 
+    const labSum = `🧬${totals.lab.dna}${totals.lab.coins > 0 ? `  💰${totals.lab.coins}` : ''}`;
     const labBtn = new Button({
       text: labOpen
-        ? `🧪 На эксперименты всех\n🧬${totals.lab.dna}${totals.lab.coins > 0 ? `  💰${totals.lab.coins}` : ''}`
-        : '🧪 На эксперименты всех\n🔒 открой в Генолабе',
+        ? t(`🧪 На эксперименты всех\n${labSum}`, `🧪 All to experiments\n${labSum}`)
+        : t('🧪 На эксперименты всех\n🔒 открой в Генолабе', '🧪 All to experiments\n🔒 unlock in the Genolab'),
       w: BW, h: BH, color: COLORS.dna, fontSize: 12.5,
     });
     labBtn.position.set(rightCx, cy);
@@ -167,7 +170,7 @@ export function createShelter(ctx: UiContext): Room {
     const cx = 18 + titleW + 10 + BW / 2;      // сразу справа от плашки названия
     const cy = ctx.topInset + 8 + 22;
 
-    const btn = new Button({ text: '📋 Заказы', w: BW, h: BH, color: COLORS.warn, textColor: COLORS.ink, fontSize: 13 });
+    const btn = new Button({ text: t('📋 Заказы', '📋 Orders'), w: BW, h: BH, color: COLORS.warn, textColor: COLORS.ink, fontSize: 13 });
     btn.position.set(cx, cy);
     btn.onTap = () => ctx.openOrders();
     ordersBtn = btn;
@@ -191,10 +194,10 @@ export function createShelter(ctx: UiContext): Room {
 
     // вынуть кота из корзины обратно на пол (тап по корзине/коту)
     const takeOut = (): void => {
-      if (!basketCat(ctx.state)) { ctx.toast('Перетащи сюда кота — и открой 📋 Заказы'); return; }
+      if (!basketCat(ctx.state)) { ctx.toast(t('Перетащи сюда кота — и открой 📋 Заказы', 'Drag a cat here — then open 📋 Orders')); return; }
       clearOrderBasket(ctx.state);
       ctx.commit();
-      ctx.toast('Котик вернулся на пол 🐾');
+      ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
     };
 
     if (cat) {
@@ -205,7 +208,7 @@ export function createShelter(ctx: UiContext): Room {
       sp.anchor.set(0.5, 1);
       sp.position.set(bx + BASKET_W / 2, by + BASKET_H - 8);
       // тонкая рамка на фоне комнаты читается плохо — статус подписываем словами
-      const badge = label(fits ? '✓ подходит' : 'не подходит', 12, COLORS.ink, '800');
+      const badge = label(fits ? t('✓ подходит', '✓ matches') : t('не подходит', 'does not match'), 12, COLORS.ink, '800');
       badge.anchor.set(0.5, 0);
       const pill = new Graphics();
       const pw = badge.width + 14;
@@ -227,7 +230,7 @@ export function createShelter(ctx: UiContext): Room {
         onDrop: () => { /* никуда не пристроили — кот остаётся в корзине (show вернул) */ },
       }, e));
     } else {
-      const hint = label('🧺\nкорзина\nзаказов', 13, COLORS.inkSoft, '700');
+      const hint = label(t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket'), 13, COLORS.inkSoft, '700');
       hint.anchor.set(0.5);
       hint.position.set(bx + BASKET_W / 2, by + BASKET_H / 2);
       ordersLayer.addChild(hint);
@@ -243,15 +246,27 @@ export function createShelter(ctx: UiContext): Room {
   function updateOrdersBtn(): void {
     const orders = ctx.state.orders;
     const total = orders.length;
-    if (total === 0) { ordersBtn?.setText('📋 Заказы 0'); return; }
+    if (total === 0) { ordersBtn?.setText(t('📋 Заказы 0', '📋 Orders 0')); return; }
     const soonest = Math.min(...orders.map((o) => msUntilOrderExpiry(o, ctx.now())));
-    ordersBtn?.setText(`📋 Заказы ${total}\n⏳ ${fmtLeft(soonest)}`);
+    ordersBtn?.setText(t(`📋 Заказы ${total}\n⏳ ${fmtLeft(soonest)}`, `📋 Orders ${total}\n⏳ ${fmtLeft(soonest)}`));
   }
 
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
   const plane = floorPlane(ctx.roomW, ctx.roomH, ctx.topInset);
+
+  // Настенная полка под окнами: доска уходит ЗА кошачий комплекс (он стоит перед
+  // стеной), поэтому и сама доска, и коты на ней живут внутри слоя декора —
+  // доска в самом низу, коты прямо ПОД спрайтом комплекса. Иначе кот, идущий по
+  // доске мимо комплекса, пролетал бы перед его стойками.
+  const shelf = shelfPlane(ctx.roomW, ctx.roomH, plane);
+  const shelfCatLayer = new Container();
+  shell.decor.addChildAt(buildShelf(shelf), 0);
+  const tower = shell.decor.getChildByLabel('tower3_seed1002');
+  shell.decor.addChildAt(shelfCatLayer,
+    tower ? shell.decor.getChildIndex(tower) : shell.decor.children.length);
+
   const floor = createLivingFloor(
     ctx, floorLayer,
     plane,
@@ -259,6 +274,7 @@ export function createShelter(ctx: UiContext): Room {
     // и кто сидит в корзине заказов (его рисует сама корзина)
     () => catsIn(ctx.state, 'shelter')
       .filter((c) => !isInSlot(ctx.state, c.id) && !isInBasket(ctx.state, c.id)),
+    { plane: shelf, layer: shelfCatLayer },
   );
 
   /**
@@ -287,12 +303,12 @@ export function createShelter(ctx: UiContext): Room {
       if (!r.ok) { ctx.toast(r.reason); return false; }
       ctx.commit();
       const fits = ctx.state.orders.some((o) => matchesOrder(o, cat));
-      ctx.toast(fits ? 'Котик в корзине — открой 📋 Заказы 🧺' : 'Котик в корзине, но под заказы не подходит 🧺');
+      ctx.toast(fits ? t('Котик в корзине — открой 📋 Заказы 🧺', 'The cat is in the basket — open 📋 Orders 🧺') : t('Котик в корзине, но под заказы не подходит 🧺', 'The cat is in the basket but matches no order 🧺'));
       return true;
     }
     if (labZone.contains(lp.x, lp.y)) {
       if (!isUnlocked(ctx.state, 'labStation')) {
-        ctx.toast('Открой станцию «На эксперименты» в Генолабе 🔬');
+        ctx.toast(t('Открой станцию «На эксперименты» в Генолабе 🔬', 'Unlock the «To experiments» station in the Genolab 🔬'));
         return false;             // заперто → кот вернётся на своё место
       }
       ctx.commit();               // grab-спрайт уже уничтожен — пол пересобран, кот снова виден
@@ -314,7 +330,7 @@ export function createShelter(ctx: UiContext): Room {
       rememberFloorPos(cat.id, (lp.x - plane.centerX) / half, nz);
       clearOrderBasket(ctx.state);
       ctx.commit();
-      ctx.toast('Котик вернулся на пол 🐾');
+      ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
       return true;
     }
     return false;
@@ -348,7 +364,7 @@ export function createShelter(ctx: UiContext): Room {
   }
 
   return {
-    id: 'shelter', title: '🏠 Приют', container: shell.container,
+    id: 'shelter', title: t('🏠 Приют', '🏠 Shelter'), container: shell.container,
     refresh, tick, tryDropCat,
     /**
      * Якоря подсветки обучения (см. ui/tutorial.ts): `cat:<id>` — котик на полу,

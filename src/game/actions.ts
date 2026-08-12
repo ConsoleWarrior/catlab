@@ -4,6 +4,7 @@
  */
 
 import { breed, isLethal, simpleCat, resolveBreeding, recipeKey } from '../genetics/index.js';
+import { t } from '../i18n.js';
 import type { Rng, BreedBoosts, KinshipLevel, Recipe, Sex } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
 import * as C from './config.js';
@@ -20,8 +21,10 @@ function findCat(state: GameState, id: string): Cat | undefined {
 }
 
 /**
- * Убирает кота из коллекции, снимая его с выставки и с корзины заказов
- * (продажа/пристройство/лаборатория) — иначе на него осталась бы висячая ссылка.
+ * Убирает кота из коллекции, снимая его с выставки, с корзины заказов и со слота
+ * вязки (продажа/пристройство/лаборатория) — иначе на него осталась бы висячая
+ * ссылка. Слот важен для пристройства прямо из окошка вязки: родителя или
+ * «малыша с роднёй» отдают в добрые руки, не унося сначала в комнату.
  */
 function removeCat(state: GameState, catId: string): void {
   state.cats = state.cats.filter((c) => c.id !== catId);
@@ -31,6 +34,11 @@ function removeCat(state: GameState, catId: string): void {
     if (idx >= 0) state.champions[idx] = null;
   }
   if (state.orderBasket === catId) state.orderBasket = null;
+  for (const s of state.slots) {
+    if (s.motherId === catId) s.motherId = null;
+    if (s.fatherId === catId) s.fatherId = null;
+    if (s.kittenId === catId) s.kittenId = null;
+  }
 }
 
 function canAfford(state: GameState, currency: Currency, amount: number): boolean {
@@ -125,8 +133,8 @@ export function claimOfflineAdBonus(state: GameState, coins: number): number {
  */
 export function buyFood(state: GameState, mode: 'pack' | 'full' = 'pack'): Result<{ added: number; spent: number }> {
   const { units, cost } = E.foodBuyQuote(state, mode);
-  if (units <= 0) return { ok: false, reason: 'кормушка полна' };
-  if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
+  if (units <= 0) return { ok: false, reason: t('кормушка полна', 'the feeder is full') };
+  if (!spend(state, 'coins', cost)) return { ok: false, reason: t('не хватает монет', 'not enough coins') };
   state.food = E.foodLevel(state) + units;
   return { ok: true, added: units, spent: cost };
 }
@@ -141,24 +149,24 @@ export function startBreeding(
   now: number,
 ): Result {
   const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: 'нет такого слота' };
-  if (slot.readyAt > 0) return { ok: false, reason: 'слот занят' };
-  if (slot.kittenId) return { ok: false, reason: 'сначала пристрой малыша' };
-  if (E.isStarving(state)) return { ok: false, reason: 'сначала покорми котов 🍽' };
-  if (motherId === fatherId) return { ok: false, reason: 'нужны два разных кота' };
+  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
+  if (slot.readyAt > 0) return { ok: false, reason: t('слот занят', 'the slot is occupied') };
+  if (slot.kittenId) return { ok: false, reason: t('сначала пристрой малыша', 'move the kitten out first') };
+  if (E.isStarving(state)) return { ok: false, reason: t('сначала покорми котов 🍽', 'feed the cats first 🍽') };
+  if (motherId === fatherId) return { ok: false, reason: t('нужны два разных кота', 'two different cats needed') };
   const mother = findCat(state, motherId);
   const father = findCat(state, fatherId);
-  if (!mother || !father) return { ok: false, reason: 'кот не найден' };
-  if (mother.genotype.sex !== 'female') return { ok: false, reason: 'мама должна быть самкой' };
-  if (father.genotype.sex !== 'male') return { ok: false, reason: 'папа должен быть самцом' };
+  if (!mother || !father) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (mother.genotype.sex !== 'female') return { ok: false, reason: t('мама должна быть самкой', 'the mother must be female') };
+  if (father.genotype.sex !== 'male') return { ok: false, reason: t('папа должен быть самцом', 'the father must be male') };
   if (!E.isAdult(mother, now) || !E.isAdult(father, now)) {
-    return { ok: false, reason: 'котёнок ещё не вырос' };
+    return { ok: false, reason: t('котёнок ещё не вырос', "the kitten hasn't grown up yet") };
   }
   if (E.isOld(mother) || E.isOld(father)) {
-    return { ok: false, reason: 'кот слишком стар для вязки' };
+    return { ok: false, reason: t('кот слишком стар для вязки', 'the cat is too old to breed') };
   }
   if (E.isBusy(state, motherId) || E.isBusy(state, fatherId)) {
-    return { ok: false, reason: 'кот уже занят в вязке' };
+    return { ok: false, reason: t('кот уже занят в вязке', 'the cat is already breeding') };
   }
   // Место в питомнике НЕ требуется: вязку можно запустить всегда, котёнок
   // родится даже при переполненном питомнике (его потом пристраивают).
@@ -182,16 +190,16 @@ export function startBreeding(
  */
 export function assignBreeder(state: GameState, slotIndex: number, catId: string, now: number): Result {
   const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: 'нет такого слота' };
-  if (slot.readyAt > 0) return { ok: false, reason: 'слот занят вязкой' };
-  if (slot.kittenId) return { ok: false, reason: 'сначала пристрой малыша' };
+  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
+  if (slot.readyAt > 0) return { ok: false, reason: t('слот занят вязкой', 'the slot is busy breeding') };
+  if (slot.kittenId) return { ok: false, reason: t('сначала пристрой малыша', 'move the kitten out first') };
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (!E.isAdult(cat, now)) return { ok: false, reason: t('котёнок ещё не вырос', "the kitten hasn't grown up yet") };
   // «Старого» (сердца кончились) в слот ПУСКАЕМ: шприц-ветеринар лечит только кота,
   // стоящего в слоте (см. healCat / rooms/incubator), — иначе исчерпанного производителя
   // невозможно было бы вылечить вообще. Саму вязку по-прежнему не даст startBreeding.
-  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот уже занят в вязке' };
+  if (E.isBusy(state, catId)) return { ok: false, reason: t('кот уже занят в вязке', 'the cat is already breeding') };
   // снимаем кота со всех других неактивных слотов, чтобы он не «раздваивался».
   // Важно и для kittenId: подросший «малыш с роднёй» уходит в соседний слот как
   // родитель — его ссылку на родном слоте надо обнулить, иначе он останется и там.
@@ -322,10 +330,10 @@ export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: C
   const pair = E.isRescuePair(state);
   const need = pair ? 2 : 1;
   if (E.roomCount(state, 'shelter') + need > E.shelterCapacity(state)) {
-    return { ok: false, reason: 'нет места в приюте' };
+    return { ok: false, reason: t('нет места в приюте', 'no room in the shelter') };
   }
   const cost = E.buyCatCost(state);
-  if (!spend(state, 'coins', cost)) return { ok: false, reason: 'не хватает монет' };
+  if (!spend(state, 'coins', cost)) return { ok: false, reason: t('не хватает монет', 'not enough coins') };
   // обычная покупка — пол случайный; спасательная пара — строго самка и самец
   const sexes: (Sex | undefined)[] = pair ? ['female', 'male'] : [undefined];
   const cats = sexes.map((sex) => {
@@ -344,8 +352,8 @@ export function buyCat(state: GameState, rng: Rng, now: number): Result<{ cat: C
 /** Пристройство кота «в добрые руки»: 💰 + 🧬 + ⭐ опыт, кот покидает коллекцию. */
 export function adoptCat(state: GameState, catId: string): Result<{ coins: number; dna: number; rep: number }> {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (E.isBusy(state, catId)) return { ok: false, reason: t('кот занят в вязке', 'the cat is busy breeding') };
   const { coins, dna } = E.adoptReward(state, cat);
   state.coins += coins;
   state.dna += dna;
@@ -360,9 +368,9 @@ export function adoptCat(state: GameState, catId: string): Result<{ coins: numbe
 /** Сдать кота в лабораторию «на эксперименты»: 🧬 + немного 💰 + ⭐ опыт, кот уезжает. */
 export function sendToLab(state: GameState, catId: string): Result<{ dna: number; coins: number; rep: number }> {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (!E.isUnlocked(state, 'labStation')) return { ok: false, reason: 'locked' };
-  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
+  if (E.isBusy(state, catId)) return { ok: false, reason: t('кот занят в вязке', 'the cat is busy breeding') };
   const { dna, coins } = E.labReward(state, cat);
   state.dna += dna;
   state.coins += coins;
@@ -382,7 +390,7 @@ function shelterFree(state: GameState): Cat[] {
  */
 export function adoptAll(state: GameState): Result<{ coins: number; dna: number; rep: number; count: number }> {
   const cats = shelterFree(state);
-  if (cats.length === 0) return { ok: false, reason: 'В приюте некого раздавать' };
+  if (cats.length === 0) return { ok: false, reason: t('В приюте некого раздавать', 'No cats to give away') };
   let coins = 0, dna = 0, rep = 0, count = 0;
   for (const cat of cats) {
     const r = adoptCat(state, cat.id);
@@ -399,7 +407,7 @@ export function adoptAll(state: GameState): Result<{ coins: number; dna: number;
 export function sendAllToLab(state: GameState): Result<{ dna: number; coins: number; rep: number; count: number }> {
   if (!E.isUnlocked(state, 'labStation')) return { ok: false, reason: 'locked' };
   const cats = shelterFree(state);
-  if (cats.length === 0) return { ok: false, reason: 'В приюте некого сдавать' };
+  if (cats.length === 0) return { ok: false, reason: t('В приюте некого сдавать', 'No cats to send to the lab') };
   let dna = 0, coins = 0, rep = 0, count = 0;
   for (const cat of cats) {
     const r = sendToLab(state, cat.id);
@@ -424,10 +432,10 @@ export function sendAllToLab(state: GameState): Result<{ dna: number; coins: num
  */
 export function setChampion(state: GameState, catId: string, slotIndex: number, now: number): Result {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (!E.isAdult(cat, now)) return { ok: false, reason: t('котёнок ещё не вырос', "the kitten hasn't grown up yet") };
   if (slotIndex < 0 || slotIndex >= E.championSlots(state)) {
-    return { ok: false, reason: 'пьедестал заперт' };
+    return { ok: false, reason: t('пьедестал заперт', 'the pedestal is locked') };
   }
   if (!state.champions) state.champions = [];
   while (state.champions.length <= slotIndex) state.champions.push(null);
@@ -445,7 +453,7 @@ export function setChampion(state: GameState, catId: string, slotIndex: number, 
     if (displaced) {
       if (E.roomCount(state, 'nursery') < E.nurseryCapacity(state)) displaced.location = 'nursery';
       else if (E.roomCount(state, 'shelter') < E.shelterCapacity(state)) displaced.location = 'shelter';
-      else return { ok: false, reason: 'нет места в лаборатории' };
+      else return { ok: false, reason: t('нет места в лаборатории', 'no room in the lab') };
     }
     clearBreederSlot(state, catId);
   } else if (displaced) {
@@ -470,11 +478,11 @@ export function unsetChampion(state: GameState, catId: string): Result {
 /** Мгновенно завершить вязку в слоте за 💎 (скип таймера). Стоимость ∝ остатку времени. */
 export function speedUpBreeding(state: GameState, slotIndex: number, now: number): Result<{ crystals: number }> {
   const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: 'нет такого слота' };
-  if (slot.readyAt === 0) return { ok: false, reason: 'слот не занят вязкой' };
+  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
+  if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
   const remaining = Math.max(0, slot.readyAt - now);
   const cost = E.speedUpCost(remaining, C.BREED_SPEEDUP_CRYSTAL_PER_MIN);
-  if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
+  if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
   slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
   return { ok: true, crystals: cost };
 }
@@ -482,8 +490,8 @@ export function speedUpBreeding(state: GameState, slotIndex: number, now: number
 /** Реклама: сократить остаток вязки на AD_SKIP_MS (бесплатно, можно повторять). */
 export function adSkipBreeding(state: GameState, slotIndex: number, now: number): Result {
   const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: 'нет такого слота' };
-  if (slot.readyAt === 0) return { ok: false, reason: 'слот не занят вязкой' };
+  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
+  if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
   slot.readyAt = Math.max(now, slot.readyAt - C.AD_SKIP_MS);
   return { ok: true };
 }
@@ -496,9 +504,9 @@ export function adSkipBreeding(state: GameState, slotIndex: number, now: number)
  */
 export function freeSkipBreeding(state: GameState, slotIndex: number, now: number): Result {
   const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: 'нет такого слота' };
-  if (slot.readyAt === 0) return { ok: false, reason: 'слот не занят вязкой' };
-  if (state.tutorial.freeSkipUsed) return { ok: false, reason: 'ускоритель уже использован' };
+  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
+  if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
+  if (state.tutorial.freeSkipUsed) return { ok: false, reason: t('ускоритель уже использован', 'the speed-up is already used') };
   state.tutorial.freeSkipUsed = true;
   slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
   return { ok: true };
@@ -507,11 +515,11 @@ export function freeSkipBreeding(state: GameState, slotIndex: number, now: numbe
 /** Мгновенно вырастить котёнка за 💎 (скип роста). Стоимость ∝ остатку роста. */
 export function speedUpGrowth(state: GameState, catId: string, now: number): Result<{ crystals: number }> {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   const remaining = E.growthRemainingMs(cat, now);
   if (remaining <= 0) return { ok: true, crystals: 0 };
   const cost = E.speedUpCost(remaining, C.GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
-  if (!spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
+  if (!spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
   cat.bornAt = now - E.effGrowthMs(cat); // возраст ≥ срок → сразу взрослый
   return { ok: true, crystals: cost };
 }
@@ -527,17 +535,17 @@ export function healCat(
   state: GameState, catId: string, mode: 'ad' | 'crystals', now: number,
 ): Result<{ healed: number; crystals: number }> {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (!E.isUnlocked(state, 'clinic')) return { ok: false, reason: 'locked' };
-  if (E.isSterile(cat)) return { ok: false, reason: 'бесплодного не вылечить' };
+  if (E.isSterile(cat)) return { ok: false, reason: t('бесплодного не вылечить', "a sterile cat can't be healed") };
   // Кота, ПОСТАВЛЕННОГО в слот вязки, ветеринар лечит прямо в Инкубаторе (в этом
   // весь смысл шприца там) — но НЕ во время идущей вязки: сердца уже «в работе».
   const inBreeding = state.slots.some(
     (sl) => sl.readyAt > 0 && (sl.motherId === catId || sl.fatherId === catId),
   );
-  if (inBreeding) return { ok: false, reason: 'кот сейчас в вязке' };
+  if (inBreeding) return { ok: false, reason: t('кот сейчас в вязке', 'the cat is breeding right now') };
   const spent = cat.breedCount ?? 0;
-  if (spent <= 0) return { ok: false, reason: 'кот полностью здоров' };
+  if (spent <= 0) return { ok: false, reason: t('кот полностью здоров', 'the cat is fully healthy') };
   if (mode === 'ad') {
     const healed = Math.min(spent, C.HEAL_AD_HEARTS);
     cat.breedCount = spent - healed;   // реклама-заглушка, реальный SDK — бэклог
@@ -545,7 +553,7 @@ export function healCat(
     return { ok: true, healed, crystals: 0 };
   }
   const cost = C.HEAL_CRYSTAL_PER_HEART * spent;
-  if (!spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
+  if (!spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
   cat.breedCount = 0;                  // полное восстановление
   return { ok: true, healed: spent, crystals: cost };
 }
@@ -553,7 +561,7 @@ export function healCat(
 /** Реклама: сократить остаток роста котёнка на KITTEN_GROWTH_AD_MS (−15 мин → сразу взрослый). */
 export function adSkipGrowth(state: GameState, catId: string, now: number): Result {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (E.growthRemainingMs(cat, now) <= 0) return { ok: true };
   cat.bornAt -= C.KITTEN_GROWTH_AD_MS; // сдвигаем рождение назад → остаток роста уменьшается
   return { ok: true };
@@ -562,7 +570,7 @@ export function adSkipGrowth(state: GameState, catId: string, now: number): Resu
 /** Перемещение кота между питомником и приютом (с учётом вместимости). */
 export function moveCat(state: GameState, catId: string, room: LiveRoom): Result {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   // Кот физически «не на полу», хотя location может формально совпадать с целевой
   // комнатой: либо в слоте инкубатора (родитель вязки / малыш с роднёй), либо на
   // пьедестале выставки (чемпион). В обоих случаях ранний выход по location — ложный,
@@ -570,7 +578,7 @@ export function moveCat(state: GameState, catId: string, room: LiveRoom): Result
   const grounded = !E.isInSlot(state, catId) && !E.isChampion(state, catId);
   if (grounded && cat.location === room) return { ok: true };
   if (E.roomCount(state, room) >= E.capacityOf(state, room)) {
-    return { ok: false, reason: 'нет места' };
+    return { ok: false, reason: t('нет места', 'no room') };
   }
   cat.location = room;
   const heldSlot = state.slots.find((s) => s.kittenId === catId);
@@ -587,7 +595,7 @@ export function moveCat(state: GameState, catId: string, room: LiveRoom): Result
  */
 export function keepKittenWithParents(state: GameState, catId: string, now: number): Result {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   cat.growthMs = C.KITTEN_GROWTH_MS * C.KITTEN_SLOW_FACTOR;
   cat.bornAt = now; // отсчёт взросления — заново, в медленном темпе
   return { ok: true };
@@ -596,7 +604,7 @@ export function keepKittenWithParents(state: GameState, catId: string, now: numb
 /** Дать/сменить имя коту. Пустая строка — сбросить имя. Длина обрезается до 16. */
 export function renameCat(state: GameState, catId: string, name: string): Result {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   const trimmed = name.trim().slice(0, 16);
   if (trimmed) cat.name = trimmed;
   else delete cat.name;
@@ -619,25 +627,25 @@ export function freezeCat(
   state: GameState, catId: string, mode: 'ad' | 'coins' | 'crystals' = 'ad', now = 0,
 ): Result<{ coins: number; crystals: number }> {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (!E.cryoUnlocked(state)) return { ok: false, reason: 'locked' };
-  if (!E.isAdult(cat, now)) return { ok: false, reason: 'котёнок ещё не вырос' };
-  if (E.isInSlot(state, catId)) return { ok: false, reason: 'кот в слоте вязки' };
-  if (E.isChampion(state, catId)) return { ok: false, reason: 'сначала снять с пьедестала' };
-  if (E.cryoCount(state) >= E.cryoCapacity(state)) return { ok: false, reason: 'нет свободной капсулы' };
+  if (!E.isAdult(cat, now)) return { ok: false, reason: t('котёнок ещё не вырос', "the kitten hasn't grown up yet") };
+  if (E.isInSlot(state, catId)) return { ok: false, reason: t('кот в слоте вязки', 'the cat is in a breeding slot') };
+  if (E.isChampion(state, catId)) return { ok: false, reason: t('сначала снять с пьедестала', 'take it off the pedestal first') };
+  if (E.cryoCount(state) >= E.cryoCapacity(state)) return { ok: false, reason: t('нет свободной капсулы', 'no free capsule') };
   // Оплата — только после того, как заморозка гарантированно пройдёт (ничего не спишем впустую).
   let coins = 0, crystals = 0;
   if (mode === 'ad') {
     // lastFreezeAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
     if (state.lastFreezeAdAt > 0 && now - state.lastFreezeAdAt < C.FREEZE_AD_COOLDOWN_MS) {
-      return { ok: false, reason: 'реклама заморозки ещё недоступна' };
+      return { ok: false, reason: t('реклама заморозки ещё недоступна', "the freeze ad isn't available yet") };
     }
     state.lastFreezeAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
   } else if (mode === 'coins') {
-    if (!spend(state, 'coins', C.FREEZE_COIN_COST)) return { ok: false, reason: 'не хватает монет' };
+    if (!spend(state, 'coins', C.FREEZE_COIN_COST)) return { ok: false, reason: t('не хватает монет', 'not enough coins') };
     coins = C.FREEZE_COIN_COST;
   } else {
-    if (!spend(state, 'crystals', C.FREEZE_CRYSTAL_COST)) return { ok: false, reason: 'не хватает кристаллов' };
+    if (!spend(state, 'crystals', C.FREEZE_CRYSTAL_COST)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
     crystals = C.FREEZE_CRYSTAL_COST;
   }
   removeCat(state, catId);   // убрать из cats (с выставки уже сняли бы — чемпиону отказали)
@@ -661,15 +669,15 @@ export function cloneCat(
   state: GameState, cryoId: string, now: number,
 ): Result<{ clone: Cat; dna: number; coins: number }> {
   const original = (state.cryo ?? []).find((c) => c.id === cryoId);
-  if (!original) return { ok: false, reason: 'капсула не найдена' };
+  if (!original) return { ok: false, reason: t('капсула не найдена', 'capsule not found') };
   if (!E.cryoUnlocked(state)) return { ok: false, reason: 'locked' };
   if (E.roomCount(state, 'nursery') >= E.nurseryCapacity(state)) {
-    return { ok: false, reason: 'нет места в питомнике' };
+    return { ok: false, reason: t('нет места в питомнике', 'no room in the cattery') };
   }
   const cost = E.cloneCost(original);
   const coinsCost = E.cloneCostCoins(original);
-  if (state.dna < cost) return { ok: false, reason: 'не хватает ДНК' };
-  if (state.coins < coinsCost) return { ok: false, reason: 'не хватает монет' };
+  if (state.dna < cost) return { ok: false, reason: t('не хватает ДНК', 'not enough DNA') };
+  if (state.coins < coinsCost) return { ok: false, reason: t('не хватает монет', 'not enough coins') };
   spend(state, 'dna', cost);
   spend(state, 'coins', coinsCost);
   // genotype — глубокая копия (клон не должен делить ссылку с оригиналом в капсуле)
@@ -699,7 +707,7 @@ export function cloneCat(
 export function disposeCryo(state: GameState, cryoId: string): Result {
   const before = (state.cryo ?? []).length;
   state.cryo = (state.cryo ?? []).filter((c) => c.id !== cryoId);
-  if (state.cryo.length === before) return { ok: false, reason: 'капсула не найдена' };
+  if (state.cryo.length === before) return { ok: false, reason: t('капсула не найдена', 'capsule not found') };
   return { ok: true };
 }
 
@@ -714,10 +722,10 @@ export function buyUpgrade(state: GameState, id: string): Result {
   if (id === 'championSlots' && E.championSlots(state) >= E.maxChampionsForLevel(state)) {
     return { ok: false, reason: 'locked' };
   }
-  if (E.upgradeMaxed(state, id)) return { ok: false, reason: 'максимальный уровень' };
+  if (E.upgradeMaxed(state, id)) return { ok: false, reason: t('максимальный уровень', 'max level') };
   const cost = E.upgradeCost(state, id);
-  if (!cost) return { ok: false, reason: 'нет такого апгрейда' };
-  if (!canAfford(state, cost.currency, cost.amount)) return { ok: false, reason: 'не хватает ресурсов' };
+  if (!cost) return { ok: false, reason: t('нет такого апгрейда', 'no such upgrade') };
+  if (!canAfford(state, cost.currency, cost.amount)) return { ok: false, reason: t('не хватает ресурсов', 'not enough resources') };
   spend(state, cost.currency, cost.amount);
   if (id === 'slots') state.slots.push(E.emptySlot());
   else state.upgrades[id] = E.lvl(state, id) + 1;
@@ -728,9 +736,9 @@ export function buyUpgrade(state: GameState, id: string): Result {
 
 export function unlockGene(state: GameState, geneId: string): Result {
   const def = C.GENES[geneId];
-  if (!def) return { ok: false, reason: 'нет такого гена' };
-  if (state.unlockedGenes.includes(geneId)) return { ok: false, reason: 'уже открыт' };
-  if (!spend(state, 'dna', def.dna)) return { ok: false, reason: 'не хватает ДНК' };
+  if (!def) return { ok: false, reason: t('нет такого гена', 'no such gene') };
+  if (state.unlockedGenes.includes(geneId)) return { ok: false, reason: t('уже открыт', 'already unlocked') };
+  if (!spend(state, 'dna', def.dna)) return { ok: false, reason: t('не хватает ДНК', 'not enough DNA') };
   state.unlockedGenes.push(geneId);
   return { ok: true };
 }
@@ -748,13 +756,13 @@ export function analyzeCat(
   void now; // кулдауна у анализа больше нет — параметр оставлен ради совместимости сигнатуры
   // Анализ доступен и замороженным котам (крио-банк) — родословную вскрывают и в капсуле.
   const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (cat.analyzed) { revealPedigree(cat); return { ok: true, coins: 0 }; } // уже изучен
   const cost = C.analyzeCoinCost(cat.rarityTier);
   if (mode === 'ad') {
     state.lastAnalyzeAdAt = Math.max(1, now); // фиксируем факт просмотра (кулдауна нет)
   } else if (!spend(state, 'coins', cost)) {
-    return { ok: false, reason: 'не хватает монет' };
+    return { ok: false, reason: t('не хватает монет', 'not enough coins') };
   }
   cat.analyzed = true;
   revealPedigree(cat);
@@ -768,10 +776,10 @@ export function analyzeCat(
  * стоит ли он 💰 или просмотра рекламы.
  */
 export function freeAnalyzeCat(state: GameState, catId: string): Result {
-  if (state.tutorial.freeAnalyzeUsed) return { ok: false, reason: 'подарок уже использован' };
+  if (state.tutorial.freeAnalyzeUsed) return { ok: false, reason: t('подарок уже использован', 'the gift is already used') };
   const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (cat.analyzed) return { ok: false, reason: 'кот уже изучен' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (cat.analyzed) return { ok: false, reason: t('кот уже изучен', 'the cat is already analysed') };
   state.tutorial.freeAnalyzeUsed = true;
   cat.analyzed = true;
   revealPedigree(cat);
@@ -787,11 +795,11 @@ export function freeAnalyzeCat(state: GameState, catId: string): Result {
  */
 export function startRecipeResearch(state: GameState, now: number): Result {
   if (!E.isUnlocked(state, 'recipeLab')) return { ok: false, reason: 'locked' };
-  if (state.recipeResearch.readyAt > 0) return { ok: false, reason: 'стол занят исследованием' };
-  if (researchableRecipes(state).length === 0) return { ok: false, reason: 'нет доступных рецептов' };
+  if (state.recipeResearch.readyAt > 0) return { ok: false, reason: t('стол занят исследованием', 'the bench is busy researching') };
+  if (researchableRecipes(state).length === 0) return { ok: false, reason: t('нет доступных рецептов', 'no recipes available') };
   const price = C.recipeResearchCost(state.level);
   if (state.coins < price.coins || state.dna < price.dna) {
-    return { ok: false, reason: 'не хватает ресурсов' };
+    return { ok: false, reason: t('не хватает ресурсов', 'not enough resources') };
   }
   state.coins -= price.coins;
   state.dna -= price.dna;
@@ -831,9 +839,9 @@ export function finishRecipeResearch(
 /** Мгновенно завершить исследование рецепта за 💎 (цена ∝ остатку: 1 💎 за 5 мин). */
 export function speedUpRecipeResearch(state: GameState, now: number): Result<{ crystals: number }> {
   const rr = state.recipeResearch;
-  if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
+  if (rr.readyAt === 0) return { ok: false, reason: t('стол не занят исследованием', "the bench isn't researching") };
   const cost = E.speedUpCost(Math.max(0, rr.readyAt - now), C.RECIPE_SPEEDUP_CRYSTAL_PER_MIN);
-  if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: 'не хватает кристаллов' };
+  if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
   rr.readyAt = now; // готово немедленно — finishRecipeResearch заберёт рецепт
   return { ok: true, crystals: cost };
 }
@@ -841,7 +849,7 @@ export function speedUpRecipeResearch(state: GameState, now: number): Result<{ c
 /** Реклама: сократить остаток исследования на RECIPE_AD_SKIP_MS (бесплатно, можно повторять). */
 export function adSkipRecipeResearch(state: GameState, now: number): Result {
   const rr = state.recipeResearch;
-  if (rr.readyAt === 0) return { ok: false, reason: 'стол не занят исследованием' };
+  if (rr.readyAt === 0) return { ok: false, reason: t('стол не занят исследованием', "the bench isn't researching") };
   rr.readyAt = Math.max(now, rr.readyAt - C.RECIPE_AD_SKIP_MS);
   return { ok: true };
 }
@@ -856,10 +864,10 @@ export function adSkipRecipeResearch(state: GameState, now: number): Result {
 export function buyBoost(state: GameState, id: string, currency: Currency = 'dna'): Result {
   if (!E.isUnlocked(state, 'engineering')) return { ok: false, reason: 'locked' };
   const def = C.BOOSTS.find((b) => b.id === id);
-  if (!def) return { ok: false, reason: 'нет такого усилителя' };
+  if (!def) return { ok: false, reason: t('нет такого усилителя', 'no such booster') };
   const cost = currency === 'crystals' ? def.crystals : def.dna;
   if (!spend(state, currency, cost)) {
-    return { ok: false, reason: currency === 'crystals' ? 'не хватает кристаллов' : 'не хватает ДНК' };
+    return { ok: false, reason: currency === 'crystals' ? t('не хватает кристаллов', 'not enough crystals') : t('не хватает ДНК', 'not enough DNA') };
   }
   state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
   if (!E.activeBoostId(state)) state.activeBoost = def.id; // ничего не активно → активируем этот
@@ -876,11 +884,11 @@ export function buyBoost(state: GameState, id: string, currency: Currency = 'dna
 export function adChargeBoost(state: GameState, id: string, now: number): Result {
   if (!E.isUnlocked(state, 'engineering')) return { ok: false, reason: 'locked' };
   const def = C.BOOSTS.find((b) => b.id === id);
-  if (!def) return { ok: false, reason: 'нет такого усилителя' };
-  if (!def.adCharge) return { ok: false, reason: 'заряжается только за валюту' };
+  if (!def) return { ok: false, reason: t('нет такого усилителя', 'no such booster') };
+  if (!def.adCharge) return { ok: false, reason: t('заряжается только за валюту', 'charged with currency only') };
   // lastBoostAdAt = 0 → рекламу ещё ни разу не смотрели (кулдауна нет)
   if (state.lastBoostAdAt > 0 && now - state.lastBoostAdAt < C.BOOST_AD_COOLDOWN_MS) {
-    return { ok: false, reason: 'реклама ещё не готова' };
+    return { ok: false, reason: t('реклама ещё не готова', "the ad isn't ready yet") };
   }
   state.lastBoostAdAt = Math.max(1, now); // 0 зарезервирован под «не смотрели»
   state.boosts[def.id] = (state.boosts[def.id] ?? 0) + 1;
@@ -897,9 +905,9 @@ export function adChargeBoost(state: GameState, id: string, now: number): Result
 export function toggleBoost(state: GameState, id: string): Result {
   if (!E.isUnlocked(state, 'engineering')) return { ok: false, reason: 'locked' };
   const def = C.BOOSTS.find((b) => b.id === id);
-  if (!def) return { ok: false, reason: 'нет такого усилителя' };
+  if (!def) return { ok: false, reason: t('нет такого усилителя', 'no such booster') };
   if (state.activeBoost === def.id) { state.activeBoost = null; return { ok: true }; }
-  if (E.boostCharges(state, def.id) <= 0) return { ok: false, reason: 'нет зарядов' };
+  if (E.boostCharges(state, def.id) <= 0) return { ok: false, reason: t('нет зарядов', 'no charges') };
   state.activeBoost = def.id;
   return { ok: true };
 }
@@ -911,14 +919,14 @@ export function toggleBoost(state: GameState, id: string): Result {
  */
 export function unlockResearch(state: GameState, id: string): Result {
   const def = C.RESEARCH.find((r) => r.id === id);
-  if (!def) return { ok: false, reason: 'нет такого исследования' };
+  if (!def) return { ok: false, reason: t('нет такого исследования', 'no such research') };
   if (!E.isUnlocked(state, 'research')) return { ok: false, reason: 'locked' };
   const next = E.researchNext(state, def);
-  if (!next) return { ok: false, reason: 'уже изучено' };
+  if (!next) return { ok: false, reason: t('уже изучено', 'already researched') };
   // Гейт уровня: этот уровень узла открывается только с нужного уровня лаборатории.
   if (state.level < next.minLevel) return { ok: false, reason: 'locked' };
   if (!def.requires.every((req) => E.researchOwned(state, req))) {
-    return { ok: false, reason: 'сначала изучи предыдущее' };
+    return { ok: false, reason: t('сначала изучи предыдущее', 'research the previous one first') };
   }
   // Двойная цена: основная валюта узла + доп. монеты (у Селекции на 🧬). Проверяем
   // и списываем атомарно — иначе списали бы гены, а на монеты бы не хватило.
@@ -926,8 +934,8 @@ export function unlockResearch(state: GameState, id: string): Result {
   if (!E.canAffordResearch(state, def, next)) {
     return {
       ok: false,
-      reason: def.currency !== 'coins' && state[def.currency] >= next.cost ? 'не хватает монет'
-        : def.currency === 'coins' ? 'не хватает монет' : 'не хватает ДНК',
+      reason: def.currency !== 'coins' && state[def.currency] >= next.cost ? t('не хватает монет', 'not enough coins')
+        : def.currency === 'coins' ? t('не хватает монет', 'not enough coins') : t('не хватает ДНК', 'not enough DNA'),
     };
   }
   spend(state, def.currency, next.cost);
@@ -951,13 +959,13 @@ export function claimOrder(
   rng: Rng,
 ): Result<{ reward: import('./types.js').OrderReward }> {
   const order = state.orders.find((o) => o.id === orderId);
-  if (!order) return { ok: false, reason: 'заказ не найден' };
+  if (!order) return { ok: false, reason: t('заказ не найден', 'order not found') };
   const catId = state.orderBasket;
-  if (!catId) return { ok: false, reason: 'положите кота в корзину заказов' };
+  if (!catId) return { ok: false, reason: t('положите кота в корзину заказов', 'put a cat into the order basket') };
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
-  if (!matchesOrder(order, cat)) return { ok: false, reason: 'кот в корзине не подходит под заказ' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (E.isBusy(state, catId)) return { ok: false, reason: t('кот занят в вязке', 'the cat is busy breeding') };
+  if (!matchesOrder(order, cat)) return { ok: false, reason: t('кот в корзине не подходит под заказ', "the cat in the basket doesn't match the order") };
 
   // Исследование «Клиенты-заводчики» (orderReward) повышает всю награду заказа:
   // 💰 монеты, 🧬 гены и ⭐ опыт (💎 кристаллы — премиум, не множатся).
@@ -984,10 +992,10 @@ export function claimOrder(
  */
 export function putCatInBasket(state: GameState, catId: string): Result {
   const cat = findCat(state, catId);
-  if (!cat) return { ok: false, reason: 'кот не найден' };
-  if (E.isBusy(state, catId)) return { ok: false, reason: 'кот занят в вязке' };
-  if (E.isInSlot(state, catId)) return { ok: false, reason: 'кот в слоте вязки' };
-  if (E.isChampion(state, catId)) return { ok: false, reason: 'кот выставлен чемпионом' };
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  if (E.isBusy(state, catId)) return { ok: false, reason: t('кот занят в вязке', 'the cat is busy breeding') };
+  if (E.isInSlot(state, catId)) return { ok: false, reason: t('кот в слоте вязки', 'the cat is in a breeding slot') };
+  if (E.isChampion(state, catId)) return { ok: false, reason: t('кот выставлен чемпионом', 'the cat is on a pedestal') };
   state.orderBasket = catId;
   return { ok: true };
 }
@@ -1013,9 +1021,9 @@ export function grantCrystals(
   state: GameState, productId: string, purchaseToken: string,
 ): Result<{ crystals: number; bonus: number; pack: C.CrystalPack }> {
   const pack = C.CRYSTAL_PACKS.find((p) => p.id === productId);
-  if (!pack) return { ok: false, reason: 'неизвестный товар' };
+  if (!pack) return { ok: false, reason: t('неизвестный товар', 'unknown product') };
   if (purchaseToken && state.processedPurchases.includes(purchaseToken)) {
-    return { ok: false, reason: 'покупка уже начислена' };
+    return { ok: false, reason: t('покупка уже начислена', 'purchase already credited') };
   }
 
   const bonus = state.firstPurchaseDone ? 0 : Math.round(pack.crystals * C.FIRST_PURCHASE_BONUS);

@@ -19,6 +19,7 @@ import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { COLORS, label, TIER_COLOR } from '../theme.js';
 import { aiSitSpriteFor, catSprite } from '../catTextures.js';
+import { t } from '../../i18n.js';
 
 // Позиция скролла переживает пересборку комнаты (ресайз окна пересоздаёт комнату).
 const remembered = { scroll: 0 };
@@ -31,7 +32,7 @@ const CRYO_MAX_CAP = CRYO_BASE_CAP
 const ICE = 0x8ecae6; // морозный акцент капсул/свечения
 
 export function createCryobank(ctx: UiContext): Room {
-  const shell = roomShell(ctx, 'cryobank', '🧫 Крио-банк');
+  const shell = roomShell(ctx, 'cryobank', t('🧫 Крио-банк', '🧫 Cryobank'));
   let suppressTap = false; // был свайп-скролл — гасим случайный тап по капсуле
 
   /** Одна криокапсула: занятая (кот в голубом свечении), пустая «＋» или запертая 🔒. */
@@ -52,24 +53,24 @@ export function createCryobank(ctx: UiContext): Room {
     if (locked) {
       const lock = label('🔒', Math.min(w, h) * 0.34, 0xbcd7e0, '700');
       lock.position.set(0, -h * 0.06);
-      const cap = label('капсула', 10, 0xbcd7e0, '700');
+      const cap = label(t('капсула', 'capsule'), 10, 0xbcd7e0, '700');
       cap.position.set(0, h * 0.28);
       c.addChild(lock, cap);
       c.eventMode = 'static';
       c.cursor = 'pointer';
-      c.on('pointertap', () => { if (!suppressTap) ctx.toast('Больше капсул — узел ❄️ Криогенетика в Генолабе'); });
+      c.on('pointertap', () => { if (!suppressTap) ctx.toast(t('Больше капсул — узел ❄️ Криогенетика в Генолабе', 'More capsules — the ❄️ Cryogenetics node in the Genolab')); });
       return c;
     }
 
     if (!cat) {
       const plus = label('＋', Math.min(w, h) * 0.4, ICE, '700');
       plus.position.set(0, -h * 0.06);
-      const hint = label('пусто', 10, COLORS.inkSoft, '700');
+      const hint = label(t('пусто', 'empty'), 10, COLORS.inkSoft, '700');
       hint.position.set(0, h * 0.28);
       c.addChild(plus, hint);
       c.eventMode = 'static';
       c.cursor = 'pointer';
-      c.on('pointertap', () => { if (!suppressTap) ctx.toast('Заморозь кота: в его меню — «🧊 Заморозить»'); });
+      c.on('pointertap', () => { if (!suppressTap) ctx.toast(t('Заморозь кота: в его меню — «🧊 Заморозить»', 'Freeze a cat: «🧊 Freeze» in its menu')); });
       return c;
     }
 
@@ -152,7 +153,7 @@ export function createCryobank(ctx: UiContext): Room {
 
     // подсказка сверху
     const top = 6;
-    const header = label('Заморозь кота (🧊 в его меню) — витрина без живого кота. Клонируй за 🧬 или утилизируй.',
+    const header = label(t('Заморозь кота (🧊 в его меню) — витрина без живого кота. Клонируй за 🧬 или утилизируй.', 'Freeze a cat (🧊 in its menu) — a showcase without a living cat. Clone it for 🧬 or recycle it.'),
       12.5, COLORS.inkSoft, '600');
     header.anchor.set(0, 0.5);
     header.position.set(2, top + 10);
@@ -195,5 +196,5 @@ export function createCryobank(ctx: UiContext): Room {
     setupScroll(viewport, content, viewW, viewH, contentH);
   }
 
-  return { id: 'cryobank', title: '🧫 Крио-банк', container: shell.container, refresh };
+  return { id: 'cryobank', title: t('🧫 Крио-банк', '🧫 Cryobank'), container: shell.container, refresh };
 }

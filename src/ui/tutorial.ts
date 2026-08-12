@@ -30,7 +30,8 @@ import {
 } from '../game/index.js';
 import type { TutorStep } from '../game/index.js';
 import { COLORS, FONT, label } from './theme.js';
-import { NAV_RESERVE } from './rooms/shell.js';
+import { NAV_RESERVE, TITLE_H } from './rooms/shell.js';
+import { t } from '../i18n.js';
 import type { UiContext } from './context.js';
 
 /** Что нужно классу от Game (всё остальное — приватная кухня контроллера). */
@@ -243,7 +244,14 @@ export class Tutorial {
   }
 
   private layoutPlate(text: string, side: 'top' | 'bottom'): void {
-    const W = Math.min(PLATE_MAX_W, this.host.ctx.roomW - 32);
+    // Ширина плашки тянется за шириной сцены: в мобильном ландшафте сцена низкая и
+    // широкая, и узкая плашка разворачивала текст в пять строк — такая «стена»
+    // накрывала верхний ряд кнопок комнаты (п. 1.10.3 требований площадки). Чем
+    // шире плашка, тем она ниже, и перекрывать ей уже почти нечего.
+    const W = Math.round(Math.min(
+      Math.max(PLATE_MAX_W, this.host.ctx.roomW * 0.62),
+      this.host.ctx.roomW - 32,
+    ));
     this.plateText.style.wordWrapWidth = W - 76;
     this.plateText.text = text;
     const H = Math.max(52, this.plateText.height + 26);
@@ -257,8 +265,11 @@ export class Tutorial {
     this.skipBtn.position.set(W - 26, H / 2);
 
     const x = (this.host.ctx.roomW - W) / 2;
+    // Сверху плашка встаёт ПОД титульной строкой комнаты: название, счётчик и
+    // кнопки рядом с ним должны остаться видимыми (п. 1.10.3 — элементы не
+    // перекрывают друг друга). Снизу — над полосой навигации.
     const y = side === 'top'
-      ? this.host.ctx.topInset + 10
+      ? this.host.ctx.topInset + 8 + TITLE_H + 10
       : this.host.ctx.roomH - NAV_RESERVE - H - 12;
     this.plate.position.set(x, y);
   }
@@ -271,8 +282,12 @@ export class Tutorial {
         const cat = analyzeTarget(ctx.state);
         return {
           room: 'nursery', key: cat ? `cat:${cat.id}` : null, gesture: 'tap', overOverlay: true,
-          text: 'Начнём с науки: тапни котика → «🧬 Генетический анализ» → 🎁 бесплатно. '
-            + 'Он вскроет родословную и скрытые гены предков — от них зависит, какие породы у тебя родятся',
+          text: t(
+            'Начнём с науки: тапни котика → «🧬 Генетический анализ» → 🎁 бесплатно. '
+              + 'Он вскроет родословную и скрытые гены предков — от них зависит, какие породы у тебя родятся',
+            'Science first: tap a cat → «🧬 Genetic analysis» → 🎁 free. '
+              + 'It reveals the pedigree and the hidden genes of its ancestors — they decide which breeds you get',
+          ),
         };
       }
       case 'drag': {
@@ -281,10 +296,10 @@ export class Tutorial {
           // кота уже несут: в Инкубаторе — «отпусти на слот», иначе — «неси к краю»
           const inIncubator = this.host.currentRoomIndex() === this.host.roomIndexById('incubator');
           return inIncubator
-            ? { room: 'incubator', key: 'slot', text: 'Отпусти котика прямо на окошко вязки 💞', gesture: 'tap' }
+            ? { room: 'incubator', key: 'slot', text: t('Отпусти котика прямо на окошко вязки 💞', 'Drop the cat right onto the breeding slot 💞'), gesture: 'tap' }
             : {
               room: 'nursery', key: null, gesture: 'carry',
-              text: 'Не отпускай! Веди котика к левому краю — лаборатория пролистнётся в Инкубатор',
+              text: t('Не отпускай! Веди котика к левому краю — лаборатория пролистнётся в Инкубатор', 'Do not let go! Carry the cat to the left edge — the lab will scroll to the Incubator'),
             };
         }
         const cat = this.firstBreeder();
@@ -292,7 +307,7 @@ export class Tutorial {
           room: 'nursery',
           key: cat ? `cat:${cat.id}` : null,
           gesture: 'hold',
-          text: 'Возьми котика за шкирку — зажми и тяни к левому краю, в Инкубатор',
+          text: t('Возьми котика за шкирку — зажми и тяни к левому краю, в Инкубатор', 'Pick the cat up by the scruff — hold and drag it to the left edge, into the Incubator'),
         };
       }
       case 'menu': {
@@ -302,77 +317,102 @@ export class Tutorial {
           key: cat ? `cat:${cat.id}` : null,
           gesture: 'tap',
           overOverlay: true,
-          text: 'Второго проще: тапни котика → «💞 В свободный слот вязки»',
+          text: t('Второго проще: тапни котика → «💞 В свободный слот вязки»', 'The second one is easier: tap a cat → «💞 To a free breeding slot»'),
         };
       }
       case 'preview':
         return {
           room: 'incubator', key: 'preview', gesture: 'tap',
-          text: 'Пара собрана — но сначала 🔮 прогноз пары: он показывает, каких котят '
-            + 'эта пара может дать и с какими шансами. Так вяжут осознанно, а не наугад',
+          text: t(
+            'Пара собрана — но сначала 🔮 прогноз пары: он показывает, каких котят '
+              + 'эта пара может дать и с какими шансами. Так вяжут осознанно, а не наугад',
+            'The pair is ready — but first the 🔮 pair forecast: it shows which kittens '
+              + 'this pair can give and with what odds. That is how you breed on purpose, not at random',
+          ),
         };
       case 'breed':
         return {
           room: 'incubator', key: 'breed', gesture: 'tap',
-          text: 'Теперь жми «Свести» — порода котёнка зависит от родителей',
+          text: t('Теперь жми «Свести» — порода котёнка зависит от родителей', 'Now hit «Breed» — the kitten breed depends on its parents'),
         };
       case 'skip':
         return {
           room: 'incubator', key: 'freeSkip', gesture: 'tap',
-          text: 'Вязка идёт. Держи подарок лаборатории — ускорь её бесплатно ⚡',
+          text: t('Вязка идёт. Держи подарок лаборатории — ускорь её бесплатно ⚡', 'Breeding is running. Here is a gift from the lab — speed it up for free ⚡'),
         };
       case 'wait':
         return {
           room: 'incubator', key: 'slot', gesture: 'tap',
-          text: 'Малыш вот-вот появится в окошке вязки 🥚',
+          text: t('Малыш вот-вот появится в окошке вязки 🥚', 'The kitten is about to appear in the breeding slot 🥚'),
         };
       case 'kitten':
         return {
           room: 'incubator', key: 'toShelter', gesture: 'tap',
-          text: 'Малыш родился! Пока он в окошке, слот занят. Отправь его кнопкой «🏚️ В приют» — '
-            + 'приют это перевалочный пункт для всех лишних котиков',
+          text: t(
+            'Малыш родился! Пока он в окошке, слот занят. Отправь его кнопкой «🏚️ В приют» — '
+              + 'приют это перевалочный пункт для всех лишних котиков',
+            'The kitten is born! While it sits in the slot, the slot is busy. Send it away with «🏚️ To the shelter» — '
+              + 'the shelter is the waypoint for every spare cat',
+          ),
         };
       case 'adopt': {
         if (ctx.carrying()) {
           return {
             room: 'shelter', key: 'adopt', gesture: 'tap',
-            text: 'Отпусти котика на станцию 🤝 в правом углу — за него дадут 💰 и опыт ⭐',
+            text: t('Отпусти котика на станцию 🤝 в правом углу — за него дадут 💰 и опыт ⭐', 'Drop the cat onto the 🤝 station in the right corner — you get 💰 and ⭐ XP for it'),
           };
         }
         const cat = adoptTarget(ctx.state);
         return {
           room: 'shelter', key: cat ? `cat:${cat.id}` : null, gesture: 'hold',
-          text: 'Простых и лишних котиков отдают «в добрые руки»: возьми котика за шкирку '
-            + 'и тащи в правый угол, на станцию 🤝. Породистых так не отдавай — им место в Питомнике',
+          text: t(
+            'Простых и лишних котиков отдают «в добрые руки»: возьми котика за шкирку '
+              + 'и тащи в правый угол, на станцию 🤝. Породистых так не отдавай — им место в Питомнике',
+            'Plain and spare cats are given away: pick a cat up by the scruff '
+              + 'and drag it to the 🤝 station in the right corner. Do not give pedigreed cats away — they belong in the Cattery',
+          ),
         };
       }
       case 'orders':
         return {
           room: 'shelter', key: 'orders', gesture: 'tap',
-          text: '📋 Заказы — главный заработок игры. Клиент называет приметы кота (цвет, узор, '
-            + 'уши, порода), ты кладёшь подходящего в 🧺 корзину под кнопкой и жмёшь «Выполнить»: '
-            + 'платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
+          text: t(
+            '📋 Заказы — главный заработок игры. Клиент называет приметы кота (цвет, узор, '
+              + 'уши, порода), ты кладёшь подходящего в 🧺 корзину под кнопкой и жмёшь «Выполнить»: '
+              + 'платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
+            '📋 Orders are the main earner of the game. A client names what the cat should look like (colour, pattern, '
+              + 'ears, breed), you put a matching cat into the 🧺 basket under the button and hit «Complete»: '
+              + 'it pays 💰, 💎 and ⭐ XP. An order lives 6 hours and then changes by itself. Open the board',
+          ),
         };
       case 'champion':
       default: {
         if (ctx.carrying()) {
           return {
             room: 'nursery', key: 'pedestal', gesture: 'tap',
-            text: 'Опусти котика на пьедестал 🏆 — над тумбой загорится золотая зона',
+            text: t('Опусти котика на пьедестал 🏆 — над тумбой загорится золотая зона', 'Drop the cat onto a pedestal 🏆 — a golden zone lights up above it'),
           };
         }
         const cat = this.championTarget();
         if (!cat) {
           return {
             room: 'incubator', key: 'slot', gesture: 'tap', overOverlay: true,
-            text: 'Родители всё ещё стоят в окошке вязки. Тапни кота → «🏠 В питомник» — '
-              + 'он пригодится на выставке',
+            text: t(
+              'Родители всё ещё стоят в окошке вязки. Тапни кота → «🏠 В питомник» — '
+                + 'он пригодится на выставке',
+              'The parents are still standing in the breeding slot. Tap a cat → «🏠 To the cattery» — '
+                + 'it will come in handy at the show',
+            ),
           };
         }
         return {
           room: 'nursery', key: `cat:${cat.id}`, gesture: 'hold',
-          text: 'Последнее: возьми взрослого котика за шкирку и подними на пьедестал 🏆. '
-            + 'Чемпион на выставке приносит 💰 каждую минуту — даже пока игра закрыта',
+          text: t(
+            'Последнее: возьми взрослого котика за шкирку и подними на пьедестал 🏆. '
+              + 'Чемпион на выставке приносит 💰 каждую минуту — даже пока игра закрыта',
+            'Last one: pick an adult cat up by the scruff and lift it onto a pedestal 🏆. '
+              + 'A champion at the show brings 💰 every minute — even while the game is closed',
+          ),
         };
       }
     }

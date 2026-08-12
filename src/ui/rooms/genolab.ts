@@ -30,8 +30,9 @@ import type { ResearchDef } from '../../game/index.js';
 import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { Button, COLORS, FONT, label, panel, TIER_RU, TIER_COLOR, TIERS } from '../theme.js';
+import { Button, COLORS, FONT, label, panel, tierName, TIER_COLOR, TIERS } from '../theme.js';
 import { breedThumbTexture } from '../catTextures.js';
+import { t, tx, type LocStr } from '../../i18n.js';
 
 type Section = 'codex' | 'research' | 'recipes';
 
@@ -44,12 +45,14 @@ const remembered = {
 };
 
 /** Метаданные веток дерева исследований (ряд → заголовок + валюта прокачки). */
-const BRANCHES: { row: number; label: string }[] = [
-  { row: 4, label: '🔬 Лаборатория' },
-  { row: 3, label: '🏠 Хозяйство · 💰' },
-  { row: 0, label: '🧪 Селекция · 🧬' },
-  { row: 1, label: '🎓 Обучение · 💰' },
-  { row: 2, label: '🤝 Пристройство · 💰' },
+// Подписи веток — парами: константа собирается при импорте, когда язык ещё не выбран,
+// поэтому здесь LocStr, а перевод берётся при отрисовке через tx().
+const BRANCHES: { row: number; label: LocStr }[] = [
+  { row: 4, label: ['🔬 Лаборатория', '🔬 Lab'] },
+  { row: 3, label: ['🏠 Хозяйство · 💰', '🏠 Household · 💰'] },
+  { row: 0, label: ['🧪 Селекция · 🧬', '🧪 Selection · 🧬'] },
+  { row: 1, label: ['🎓 Обучение · 💰', '🎓 Training · 💰'] },
+  { row: 2, label: ['🤝 Пристройство · 💰', '🤝 Rehoming · 💰'] },
 ];
 
 /** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
@@ -93,7 +96,7 @@ function pillRow(segs: { text: string; size: number; color: number; weight: '400
 }
 
 export function createGenolab(ctx: UiContext): Room {
-  const shell = roomShell(ctx, 'genolab', '🔬 Генолаб');
+  const shell = roomShell(ctx, 'genolab', t('🔬 Генолаб', '🔬 Genolab'));
   let section: Section = remembered.section;
   // вертикальный скролл по секциям (сохраняется между перерисовками и
   // пересборками комнаты — живёт в module-level `remembered`; у каждой свой)
@@ -103,9 +106,9 @@ export function createGenolab(ctx: UiContext): Room {
   function tabBar(): Container {
     const c = new Container();
     const defs: { id: Section; text: string }[] = [
-      { id: 'codex', text: '📖 Котодекс' },
-      { id: 'research', text: '🔬 Улучшения' },
-      { id: 'recipes', text: '🧪 Исследования' },
+      { id: 'codex', text: t('📖 Котодекс', '📖 Catdex') },
+      { id: 'research', text: t('🔬 Улучшения', '🔬 Upgrades') },
+      { id: 'recipes', text: t('🧪 Исследования', '🧪 Research') },
     ];
     const gap = 8;
     const bw = (shell.contentW - gap * (defs.length - 1)) / defs.length;
@@ -165,7 +168,7 @@ export function createGenolab(ctx: UiContext): Room {
     c.on('pointertap', () => {
       if (suppressTap) return;          // это был скролл/свайп, а не тап
       if (studied) ctx.openBreedCard(key);
-      else ctx.toast('не изучена: выведи породу или исследуй рецепт 🧪');
+      else ctx.toast(t('не изучена: выведи породу или исследуй рецепт 🧪', 'not known yet: breed it or research the recipe 🧪'));
     });
     return c;
   }
@@ -178,7 +181,7 @@ export function createGenolab(ctx: UiContext): Room {
   function renderCodex(): void {
     const top = 46;
     const haveCount = BREEDS.filter((b) => breedDiscovered(ctx.state, b.key)).length;
-    const header = pillRow([{ text: `Открыто пород: ${haveCount} / ${BREEDS.length}`, size: 15, color: COLORS.ink, weight: '800' }]);
+    const header = pillRow([{ text: t(`Открыто пород: ${haveCount} / ${BREEDS.length}`, `Breeds discovered: ${haveCount} / ${BREEDS.length}`), size: 15, color: COLORS.ink, weight: '800' }]);
     header.position.set(2, top + 11);
     shell.body.addChild(header);
 
@@ -211,7 +214,7 @@ export function createGenolab(ctx: UiContext): Room {
       const got = list.filter((b) => breedDiscovered(ctx.state, b.key)).length;
 
       const tierChip = pillRow([
-        { text: TIER_RU[tier], size: 14, color: TIER_COLOR[tier], weight: '800' },
+        { text: tierName(tier), size: 14, color: TIER_COLOR[tier], weight: '800' },
         { text: `${got} / ${list.length}`, size: 12, color: COLORS.inkSoft, weight: '700' },
       ]);
       tierChip.position.set(2, y + 9);
@@ -291,14 +294,14 @@ export function createGenolab(ctx: UiContext): Room {
       });
     c.addChild(bg);
 
-    const title = wrapped(`${def.glyph} ${def.title}`, Math.min(15.5, nh * 0.155), COLORS.ink, '800', nw - 12);
+    const title = wrapped(`${def.glyph} ${tx(def.title)}`, Math.min(15.5, nh * 0.155), COLORS.ink, '800', nw - 12);
     title.position.set(0, -nh / 2 + nh * 0.19);
     c.addChild(title);
 
     // если у уровней есть своё описание — показываем текст СЛЕДУЮЩЕГО покупаемого
     // уровня (с накопленным итогом), а на максимуме — последнего; иначе общий desc.
     const descIdx = Math.min(owned, total - 1);
-    const descText = def.levels[descIdx]?.desc ?? def.desc;
+    const descText = tx(def.levels[descIdx]?.desc ?? def.desc);
     const desc = wrapped(descText, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600', nw - 14);
     desc.position.set(0, -nh / 2 + nh * 0.47);
     c.addChild(desc);
@@ -311,11 +314,11 @@ export function createGenolab(ctx: UiContext): Room {
     }
 
     const status = maxed
-      ? label('✓ макс', Math.min(14, nh * 0.14), COLORS.good, '800')
+      ? label(t('✓ макс', '✓ max'), Math.min(14, nh * 0.14), COLORS.good, '800')
       : !reqMet
         ? label('🔒', Math.min(16, nh * 0.16), COLORS.inkSoft, '800')
         : levelLocked
-          ? label(`🔒 ур. ${next!.minLevel}`, Math.min(13.5, nh * 0.135), COLORS.inkSoft, '800')
+          ? label(t(`🔒 ур. ${next!.minLevel}`, `🔒 lv. ${next!.minLevel}`), Math.min(13.5, nh * 0.135), COLORS.inkSoft, '800')
           : label(
             extraCoins > 0 ? `${curGlyph}${next!.cost}+💰${extraCoins}` : `${curGlyph} ${next!.cost}`,
             Math.min(extraCoins > 0 ? 12.5 : 15, nh * 0.15), affordable ? curColor : COLORS.inkSoft, '800',
@@ -327,9 +330,9 @@ export function createGenolab(ctx: UiContext): Room {
     c.cursor = 'pointer';
     c.on('pointertap', () => {
       if (suppressTap) return;          // это был скролл, а не тап
-      if (maxed) { ctx.toast(`${def.title}: прокачано полностью ✅`); return; }
-      if (!reqMet) { ctx.toast('Сначала изучи предыдущий узел 🔒'); return; }
-      if (levelLocked) { ctx.toast(`Уровень откроется на ур. ${next!.minLevel} 🔒`); return; }
+      if (maxed) { ctx.toast(t(`${tx(def.title)}: прокачано полностью ✅`, `${tx(def.title)}: fully upgraded ✅`)); return; }
+      if (!reqMet) { ctx.toast(t('Сначала изучи предыдущий узел 🔒', 'Research the previous node first 🔒')); return; }
+      if (levelLocked) { ctx.toast(t(`Уровень откроется на ур. ${next!.minLevel} 🔒`, `This level unlocks at lv. ${next!.minLevel} 🔒`)); return; }
       // сама покупка — в подтверждающем окне (чтобы не купить случайным тапом)
       ctx.openResearchConfirm(def.id);
     });
@@ -414,13 +417,13 @@ export function createGenolab(ctx: UiContext): Room {
       p.position.set(0, viewTop);
       shell.body.addChild(p);
       const cy = viewTop + viewH / 2;
-      const t = label('🔬 Улучшения', 18, COLORS.ink, '800');
-      t.position.set(viewW / 2, cy - 28);
-      const lock = label(`Откроются на уровне ${need} 🔒`, 15, COLORS.warn, '800');
+      const head = label(t('🔬 Улучшения', '🔬 Upgrades'), 18, COLORS.ink, '800');
+      head.position.set(viewW / 2, cy - 28);
+      const lock = label(t(`Откроются на уровне ${need} 🔒`, `Unlocks at level ${need} 🔒`), 15, COLORS.warn, '800');
       lock.position.set(viewW / 2, cy + 2);
-      const hint = label('Копи опыт ⭐ за рождения, заказы и пристройство', 12, COLORS.inkSoft, '600');
+      const hint = label(t('Копи опыт ⭐ за рождения, заказы и пристройство', 'Earn ⭐ XP from births, orders and rehoming'), 12, COLORS.inkSoft, '600');
       hint.position.set(viewW / 2, cy + 28);
-      shell.body.addChild(t, lock, hint);
+      shell.body.addChild(head, lock, hint);
       return;
     }
 
@@ -445,7 +448,7 @@ export function createGenolab(ctx: UiContext): Room {
     let y = 4;
     for (const br of BRANCHES) {
       const nodes = RESEARCH.filter((r) => r.row === br.row).sort((a, b) => a.col - b.col);
-      const head = pillRow([{ text: br.label, size: 13, color: COLORS.ink, weight: '800' }]);
+      const head = pillRow([{ text: tx(br.label), size: 13, color: COLORS.ink, weight: '800' }]);
       head.position.set(2, y + labelH / 2);
       content.addChild(head);
       const nodeCy = y + labelH + nodeH / 2;
@@ -504,13 +507,13 @@ export function createGenolab(ctx: UiContext): Room {
       p.position.set(0, viewTop);
       shell.body.addChild(p);
       const cy = viewTop + viewH / 2;
-      const t = label('🧪 Исследования', 18, COLORS.ink, '800');
-      t.position.set(viewW / 2, cy - 28);
-      const lock = label(`Откроются на уровне ${need} 🔒`, 15, COLORS.warn, '800');
+      const head = label(t('🧪 Исследования', '🧪 Research'), 18, COLORS.ink, '800');
+      head.position.set(viewW / 2, cy - 28);
+      const lock = label(t(`Откроются на уровне ${need} 🔒`, `Unlocks at level ${need} 🔒`), 15, COLORS.warn, '800');
       lock.position.set(viewW / 2, cy + 2);
-      const hint = label('Стол исследований открывает рецепты новых пород', 12, COLORS.inkSoft, '600');
+      const hint = label(t('Стол исследований открывает рецепты новых пород', 'The research bench unlocks recipes for new breeds'), 12, COLORS.inkSoft, '600');
       hint.position.set(viewW / 2, cy + 28);
-      shell.body.addChild(t, lock, hint);
+      shell.body.addChild(head, lock, hint);
       return;
     }
 
@@ -524,11 +527,11 @@ export function createGenolab(ctx: UiContext): Room {
     desk.position.set(0, viewTop);
     shell.body.addChild(desk);
 
-    const title = label('🧪 Стол исследований', 16, COLORS.ink, '800');
+    const title = label(t('🧪 Стол исследований', '🧪 Research bench'), 16, COLORS.ink, '800');
     title.anchor.set(0, 0.5);
     title.position.set(18, viewTop + 24);
     shell.body.addChild(title);
-    const sub = label('открывает случайный рецепт из достижимых (обе породы пары уже выведены)', 11.5, COLORS.inkSoft, '600');
+    const sub = label(t('открывает случайный рецепт из достижимых (обе породы пары уже выведены)', 'unlocks a random recipe you can reach (both parent breeds already bred)'), 11.5, COLORS.inkSoft, '600');
     sub.anchor.set(0, 0.5);
     sub.position.set(18, viewTop + 44);
     shell.body.addChild(sub);
@@ -549,29 +552,30 @@ export function createGenolab(ctx: UiContext): Room {
       const remain = Math.max(0, rr.readyAt - ctx.now());
       const cost = speedUpCost(remain, RECIPE_SPEEDUP_CRYSTAL_PER_MIN);
       const skipMin = Math.round(RECIPE_AD_SKIP_MS / 60_000);
-      const bw = Math.min(200, Math.round(viewW * 0.3));
+      const bw = Math.min(210, Math.round(viewW * 0.34));
       const yy = barY + 58;
-      const adBtn = new Button({ text: `📺 −${skipMin} мин`, w: bw, h: 34, color: COLORS.secondary, fontSize: 13 });
+      // «Реклама» в тексте — требование п. 4.5.1 (кнопка называет и ролик, и награду)
+      const adBtn = new Button({ text: t(`📺 Реклама −${skipMin} мин`, `📺 Ad −${skipMin} min`), w: bw, h: 34, color: COLORS.secondary, fontSize: 12.5 });
       adBtn.position.set(viewW / 2 - bw / 2 - 6, yy);
       adBtn.onTap = () => {
         void showRewarded().then((watched) => {
-          if (!watched) { ctx.toast('Реклама недоступна'); return; }
+          if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
           const r = adSkipRecipeResearch(ctx.state, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast(`Реклама: −${skipMin} мин ⏩`); } else ctx.toast(r.reason);
+          if (r.ok) { ctx.commit(); ctx.toast(t(`Реклама: −${skipMin} мин ⏩`, `Ad: −${skipMin} min ⏩`)); } else ctx.toast(r.reason);
         });
       };
-      const crBtn = new Button({ text: `💎 ${cost} сразу`, w: bw, h: 34, color: COLORS.primary, fontSize: 13 });
+      const crBtn = new Button({ text: t(`💎 ${cost} сразу`, `💎 ${cost} now`), w: bw, h: 34, color: COLORS.primary, fontSize: 13 });
       crBtn.position.set(viewW / 2 + bw / 2 + 6, yy);
       crBtn.onTap = () => {
         const r = speedUpRecipeResearch(ctx.state, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast('Исследование завершено! 📜'); } else ctx.toast(r.reason);
+        if (r.ok) { ctx.commit(); ctx.toast(t('Исследование завершено! 📜', 'Research complete! 📜')); } else ctx.toast(r.reason);
       };
       shell.body.addChild(adBtn, crBtn);
     } else if (pool.length === 0) {
       // пул пуст: исследовать нечего — кнопку прячем (грейс), подсказываем путь
-      const done = label('Все достижимые рецепты изучены ✅', 14, COLORS.good, '800');
+      const done = label(t('Все достижимые рецепты изучены ✅', 'Every reachable recipe is researched ✅'), 14, COLORS.good, '800');
       done.position.set(viewW / 2, viewTop + 84);
-      const hint = label('выведи новые породы — пул исследований пополнится', 12, COLORS.inkSoft, '600');
+      const hint = label(t('выведи новые породы — пул исследований пополнится', 'breed new cats — the research pool will grow'), 12, COLORS.inkSoft, '600');
       hint.position.set(viewW / 2, viewTop + 108);
       shell.body.addChild(done, hint);
     } else {
@@ -579,17 +583,17 @@ export function createGenolab(ctx: UiContext): Room {
       const price = recipeResearchCost(ctx.state.level);
       const durMs = recipeResearchMs(ctx.state.level);
       const durText = durMs >= 60_000
-        ? `${Math.round(durMs / 60_000)} мин` : `${Math.round(durMs / 1000)} с`;
+        ? t(`${Math.round(durMs / 60_000)} мин`, `${Math.round(durMs / 60_000)} min`) : t(`${Math.round(durMs / 1000)} с`, `${Math.round(durMs / 1000)} s`);
       const afford = ctx.state.coins >= price.coins && ctx.state.dna >= price.dna;
       const info = label(
-        `в пуле: ${pool.length} · цена 💰 ${price.coins} + 🧬 ${price.dna} · ⏱ ${durText}`,
+        t(`в пуле: ${pool.length} · цена 💰 ${price.coins} + 🧬 ${price.dna} · ⏱ ${durText}`, `in the pool: ${pool.length} · price 💰 ${price.coins} + 🧬 ${price.dna} · ⏱ ${durText}`),
         12.5, COLORS.ink, '700',
       );
       info.position.set(viewW / 2, viewTop + 76);
       shell.body.addChild(info);
 
       const start = new Button({
-        text: 'Исследовать рецепт 🧪', w: Math.min(320, viewW - 48), h: 42,
+        text: t('Исследовать рецепт 🧪', 'Research a recipe 🧪'), w: Math.min(320, viewW - 48), h: 42,
         color: afford ? COLORS.dna : COLORS.cardEdge,
         textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
       });
@@ -597,8 +601,8 @@ export function createGenolab(ctx: UiContext): Room {
       start.position.set(viewW / 2, viewTop + 118);
       start.onTap = () => {
         const r = startRecipeResearch(ctx.state, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast('Исследование началось 🧪'); }
-        else ctx.toast(r.reason === 'locked' ? 'Стол ещё заперт 🔒' : r.reason);
+        if (r.ok) { ctx.commit(); ctx.toast(t('Исследование началось 🧪', 'Research started 🧪')); }
+        else ctx.toast(r.reason === 'locked' ? t('Стол ещё заперт 🔒', 'The bench is still locked 🔒') : r.reason);
       };
       shell.body.addChild(start);
     }
@@ -622,7 +626,7 @@ export function createGenolab(ctx: UiContext): Room {
     });
     leftCol.reverse();
     rightCol.reverse();
-    const head = pillRow([{ text: `Открытые рецепты · ${totalOpened}`, size: 13, color: COLORS.ink, weight: '800' }]);
+    const head = pillRow([{ text: t(`Открытые рецепты · ${totalOpened}`, `Known recipes · ${totalOpened}`), size: 13, color: COLORS.ink, weight: '800' }]);
     head.position.set((viewW - head.width) / 2, listTop + 10);
     shell.body.addChild(head);
 
@@ -638,7 +642,7 @@ export function createGenolab(ctx: UiContext): Room {
 
     let y = 4;
     if (totalOpened === 0) {
-      const empty = label('пока пусто — исследуй первый рецепт', 12, COLORS.inkSoft, '600');
+      const empty = label(t('пока пусто — исследуй первый рецепт', 'empty so far — research your first recipe'), 12, COLORS.inkSoft, '600');
       empty.anchor.set(0, 0.5);
       empty.position.set(6, y + 14);
       content.addChild(empty);
@@ -656,7 +660,7 @@ export function createGenolab(ctx: UiContext): Room {
       name.anchor.set(0, 0.5);
       name.position.set(12, (rowH - 6) / 2);
       card.addChild(name);
-      const st = ctx.state.discoveredBreeds.includes(r.result) ? '✅ выведена' : 'силуэт в Котодексе';
+      const st = ctx.state.discoveredBreeds.includes(r.result) ? t('✅ выведена', '✅ bred') : t('силуэт в Котодексе', 'silhouette in the Catdex');
       const stT = label(st, 10.5, COLORS.inkSoft, '600');
       stT.anchor.set(1, 0.5);
       stT.position.set(colW - 12, (rowH - 6) / 2);
@@ -701,11 +705,11 @@ export function createGenolab(ctx: UiContext): Room {
     recipeBar.clear();
     recipeBar.roundRect(recipeBarGeom.x, recipeBarGeom.y, Math.max(2, recipeBarGeom.w * prog), 12, 6)
       .fill(remain <= 0 ? COLORS.good : COLORS.dna);
-    recipeTime.text = remain <= 0 ? 'Готово! 📜' : mmss(remain);
+    recipeTime.text = remain <= 0 ? t('Готово! 📜', 'Done! 📜') : mmss(remain);
   }
 
   return {
-    id: 'genolab', title: '🔬 Генолаб', container: shell.container, refresh, tick,
+    id: 'genolab', title: t('🔬 Генолаб', '🔬 Genolab'), container: shell.container, refresh, tick,
     setSection: (id: string) => { section = id as Section; remembered.section = section; refresh(); },
   };
 }

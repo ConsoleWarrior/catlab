@@ -13,6 +13,11 @@
  * читается спокойнее и реалистичнее. Тень — отдельный узел, не участвует в
  * подскоке при ходьбе (только сам кот). Цели блуждания смещены в «зону» по полу
  * (самцы слева, самки справа, котята в центре) мягко — без жёстких границ.
+ *
+ * Вторая «опора» (не обязательная) — настенная полка (`ShelfPlane`, Приют):
+ * взрослый кот идёт под доску, приседает-виляет и запрыгивает наверх, гостит там
+ * и спрыгивает обратно. На доске коты проходят СКВОЗЬ друг друга (не толкаются) —
+ * узкая полка не место для очередей.
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
@@ -21,13 +26,27 @@ import type { Cat } from '../game/index.js';
 import { isBusy, growthScale, isAdult } from '../game/index.js';
 import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import type { FloorPlane } from './rooms/shell.js';
+import type { FloorPlane, ShelfPlane } from './rooms/shell.js';
 import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT, catSizeFactor } from './catTextures.js';
 import { attachBlink, type Blinker } from './eyeBlink.js';
 import { sfxMeow, sfxPurrSync } from './sound.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
+import { t } from '../i18n.js';
 
-type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch';
+type ActorState = 'walk' | 'idle' | 'sleep' | 'groom' | 'lookaround' | 'stretch'
+  | 'crouch' | 'jump' | 'land';
+
+/** Летящий кот: точки отрыва и приземления + высота дуги (см. startJump). */
+interface Jump {
+  fromOx: number; toOx: number;
+  fromY: number; toY: number;
+  fromS: number; toS: number;
+  toZ: number;
+  arc: number;   // насколько дуга выгибается над прямой «откуда → куда»
+  up: boolean;
+  t: number;
+  dur: number;
+}
 
 interface Actor {
   cat: Cat;
@@ -57,6 +76,10 @@ interface Actor {
   stateLeft: number;         // сколько ещё длится текущее состояние
   stuckT: number;            // сколько подряд идущего кота толкают без продвижения — сдаётся и садится
   pushed: number;            // накопленный за этот тик толчок от соседей (для детекта затора)
+  onShelf: boolean;          // стоит на настенной полке (своя опора: свой Y, масштаб, границы)
+  wantShelf: boolean;        // идёт под полку, чтобы запрыгнуть
+  shelfLeft: number;         // сколько ещё гостит наверху, с
+  jump: Jump | null;         // не null — кот сейчас в воздухе
   infoIcon: Text | null; // значок ℹ️ над именем, пока изучаем инфо этого кота
 }
 
@@ -85,11 +108,22 @@ const ZONE_BIAS = 0.7;
 const ZONE_JITTER = 0.32; // +15% — зона шире тянется к центру, меньше пустоты между группами
 const ZONE_RANDOM_CHANCE = 0.2;
 
+// Настенная полка: замах (кот приседает и виляет задом), полёт по дуге, посадка
+// с амортизацией лап. Наверху кот гостит SHELF_STAY секунд и спрыгивает сам.
+const CROUCH_DUR = 0.45;
+const JUMP_UP_DUR = 0.5;
+const JUMP_DOWN_DUR = 0.42;
+const LAND_DUR = 0.22;
+const SHELF_STAY_MIN = 22, SHELF_STAY_VAR = 40;
+const SHELF_WISH = 0.2; // доля «походов», которые взрослый кот затевает ради полки
+
 // Память поз котов между пересборками комнат (ресайз окна пересоздаёт «живой
 // пол» целиком). Смещение по X храним нормированным (u = ox/maxOx ∈ [-1..1]),
 // чтобы оно переносилось на другой размер комнаты. Без этого каждый ресайз
 // рассыпал котов по новым случайным местам.
-const posMemory = new Map<string, { u: number; z: number; facing: 1 | -1; phase: number }>();
+const posMemory = new Map<string, {
+  u: number; z: number; facing: 1 | -1; phase: number; shelf?: boolean;
+}>();
 
 /** Подсадить позу кота в память пола извне: кот, вынутый из корзины заказов
  * перетаскиванием, приземляется в точке сброса, а не на прежнем месте. */
@@ -100,16 +134,26 @@ export function rememberFloorPos(catId: string, u: number, z: number): void {
     z: Math.max(0, Math.min(1, z)),
     facing: mem?.facing ?? 1,
     phase: mem?.phase ?? Math.random() * 6,
+    shelf: false,
   });
 }
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+export interface ShelfOpts {
+  plane: ShelfPlane;
+  /** Слой для котов, стоящих НА полке. Комната кладёт его между декором и
+   * кошачьим комплексом, чтобы кот на доске уходил ЗА стойки комплекса, а не
+   * летел перед ними. Не задан — коты остаются в общем слое пола. */
+  layer?: Container;
+}
 
 export function createLivingFloor(
   ctx: UiContext,
   layer: Container,
   plane: FloorPlane,
   getCats: () => Cat[],
+  shelfOpts?: ShelfOpts,
 ): {
   refresh(): void;
   tick(dt: number): void;
@@ -120,6 +164,9 @@ export function createLivingFloor(
   const effects: GrowFx[] = [];
   const moodFx: MoodFx[] = [];
   const { centerX, yNear, yFar, nearHalfW, farHalfW, catH, farScale } = plane;
+  const shelf = shelfOpts?.plane ?? null;
+  const shelfLayer = shelfOpts?.layer ?? null;
+  const shelfOx = shelf ? shelf.cx - centerX : 0; // центр доски в системе ox
   layer.sortableChildren = true; // ближние коты (больший Y) рисуются поверх дальних
 
   // геометрия глубины
@@ -131,6 +178,48 @@ export function createLivingFloor(
     const pad = catH * 0.3 * depthScale(z);
     return Math.max(10, lerp(nearHalfW, farHalfW, z) - pad);
   };
+
+  // --- опора кота: пол (по глубине z) или доска полки ---
+  const groundY = (a: Actor): number => (a.onShelf && shelf ? shelf.y : yAt(a.z));
+  const groundScale = (a: Actor): number => (a.onShelf && shelf ? shelf.scale : depthScale(a.z));
+  const oxLo = (a: Actor): number => (a.onShelf && shelf ? shelfOx - shelf.walkHalf : -maxOx(a.z));
+  const oxHi = (a: Actor): number => (a.onShelf && shelf ? shelfOx + shelf.walkHalf : maxOx(a.z));
+  /** Экранный Y и масштаб С УЧЁТОМ полёта: в прыжке — точка на дуге. */
+  const poseScale = (a: Actor): number =>
+    (a.jump ? lerp(a.jump.fromS, a.jump.toS, Math.min(1, a.jump.t / a.jump.dur)) : groundScale(a));
+  const poseY = (a: Actor): number => {
+    const j = a.jump;
+    if (!j) return groundY(a);
+    const p = Math.min(1, j.t / j.dur);
+    return lerp(j.fromY, j.toY, p) - j.arc * 4 * p * (1 - p);
+  };
+  /** Слой, в котором должен жить кот: на полке — за кошачьим комплексом. */
+  const hostOf = (a: Actor): Container => (a.onShelf && shelfLayer ? shelfLayer : layer);
+  /** Занято мест на полке (стоящие наверху + идущие туда). */
+  const shelfLoad = (): number => actors.reduce((n, a) => n + (a.onShelf || a.wantShelf ? 1 : 0), 0);
+  /** Есть ли наверху место для ЭТОГО кота (своё уже занятое место не считаем). */
+  const shelfHasRoom = (a: Actor): boolean =>
+    !!shelf && shelfLoad() - (a.onShelf || a.wantShelf ? 1 : 0) < shelf.capacity;
+  /** Кот стоит на полу ровно под доской — отсюда можно прыгать. */
+  const underShelf = (a: Actor): boolean =>
+    !!shelf && a.z > 0.72 && a.ox > shelfOx - shelf.walkHalf + 6 && a.ox < shelfOx + shelf.walkHalf - 6;
+  /**
+   * Точка остановки на доске. Отсеиваем две неудачи (проходить через них можно,
+   * просто не встаём там насовсем):
+   *   — за кошачьим комплексом кота не видно вообще, а уснуть он может на минуту;
+   *   — вплотную к соседу: расталкивания на полке нет, и два кота слились бы в
+   *     одну кашу. Место выбираем «с оглядкой», а не толкаемся.
+   */
+  function pickShelfOx(self: Actor, spread = 1): number {
+    const lo = shelfOx - shelf!.walkHalf * spread, hi = shelfOx + shelf!.walkHalf * spread;
+    const bLo = shelf!.blindFrom - centerX, bHi = shelf!.blindTo - centerX;
+    const gap = catH * shelf!.scale * 0.5;
+    const bad = (ox: number): boolean => (ox > bLo && ox < bHi)
+      || actors.some((b) => b !== self && b.onShelf && !b.jump && Math.abs(b.ox - ox) < gap);
+    let ox = lerp(lo, hi, Math.random());
+    for (let i = 0; i < 6 && bad(ox); i++) ox = lerp(lo, hi, Math.random());
+    return ox;
+  }
 
   function enterState(a: Actor, state: ActorState, dur: number): void {
     a.state = state;
@@ -168,15 +257,66 @@ export function createLivingFloor(
     a.ox = ox; a.targetOx = ox;
     a.z = nz; a.targetZ = nz;
     a.leapT = 0;
+    leaveShelf(a);
     a.view.position.set(centerX + ox, yAt(nz));
     a.view.scale.set(growthScale(a.cat, ctx.now()) * depthScale(nz));
     a.view.zIndex = Math.round(yAt(nz));
     enterState(a, 'idle', hold); // постоит у станции, потом сам пойдёт гулять
   }
 
+  /** Снять кота с полки «мгновенно» (его унесли в руках / поставили у станции). */
+  function leaveShelf(a: Actor): void {
+    a.jump = null;
+    a.wantShelf = false;
+    if (!a.onShelf) return;
+    a.onShelf = false;
+    layer.addChild(a.view);
+  }
+
+  /**
+   * Поставить кота на доску полки (игрок сам уронил его туда перетаскиванием).
+   * Возвращает false, если точка мимо доски или наверху уже тесно.
+   */
+  function dropOnShelf(a: Actor, lx: number, ly: number): boolean {
+    if (!shelf) return false;
+    const ox = lx - centerX;
+    const catTop = shelf.y - catH * shelf.scale * 1.5;
+    if (ly < catTop || ly > shelf.y + shelf.thick * 2.5) return false;
+    if (ox < shelfOx - shelf.walkHalf || ox > shelfOx + shelf.walkHalf) return false;
+    if (!a.onShelf && shelfLoad() >= shelf.capacity + 1) return false; // совсем впритык не пускаем
+    a.jump = null;
+    a.wantShelf = false;
+    a.onShelf = true;
+    a.ox = ox; a.targetOx = ox;
+    a.shelfLeft = SHELF_STAY_MIN + Math.random() * SHELF_STAY_VAR;
+    (shelfLayer ?? layer).addChild(a.view);
+    a.view.position.set(centerX + ox, shelf.y);
+    a.view.scale.set(growthScale(a.cat, ctx.now()) * shelf.scale);
+    enterState(a, 'land', LAND_DUR);
+    return true;
+  }
+
   /** Новая цель блуждания: с вероятностью 80% — вокруг «своей» зоны (мягко,
    * треугольный разброс), иначе — где угодно на полу (перемешивание толпы). */
   function startWalk(a: Actor): void {
+    // на доске гуляем только вдоль неё, в её границах и без прыжков «в походе»
+    if (a.onShelf && shelf) {
+      a.targetOx = pickShelfOx(a);
+      a.targetZ = a.z;
+      a.leapT = 0;
+      a.leapPending = false;
+      enterState(a, 'walk', 5 + Math.random() * 2);
+      return;
+    }
+    // собрался на полку — идём под доску, к самой стене
+    if (a.wantShelf && shelf) {
+      a.targetZ = 0.86 + Math.random() * 0.14;
+      a.targetOx = pickShelfOx(a, 0.8);
+      a.leapT = 0;
+      a.leapPending = false;
+      enterState(a, 'walk', 7 + Math.random() * 3);
+      return;
+    }
     const nz = Math.random();
     const m = maxOx(nz);
     let u: number;
@@ -195,11 +335,20 @@ export function createLivingFloor(
 
   /** После ходьбы коты в основном отдыхают (сон чаще всего), а не бродят без пауз. */
   function pickNextState(a: Actor): void {
+    // дошёл под доску — замах и прыжок наверх (не дошёл/место заняли — передумал).
+    // Флаг держим до самого отрыва: пока кот целится, место наверху за ним.
+    if (a.wantShelf && !a.onShelf) {
+      if (underShelf(a) && shelfHasRoom(a)) { enterState(a, 'crouch', CROUCH_DUR); return; }
+      a.wantShelf = false;
+    }
+    // отгостил наверху — тем же замахом спрыгивает обратно на пол
+    if (a.onShelf && a.shelfLeft <= 0) { enterState(a, 'crouch', CROUCH_DUR); return; }
+
     if (a.state === 'walk') {
       const r = Math.random();
       if (r < 0.5) {
         enterState(a, 'sleep', 10 + Math.random() * 20); // дремлют подолгу, 10–30 с
-        spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * depthScale(a.z) * 0.9, 'Zz..'); // сразу как заснул
+        spawnMoodFx(centerX + a.ox, poseY(a) - catH * groundScale(a) * 0.9, 'Zz..'); // сразу как заснул
       }
       else if (r < 0.7) enterState(a, 'groom', 1.6 + Math.random() * 1.8);
       else if (r < 0.88) enterState(a, 'lookaround', 1.3 + Math.random() * 1.5);
@@ -207,16 +356,64 @@ export function createLivingFloor(
     } else if (a.state === 'sleep') {
       enterState(a, 'stretch', STRETCH_DUR); // потягивание перед тем, как встать
     } else {
+      // на полу иногда затеваем поход ради полки (котята туда не запрыгивают)
+      if (shelf && !a.onShelf && a.adult && Math.random() < SHELF_WISH && shelfHasRoom(a)) a.wantShelf = true;
       startWalk(a);
     }
+  }
+
+  /**
+   * Отрыв от опоры: с пола на доску (up) или обратно. Летим по параболе с
+   * перелётом над целью — прыжок читается как настоящий, а не как подъём по
+   * прямой. «На полке» кот числится уже с момента отрыва: так место наверху не
+   * занимает второй кот, пока первый в воздухе.
+   */
+  function startJump(a: Actor, up: boolean): void {
+    if (!shelf) { startWalk(a); return; }
+    const fromY = poseY(a), fromS = groundScale(a);
+    let toOx: number, toY: number, toS: number, toZ = a.z;
+    if (up) {
+      const lo = shelfOx - shelf.walkHalf, hi = shelfOx + shelf.walkHalf;
+      toOx = Math.max(lo, Math.min(hi, a.ox + (Math.random() * 2 - 1) * shelf.walkHalf * 0.2));
+      toY = shelf.y;
+      toS = shelf.scale;
+    } else {
+      toZ = 0.82 + Math.random() * 0.18;
+      const m = maxOx(toZ);
+      toOx = Math.max(-m, Math.min(m, a.ox + (Math.random() * 2 - 1) * catH * 0.6));
+      toY = yAt(toZ);
+      toS = depthScale(toZ);
+    }
+    a.jump = {
+      fromOx: a.ox, toOx, fromY, toY, fromS, toS, toZ, up,
+      arc: Math.max(0, fromY - toY) * 0.5 + catH * fromS * 0.32,
+      t: 0, dur: up ? JUMP_UP_DUR : JUMP_DOWN_DUR,
+    };
+    if (Math.abs(toOx - a.ox) > 4) a.facing = (Math.sign(toOx - a.ox) || 1) as 1 | -1;
+    a.wantShelf = false;
+    a.onShelf = up;
+    hostOf(a).addChild(a.view); // сменить слой на отрыве: за комплексом / перед ним
+    enterState(a, 'jump', a.jump.dur + 0.2);
+  }
+
+  /** Касание лап: закрепляем новую опору и пружиним (состояние 'land'). */
+  function landJump(a: Actor): void {
+    const j = a.jump;
+    if (!j) return;
+    a.jump = null;
+    a.ox = j.toOx; a.targetOx = j.toOx;
+    a.z = j.toZ; a.targetZ = j.toZ;
+    a.stuckT = 0;
+    if (a.onShelf) a.shelfLeft = SHELF_STAY_MIN + Math.random() * SHELF_STAY_VAR;
+    enterState(a, 'land', LAND_DUR);
   }
 
   /** Реакция на руки игрока (тап/взятие): «❓» над головой, спящий просыпается
    * сразу — без потягивания (оно только после сна «по своей воле») — и секунд
    * 5–8 стоит на месте, приходя в себя. Мурчание погаснет само на сверке тика. */
   function poke(a: Actor): void {
-    spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * depthScale(a.z) * 0.9, '❓');
-    if (!a.busy) enterState(a, 'idle', 5 + Math.random() * 3);
+    spawnMoodFx(centerX + a.ox, poseY(a) - catH * poseScale(a) * 0.9, '❓');
+    if (!a.busy && !a.jump) enterState(a, 'idle', 5 + Math.random() * 3);
   }
 
   /**
@@ -236,7 +433,7 @@ export function createLivingFloor(
     ].join('|');
   }
 
-  function makeActor(cat: Cat, savedOx?: number, savedZ?: number, savedFacing?: 1 | -1, savedPhase?: number): Actor {
+  function makeActor(cat: Cat, prev?: Actor): Actor {
     const busy = isBusy(ctx.state, cat.id);
     const adult = isAdult(cat, ctx.now());
     const selected = ctx.selection.includes(cat.id);
@@ -312,7 +509,7 @@ export function createLivingFloor(
     // изучат — первое открытие инфо-меню снимает cat.isNew (см. game.openCatMenu),
     // а пересборка пола в commit() убирает бейдж. Ставит флаг только покупка (buyCat).
     if (cat.isNew) {
-      const txt = label('✨ новый', 13, 0xffffff, '800', { color: 0x8a2b26, width: 3 });
+      const txt = label(t('✨ новый', '✨ new'), 13, 0xffffff, '800', { color: 0x8a2b26, width: 3 });
       const pw = txt.width + 16, ph = txt.height + 5;
       const pill = new Graphics();
       pill.roundRect(-pw / 2, -ph / 2, pw, ph, ph / 2)
@@ -324,11 +521,17 @@ export function createLivingFloor(
     }
 
     const mem = posMemory.get(cat.id);
-    const z = savedZ ?? mem?.z ?? Math.random();
-    const ox = savedOx ?? (mem ? mem.u * maxOx(z) : (Math.random() * 2 - 1) * maxOx(z));
-    view.position.set(centerX + ox, yAt(z));
-    view.scale.set(growthScale(cat, ctx.now()) * depthScale(z)); // котёнок мал + перспектива
-    view.zIndex = Math.round(yAt(z));
+    // поза переживает и пересборку актёра (сменилась подпись/занятость), и
+    // пересборку всей комнаты при ресайзе (posMemory) — включая «стоит на полке»
+    const onShelf = !!shelf && (prev?.onShelf ?? mem?.shelf ?? false);
+    const z = prev?.z ?? mem?.z ?? Math.random();
+    const span = onShelf ? shelf!.walkHalf : maxOx(z);
+    const u = mem ? mem.u : Math.random() * 2 - 1;
+    const ox = prev?.ox ?? ((onShelf ? shelfOx : 0) + u * span);
+    const gy = onShelf ? shelf!.y : yAt(z);
+    view.position.set(centerX + ox, gy);
+    view.scale.set(growthScale(cat, ctx.now()) * (onShelf ? shelf!.scale : depthScale(z))); // котёнок мал + перспектива
+    view.zIndex = Math.round(gy);
     view.eventMode = 'static';
     view.cursor = busy ? 'pointer' : 'grab';
 
@@ -337,11 +540,13 @@ export function createLivingFloor(
 
     const actor: Actor = {
       cat, sig: viewSig(cat), view, body, sprite, glow, shadow, baseScale, busy, adult,
-      ox, z, targetOx: ox, targetZ: z, facing: savedFacing ?? mem?.facing ?? 1,
-      phase: savedPhase ?? mem?.phase ?? Math.random() * 6,
+      ox, z, targetOx: ox, targetZ: z, facing: prev?.facing ?? mem?.facing ?? 1,
+      phase: prev?.phase ?? mem?.phase ?? Math.random() * 6,
       leapT: 0, leapVX: 0, leapPending: false, turnT: 0, moodT: 2 + Math.random() * 6, blink, zoneU,
       state: 'idle', stateLeft: Math.random() * 3, // стартовая рассинхронизация, чтобы не все разом пошли бродить
       stuckT: 0, pushed: 0,
+      onShelf, wantShelf: false, jump: null,
+      shelfLeft: prev?.shelfLeft ?? SHELF_STAY_MIN + Math.random() * SHELF_STAY_VAR,
       infoIcon: null,
     };
 
@@ -350,8 +555,8 @@ export function createLivingFloor(
     } else {
       view.on('pointerdown', (e) => { poke(actor); ctx.startGrab({
         cat,
-        // «на весу» кот того же размера, что и на полу (с учётом роста и глубины)
-        displayH: catH * growthScale(cat, ctx.now()) * depthScale(actor.z),
+        // «на весу» кот того же размера, что и на полу/полке (с учётом роста и глубины)
+        displayH: catH * growthScale(cat, ctx.now()) * groundScale(actor),
         hide: () => setHidden(cat.id, true),
         show: () => setHidden(cat.id, false),
         onTap: () => ctx.openCatMenu(cat),
@@ -361,7 +566,10 @@ export function createLivingFloor(
           if (!a) return;
           // gx/gy — координаты виртуальной сцены (uiRoot) → в систему слоя пола
           const lp = layer.toLocal({ x: gx, y: gy ?? 0 }, ctx.uiRoot);
-          if (gy === undefined) lp.y = yAt(a.z);
+          if (gy === undefined) lp.y = groundY(a);
+          // уронили прямо на доску полки — кот остаётся там (если наверху не тесно)
+          if (gy !== undefined && dropOnShelf(a, lp.x, lp.y)) return;
+          leaveShelf(a);
           // глубина из точки сброса по Y (вне диапазона — прижимаем к краю)
           const nz = Math.max(0, Math.min(1, (yNear - lp.y) / Math.max(1, yNear - yFar)));
           const m = maxOx(nz);
@@ -420,9 +628,9 @@ export function createLivingFloor(
       // вид кота не изменился — оставляем готового актёра со всей его анимацией
       if (p && p.sig === viewSig(cat)) { p.cat = cat; p.view.visible = cat.id !== held; return p; }
       if (p) p.view.destroy({ children: true }); // выбор/занятость/подпись изменились — пересобираем
-      const a = makeActor(cat, p?.ox, p?.z, p?.facing, p?.phase);
+      const a = makeActor(cat, p);
       a.view.visible = cat.id !== held;
-      layer.addChild(a.view);
+      hostOf(a).addChild(a.view);
       return a;
     });
   }
@@ -436,15 +644,18 @@ export function createLivingFloor(
       a.phase += dt;
       a.blink?.setSleep(a.state === 'sleep'); // дремлет → веки медленно опускаются
       a.blink?.update(dt);                    // моргание глаз
-      const ds = depthScale(a.z);
+      let ds = poseScale(a); // масштаб на текущей опоре (в полёте — на дуге)
       a.view.scale.set(growthScale(a.cat, now) * ds); // котята подрастают + перспектива
-      a.view.zIndex = Math.round(yAt(a.z));
+      a.view.zIndex = Math.round(poseY(a));
       // запоминаем позу — переживает пересборку комнаты при ресайзе окна
-      posMemory.set(a.cat.id, { u: a.ox / Math.max(1, maxOx(a.z)), z: a.z, facing: a.facing, phase: a.phase });
+      posMemory.set(a.cat.id, {
+        u: (a.ox - (a.onShelf ? shelfOx : 0)) / Math.max(1, a.onShelf && shelf ? shelf.walkHalf : maxOx(a.z)),
+        z: a.z, facing: a.facing, phase: a.phase, shelf: a.onShelf,
+      });
       // момент взросления: эффект + пересборка актёра (появятся имя/пол над головой)
       if (!a.adult && isAdult(a.cat, now)) {
         a.adult = true;
-        spawnGrowFx(centerX + a.ox, yAt(a.z) - catH * 0.55 * ds);
+        spawnGrowFx(centerX + a.ox, poseY(a) - catH * 0.55 * ds);
         matured.push(a);
       }
 
@@ -465,19 +676,29 @@ export function createLivingFloor(
       // спящий видимый кот тихо мурчит (взятый за шкирку — visible=false — молчит)
       if (a.state === 'sleep' && a.view.visible) sleepy.push(a.cat.id);
 
-      if (a.busy || !a.view.visible || (focused && focus!.frozen)) continue;
+      // «Заморозка» кота с открытым инфо-меню не касается летящего: иначе тапнутый
+      // в прыжке кот повис бы в воздухе до закрытия меню.
+      if (a.busy || !a.view.visible || (focused && focus!.frozen && !a.jump)) continue;
 
       a.turnT = Math.max(0, a.turnT - dt);
       a.moodT -= dt;
       a.stateLeft -= dt;
+      if (a.onShelf && !a.jump) a.shelfLeft -= dt; // отсчёт «гостевания» наверху
 
       // --- машина состояний: движение только в 'walk', иначе стоим на месте ---
       let movingX = false, movingZ = false;
-      if (a.state === 'walk') {
+      if (a.state === 'jump') {
+        // полёт: по X — по прямой, дугу по Y рисует poseY (парабола)
+        const j = a.jump!;
+        j.t += dt;
+        const p = Math.min(1, j.t / j.dur);
+        a.ox = lerp(j.fromOx, j.toOx, p);
+        if (p >= 1) landJump(a);
+      } else if (a.state === 'walk') {
         const dz = a.targetZ - a.z;
         movingZ = Math.abs(dz) > 0.01;
         if (movingZ) a.z += Math.sign(dz) * Math.min(Math.abs(dz), Z_SPEED * dt);
-        const dsz = depthScale(a.z);
+        const dsz = groundScale(a);
         const dox = a.targetOx - a.ox;
         movingX = Math.abs(dox) > 3;
         if (a.leapT > 0) {
@@ -498,11 +719,12 @@ export function createLivingFloor(
             a.ox += a.facing * Math.min(Math.abs(dox), SPEED * dsz * dt);
           }
         }
-        const m = maxOx(a.z);
-        a.ox = Math.max(-m, Math.min(m, a.ox));
+        a.ox = Math.max(oxLo(a), Math.min(oxHi(a), a.ox));
         if (a.leapT <= 0 && ((!movingX && !movingZ) || a.stateLeft <= 0)) pickNextState(a);
       } else if (a.stateLeft <= 0) {
-        pickNextState(a);
+        // замах кончился — отрыв: с пола на доску, с доски на пол
+        if (a.state === 'crouch') startJump(a, !a.onShelf);
+        else pickNextState(a);
       }
 
       // --- поза по текущему состоянию ---
@@ -557,6 +779,32 @@ export function createLivingFloor(
           sx = 1 - curve * 0.2;
           break;
         }
+        case 'crouch': {
+          // замах перед прыжком: приседает и мелко виляет — как настоящий кот,
+          // прицеливающийся на полку
+          const t = 1 - Math.max(0, a.stateLeft) / CROUCH_DUR; // 0 → 1
+          const dip = Math.min(1, t * 2.4);
+          const wig = Math.sin(t * Math.PI * 7) * 0.035 * dip;
+          sy = 1 - 0.18 * dip + wig;
+          sx = 1 + 0.14 * dip - wig;
+          break;
+        }
+        case 'jump': {
+          // в полёте кот вытягивается «свечкой» и чуть кренится по ходу движения
+          const j = a.jump;
+          const air = j ? Math.sin(Math.min(1, j.t / j.dur) * Math.PI) : 0;
+          sy = 1 + 0.16 * air;
+          sx = 1 - 0.1 * air;
+          rot = a.facing * 0.1 * air;
+          break;
+        }
+        case 'land': {
+          // амортизация лап: спружинил и выпрямился
+          const k = Math.max(0, a.stateLeft) / LAND_DUR; // 1 → 0
+          sy = 1 - 0.18 * k;
+          sx = 1 + 0.14 * k;
+          break;
+        }
         default: // 'idle' — просто дышим
           sy = 1 + Math.sin(a.phase * 2) * 0.02;
       }
@@ -570,10 +818,16 @@ export function createLivingFloor(
       a.glow.rotation = sp.rotation;
       // тень остаётся на полу — только «прижимается» при подскоке, не летает вместе с котом
       a.shadow.scale.set(1 - hop * 0.15);
+      a.shadow.visible = !a.jump; // оторвался от опоры — тень под лапами гасим
       a.body.y = -bodyLift;
 
+      // опора могла смениться прямо в этом кадре (взлёт/посадка) — пересчитываем
+      ds = poseScale(a);
+      const vy = poseY(a);
+      a.view.scale.set(growthScale(a.cat, now) * ds);
       a.view.x = centerX + a.ox;
-      a.view.y = yAt(a.z);
+      a.view.y = vy;
+      a.view.zIndex = Math.round(vy);
 
       // эмоция-пузырёк: редкая, чаще привязана к текущему занятию
       if (a.moodT <= 0) {
@@ -583,7 +837,7 @@ export function createLivingFloor(
         else if (a.state === 'groom' && Math.random() < 0.5) emoji = '🧶';
         // «❓» больше не случайный — он теперь реакция на тап игрока (см. poke)
         else if (a.state !== 'sleep' && Math.random() < 0.35) emoji = Math.random() < 0.5 ? '❤️' : '🐟';
-        if (emoji) spawnMoodFx(centerX + a.ox, yAt(a.z) - catH * ds * 0.9, emoji);
+        if (emoji) spawnMoodFx(centerX + a.ox, vy - catH * ds * 0.9, emoji);
       }
     }
 
@@ -592,13 +846,17 @@ export function createLivingFloor(
     // сидячие коты «ползут» по сцене, а те, что уже устроились у стены, откуда
     // толкать больше некуда, со временем выдавливаются к центру. Отдельным
     // проходом — зоны задают лишь НАМЕРЕНИЕ цели блуждания, а не жёсткую позицию.
+    // Коты на полке (и все, кто в воздухе) в расталкивании не участвуют вовсе:
+    // на узкой доске они ходят СКВОЗЬ друг друга, а не устраивают затор.
     for (const a of actors) a.pushed = 0;
     for (let i = 0; i < actors.length; i++) {
       const a = actors[i]!;
-      if (a.busy || !a.view.visible || (focus?.id === a.cat.id && focus.frozen)) continue;
+      if (a.busy || !a.view.visible || a.onShelf || a.jump
+        || (focus?.id === a.cat.id && focus.frozen)) continue;
       for (let j = i + 1; j < actors.length; j++) {
         const b = actors[j]!;
-        if (b.busy || !b.view.visible || (focus?.id === b.cat.id && focus.frozen)) continue;
+        if (b.busy || !b.view.visible || b.onShelf || b.jump
+          || (focus?.id === b.cat.id && focus.frozen)) continue;
         if (Math.abs(a.z - b.z) > 0.12) continue; // разная глубина — визуально не пересекаются
         const aWalk = a.state === 'walk', bWalk = b.state === 'walk';
         if (!aWalk && !bWalk) continue; // оба стоят/спят — не толкаемся
@@ -620,9 +878,8 @@ export function createLivingFloor(
       }
     }
     for (const a of actors) {
-      if (a.busy || !a.view.visible) continue;
-      const m = maxOx(a.z);
-      a.ox = Math.max(-m, Math.min(m, a.ox));
+      if (a.busy || !a.view.visible || a.jump) continue;
+      a.ox = Math.max(oxLo(a), Math.min(oxHi(a), a.ox));
       a.view.x = centerX + a.ox;
       // застрял в толчее и не может пройти — не пихается бесконечно, сдаётся и садится
       if (a.state === 'walk' && a.pushed > 1.5) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 2);
@@ -635,9 +892,9 @@ export function createLivingFloor(
       if (i < 0) continue;
       if (!a.view.visible) continue; // кота держат за шкирку — подпись появится при refresh
       a.view.destroy({ children: true });
-      const na = makeActor(a.cat, a.ox, a.z, a.facing, a.phase);
+      const na = makeActor(a.cat, a);
       actors[i] = na;
-      layer.addChild(na.view);
+      hostOf(na).addChild(na.view);
     }
 
     // анимация эффектов взросления: кольцо расходится, искорки разлетаются и гаснут
