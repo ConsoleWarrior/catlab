@@ -110,7 +110,7 @@ Valuable cats go on the show pedestal for passive income, the rest into client o
 2. Анализ. Тапните кота → «Генетический анализ»: он вскроет родословную и скрытые гены предков. От них зависит, какие породы у вас родятся.
 3. Вязка. Перетащите самку и самца в слот вязки в Инкубаторе и запустите таймер. Перед запуском загляните в прогноз пары — он показывает шансы пород.
 4. Котёнок. Родившегося малыша заберите из слота: ценного — в Питомник, простого — в Приют.
-5. Заказы. Откройте доску заказов в Приюте, положите подходящего кота в корзину и получите награду.
+5. Заказы. Откройте доску заказов в Питомнике (кнопка слева под названием комнаты), положите подходящего кота в корзину и получите награду.
 6. Выставка. Поднимите взрослого кота на пьедестал в Питомнике — он будет приносить доход, пока вы играете и пока вас нет.
 7. Генолаб. Тратьте монеты и ДНК на дерево улучшений: новые слоты вязки, шансы рецептов, ветеринар, усилители генов.
 
@@ -125,7 +125,7 @@ Controls: mouse or touch — everything is done by tapping and dragging. Swipe o
 2. Analysis. Tap a cat → "Genetic analysis": it reveals the pedigree and the hidden genes of its ancestors, which decide the breeds you can get.
 3. Breeding. Drag a female and a male into a breeding slot in the Incubator and start the timer. Check the pair forecast first — it shows the odds for each breed.
 4. Kitten. Take the newborn out of the slot: valuable ones to the Cattery, plain ones to the Shelter.
-5. Orders. Open the order board in the Shelter, put a matching cat into the basket and claim the reward.
+5. Orders. Open the order board in the Cattery (the button on the left under the room title), put a matching cat into the basket and claim the reward.
 6. Show. Lift an adult cat onto a pedestal in the Cattery — it earns income while you play and while you're away.
 7. Genolab. Spend coins and DNA on the upgrade tree: extra breeding slots, better recipe odds, a vet, gene boosters.
 

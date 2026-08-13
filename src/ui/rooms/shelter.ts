@@ -3,30 +3,22 @@
  * «в добрые руки» (переноска у двери) или сдадут в лабораторию за 🧬
  * (лабораторный слот). Тап по котику → меню. Улучшения — в оверлее ⚙️.
  *
- * Здесь же стойка заказов: кнопка 📋 у названия комнаты (со счётчиком заказов и
- * остатком до авто-смены ближайшего) и зона-корзина под ней — заказ можно закрыть
- * ТОЛЬКО котом, положенным в корзину (см. actions.claimOrder).
+ * Стойка заказов (кнопка 📋 + корзина) отсюда ПЕРЕЕХАЛА в Питомник (rooms/nursery.ts):
+ * заказы просят ценных котов, а живут они там. Кот, лежащий в корзине, здесь всё
+ * равно не гуляет по полу (старые сейвы) — его рисует корзина в Питомнике.
  */
 
-import { Container, Graphics, Rectangle, Sprite } from 'pixi.js';
+import { Container, Graphics } from 'pixi.js';
 import {
   catsIn, shelterCapacity, roomCount, buyCat, buyCatCost, isRescuePair, isInSlot, isUnlocked, shelterTotals,
-  isInBasket, basketCat, putCatInBasket, clearOrderBasket, msUntilOrderExpiry, matchesOrder,
+  isInBasket,
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane, cornerStation, stationBadge, shelfPlane, buildShelf } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
-import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
-import { catArtTexture } from '../catTextures.js';
+import { createLivingFloor } from '../livingFloor.js';
 import { t } from '../../i18n.js';
-
-/** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
-function fmtLeft(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 60_000));
-  const h = Math.floor(total / 60);
-  return `${h}:${String(total % 60).padStart(2, '0')}`;
-}
 
 export function createShelter(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'shelter', t('🏠 Приют', '🏠 Shelter'));
@@ -150,107 +142,6 @@ export function createShelter(ctx: UiContext): Room {
     bulkLayer.addChild(buyBtn, adoptBtn, labBtn);
   }
 
-  // --- Стойка заказов: кнопка 📋 у названия комнаты + корзина под ней ---
-  // Кнопка ведёт на доску заказов и показывает таймер до её смены (московская
-  // полночь). Корзина — drag-цель: положенный кот и есть «предъявленный клиенту»,
-  // только им можно закрыть заказ. Слой пересобирается в refresh() (состав доски,
-  // кот в корзине), а таймер тикает отдельно в tick() — без пересборки сцены.
-  const ordersLayer = new Container();
-  shell.container.addChild(ordersLayer);
-  // корзина — во всю ширину кнопки «📋 Заказы» (выровнена ровно под ней),
-  // повыше прежней — кот в ней читается крупно
-  const ORDERS_BW = 168, ORDERS_BH = 44;
-  const BASKET_W = ORDERS_BW, BASKET_H = 140;
-  let basketZone = new Rectangle(0, 0, 0, 0);
-  let ordersBtn: Button | null = null;
-
-  function refreshOrdersDesk(titleW: number): void {
-    ordersLayer.removeChildren();
-    const BW = ORDERS_BW, BH = ORDERS_BH;
-    const cx = 18 + titleW + 10 + BW / 2;      // сразу справа от плашки названия
-    const cy = ctx.topInset + 8 + 22;
-
-    const btn = new Button({ text: t('📋 Заказы', '📋 Orders'), w: BW, h: BH, color: COLORS.warn, textColor: COLORS.ink, fontSize: 13 });
-    btn.position.set(cx, cy);
-    btn.onTap = () => ctx.openOrders();
-    ordersBtn = btn;
-    ordersLayer.addChild(btn);
-    updateOrdersBtn();
-
-    // Корзина — зона во всю ширину кнопки ровно под ней. Кот в ней рисуется прямо
-    // тут (крупно), поэтому визуально понятно, кого именно предъявим клиенту.
-    const bx = cx - BASKET_W / 2;
-    const by = cy + BH / 2 + 10;
-    basketZone = new Rectangle(bx, by, BASKET_W, BASKET_H);
-    const cat = basketCat(ctx.state);
-    // подсветка, когда кот в корзине подходит хоть под один заказ на доске
-    const fits = !!cat && ctx.state.orders.some((o) => matchesOrder(o, cat));
-
-    const box = new Graphics();
-    box.roundRect(bx, by, BASKET_W, BASKET_H, 14)
-      .fill({ color: cat ? 0xfff3d9 : 0xffffff, alpha: cat ? 0.95 : 0.7 })
-      .stroke({ width: fits ? 3 : 2, color: fits ? COLORS.good : COLORS.cardEdge });
-    ordersLayer.addChild(box);
-
-    // вынуть кота из корзины обратно на пол (тап по корзине/коту)
-    const takeOut = (): void => {
-      if (!basketCat(ctx.state)) { ctx.toast(t('Перетащи сюда кота — и открой 📋 Заказы', 'Drag a cat here — then open 📋 Orders')); return; }
-      clearOrderBasket(ctx.state);
-      ctx.commit();
-      ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
-    };
-
-    if (cat) {
-      // арт-спрайт коллекции (тот же вариант, что кот показывает на полу), фолбэк — процедурный
-      const sp = new Sprite(catArtTexture(cat) ?? ctx.catTexture(cat));
-      const k = Math.min((BASKET_W - 22) / sp.texture.width, (BASKET_H - 30) / sp.texture.height);
-      sp.scale.set(k);
-      sp.anchor.set(0.5, 1);
-      sp.position.set(bx + BASKET_W / 2, by + BASKET_H - 8);
-      // тонкая рамка на фоне комнаты читается плохо — статус подписываем словами
-      const badge = label(fits ? t('✓ подходит', '✓ matches') : t('не подходит', 'does not match'), 12, COLORS.ink, '800');
-      badge.anchor.set(0.5, 0);
-      const pill = new Graphics();
-      const pw = badge.width + 14;
-      pill.roundRect(bx + BASKET_W / 2 - pw / 2, by + BASKET_H - 2, pw, 20, 10)
-        .fill({ color: fits ? COLORS.good : COLORS.cardEdge, alpha: 0.95 });
-      badge.position.set(bx + BASKET_W / 2, by + BASKET_H + 1);
-      ordersLayer.addChild(sp, pill, badge);
-
-      // кота можно не только тапнуть (вынуть на пол), но и взять за шкирку —
-      // утащить на пол в нужную точку или сразу на станцию (см. tryDropCat)
-      sp.eventMode = 'static';
-      sp.cursor = 'grab';
-      sp.on('pointerdown', (e) => ctx.startGrab({
-        cat,
-        displayH: sp.texture.height * k, // «на весу» — того же размера, что в корзине
-        hide: () => { sp.visible = false; pill.visible = false; badge.visible = false; },
-        show: () => { sp.visible = true; pill.visible = true; badge.visible = true; },
-        onTap: takeOut,
-        onDrop: () => { /* никуда не пристроили — кот остаётся в корзине (show вернул) */ },
-      }, e));
-    } else {
-      const hint = label(t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket'), 13, COLORS.inkSoft, '700');
-      hint.anchor.set(0.5);
-      hint.position.set(bx + BASKET_W / 2, by + BASKET_H / 2);
-      ordersLayer.addChild(hint);
-    }
-
-    // тап по корзине: с котом — вынуть обратно на пол, пустая — подсказка
-    box.eventMode = 'static';
-    box.cursor = cat ? 'pointer' : 'default';
-    box.on('pointertap', takeOut);
-  }
-
-  /** Подпись кнопки: число заказов + остаток до авто-смены ближайшего (все слоты активны). */
-  function updateOrdersBtn(): void {
-    const orders = ctx.state.orders;
-    const total = orders.length;
-    if (total === 0) { ordersBtn?.setText(t('📋 Заказы 0', '📋 Orders 0')); return; }
-    const soonest = Math.min(...orders.map((o) => msUntilOrderExpiry(o, ctx.now())));
-    ordersBtn?.setText(t(`📋 Заказы ${total}\n⏳ ${fmtLeft(soonest)}`, `📋 Orders ${total}\n⏳ ${fmtLeft(soonest)}`));
-  }
-
   const floorLayer = new Container();
   shell.container.addChild(floorLayer);
 
@@ -290,22 +181,12 @@ export function createShelter(ctx: UiContext): Room {
   }
 
   /**
-   * Уронили кота на корзину → предъявим его клиентам; на лабораторию → сдача за 🧬;
-   * на переноску → пристройство; иначе переезд.
+   * Уронили кота на лабораторию → сдача за 🧬; на переноску → пристройство;
+   * иначе переезд. (Корзина заказов уехала в Питомник — здесь её зоны нет.)
    */
   function tryDropCat(cat: Cat, gx: number, gy: number): boolean {
     // gx/gy — координаты виртуальной сцены; зоны — в локальных координатах комнаты
     const lp = shell.container.toLocal({ x: gx, y: gy }, ctx.uiRoot);
-    const fromBasket = isInBasket(ctx.state, cat.id); // кота тащат ИЗ корзины
-    if (basketZone.contains(lp.x, lp.y)) {
-      if (fromBasket) return false; // вернули на место — endGrab покажет кота в корзине
-      const r = putCatInBasket(ctx.state, cat.id);
-      if (!r.ok) { ctx.toast(r.reason); return false; }
-      ctx.commit();
-      const fits = ctx.state.orders.some((o) => matchesOrder(o, cat));
-      ctx.toast(fits ? t('Котик в корзине — открой 📋 Заказы 🧺', 'The cat is in the basket — open 📋 Orders 🧺') : t('Котик в корзине, но под заказы не подходит 🧺', 'The cat is in the basket but matches no order 🧺'));
-      return true;
-    }
     if (labZone.contains(lp.x, lp.y)) {
       if (!isUnlocked(ctx.state, 'labStation')) {
         ctx.toast(t('Открой станцию «В биобанк» в Генолабе 🔬', 'Unlock the "To the biobank" station in the Genolab 🔬'));
@@ -322,17 +203,6 @@ export function createShelter(ctx: UiContext): Room {
       ctx.openAdoptConfirm(cat);   // «Отдать котика в добрые руки?» (Да → adoptCat)
       return true;
     }
-    if (fromBasket) {
-      // кота вытащили из корзины перетаскиванием — вынимаем на пол в точку сброса
-      // (глубина по Y сброса, как при обычном дропе на «живом полу»)
-      const nz = Math.max(0, Math.min(1, (plane.yNear - lp.y) / Math.max(1, plane.yNear - plane.yFar)));
-      const half = Math.max(1, plane.nearHalfW + (plane.farHalfW - plane.nearHalfW) * nz);
-      rememberFloorPos(cat.id, (lp.x - plane.centerX) / half, nz);
-      clearOrderBasket(ctx.state);
-      ctx.commit();
-      ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
-      return true;
-    }
     return false;
   }
 
@@ -341,26 +211,17 @@ export function createShelter(ctx: UiContext): Room {
     // на полу — без тех, кто сейчас стоит в слоте инкубатора (они «в отъезде»)
     const present = catsIn(ctx.state, 'shelter').filter((c) => !isInSlot(ctx.state, c.id));
     const cap = shelterCapacity(ctx.state);
-    // вместимость комнаты — счётчиком справа в плашке названия; плашка при этом
-    // расширяется, поэтому кнопку заказов ставим по её ИТОГОВОЙ ширине
-    const titleW = shell.setTitleBadge(`🐱 ${present.length}/${cap}`);
+    // вместимость комнаты — счётчиком справа в плашке названия
+    shell.setTitleBadge(`🐱 ${present.length}/${cap}`);
 
     refreshLabStation(); // замок станции снимается, когда уровень дорастает
     refreshAdoptStation(); // станция пристройства (правый угол) — всегда открыта
     refreshBulkButtons(); // суммы/замок/доступность кнопок «…всех»
-    refreshOrdersDesk(titleW); // доска заказов: кнопка с таймером + корзина
     floor.refresh();
   }
 
-  // Таймер до смены доски тикает раз в секунду — пересобирать сцену ради него не нужно.
-  let tickAcc = 0;
   function tick(dt: number): void {
     floor.tick(dt);
-    tickAcc += dt;
-    if (tickAcc >= 1) {
-      tickAcc = 0;
-      updateOrdersBtn();
-    }
   }
 
   return {
@@ -368,13 +229,12 @@ export function createShelter(ctx: UiContext): Room {
     refresh, tick, tryDropCat,
     /**
      * Якоря подсветки обучения (см. ui/tutorial.ts): `cat:<id>` — котик на полу,
-     * 'adopt' — станция «в добрые руки» в правом углу, 'orders' — кнопка 📋.
+     * 'adopt' — станция «в добрые руки» в правом углу.
      * Узлы отдаём живыми: комната пересобирается, а кот на полу ещё и ходит.
      */
     anchor: (key) => {
       if (key.startsWith('cat:')) return floor.nodeOf(key.slice(4));
       if (key === 'adopt') return adoptLayer.children.length > 0 ? adoptLayer : null;
-      if (key === 'orders') return ordersBtn && !ordersBtn.destroyed ? ordersBtn : null;
       return null;
     },
   };

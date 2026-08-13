@@ -1,8 +1,8 @@
 /**
  * Обучение новичка (FTUE) — визуальный слой. Ведёт по базовой петле игры:
  * 🧬 анализ → пара в слот → 🔮 прогноз пары → «Свести» → ⚡ подарочное ускорение →
- * малыш в Приют → 🤝 в добрые руки → 📋 заказы → 🏆 пьедестал. Логика шага —
- * чистая функция ядра (`game/tutorial.ts`), здесь только показ.
+ * малыш в Приют → 🤝 в добрые руки → 📋 заказы (доска в Питомнике) → 🏆 пьедестал.
+ * Логика шага — чистая функция ядра (`game/tutorial.ts`), здесь только показ.
  *
  * Принцип — МЯГКАЯ подсветка: ничего не блокируется и не затемняется, все тапы
  * проходят насквозь. Игрок волен игнорировать подсказку, уйти в другую комнату
@@ -375,14 +375,15 @@ export class Tutorial {
       }
       case 'orders':
         return {
-          room: 'shelter', key: 'orders', gesture: 'tap',
+          room: 'nursery', key: 'orders', gesture: 'tap',
           text: t(
-            '📋 Заказы — главный заработок игры. Клиент просит кота определённой породы '
-              + 'или не ниже нужной редкости, ты кладёшь подходящего в 🧺 корзину под кнопкой и жмёшь «Выполнить»: '
-              + 'платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
-            '📋 Orders are the main earner of the game. A client asks for a cat of a certain breed '
-              + 'or of at least a certain rarity, you put a matching cat into the 🧺 basket under the button and hit "Complete": '
-              + 'it pays 💰, 💎 and ⭐ XP. An order lives 6 hours and then changes by itself. Open the board',
+            '📋 Заказы — главный заработок игры, доска висит в Питомнике слева. Клиент просит кота '
+              + 'определённой породы или не ниже нужной редкости, ты кладёшь подходящего в 🧺 корзину '
+              + 'под кнопкой и жмёшь «Выполнить»: платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
+            '📋 Orders are the main earner of the game, and the board hangs on the left in the Cattery. '
+              + 'A client asks for a cat of a certain breed or of at least a certain rarity, you put a matching cat '
+              + 'into the 🧺 basket under the button and hit "Complete": it pays 💰, 💎 and ⭐ XP. '
+              + 'An order lives 6 hours and then changes by itself. Open the board',
           ),
         };
       case 'champion':

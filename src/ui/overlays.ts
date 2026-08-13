@@ -2398,7 +2398,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
 }
 
 /**
- * Доска заказов (кнопка 📋 в Приюте). Каждый слот всегда держит активный заказ со своим
+ * Доска заказов (кнопка 📋 в Питомнике). Каждый слот всегда держит активный заказ со своим
  * 6-часовым таймером жизни: не выполнил вовремя — заказ сам сменится (на строке виден
  * остаток «⏳ сменятся через Ч:ММ»). У каждого заказа свой часовой кулдаун 📺-обновления.
  * Выполнить заказ можно ТОЛЬКО котом из корзины: кнопка «Выполнить» активна лишь у строк,
@@ -2416,7 +2416,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
 
   const cat = basketCat(ctx.state);
   const basket = label(
-    cat ? t(`🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}`, `🧺 In the basket: ${cat.name?.trim() || describeCat(cat)}`) : t('🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Приюте', '🧺 The basket is empty — drag a cat into the basket under the 📋 button in the Shelter'),
+    cat ? t(`🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}`, `🧺 In the basket: ${cat.name?.trim() || describeCat(cat)}`) : t('🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Питомнике', '🧺 The basket is empty — drag a cat into the basket under the 📋 button in the Cattery'),
     13, cat ? COLORS.ink : COLORS.inkSoft, '800',
   );
   basket.anchor.set(0.5, 0);

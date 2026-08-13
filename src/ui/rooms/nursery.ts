@@ -11,10 +11,12 @@
  * Чемпион на тумбе моргает и «красуется» — см. ChampAnim/updateChampions ниже.
  * Ветеринар (💉) переехал в Инкубатор — там шприц перетаскивают на кота в слоте вязки.
  * В правом нижнем углу — криокапсула (🧊, drag кота → заморозка в крио-банк).
+ * Слева под названием комнаты — стойка заказов (кнопка 📋 + корзина), переехавшая
+ * из Приюта: заказы просят ЦЕННЫХ котов, а живут они как раз здесь.
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
-import { Container, Graphics, Sprite } from 'pixi.js';
+import { Container, Graphics, Rectangle, Sprite } from 'pixi.js';
 import type { Text } from 'pixi.js';
 import {
   catsIn, roomCount, nurseryCapacity, isInSlot, moveCat,
@@ -25,15 +27,16 @@ import {
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
   foodRatePerMin, feedingCatCount, foodBuyQuote,
   cryoUnlocked,
+  isInBasket, basketCat, putCatInBasket, clearOrderBasket, msUntilOrderExpiry, matchesOrder,
   FOOD_PACK_UNITS, CHAMPION_SLOTS_BASE, UPGRADES,
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
+import { roomShell, floorPlane, cornerStation, stationBadge, TITLE_H } from './shell.js';
 import { decorTexture } from '../decorArt.js';
 import { Button, COLORS, label } from '../theme.js';
-import { createLivingFloor } from '../livingFloor.js';
-import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
+import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
+import { catArtTexture, catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { attachBlink, type Blinker } from '../eyeBlink.js';
 import { darken, lighten } from '../../render/palette.js';
 import { t } from '../../i18n.js';
@@ -45,6 +48,18 @@ function pedCountFor(_ctx: UiContext): number {
 
 // Правая колонка шапки: кормушка (покупка котов переехала в Приют).
 const COL_W = 256;
+
+// --- Стойка заказов (левая колонка под названием комнаты) ---
+// Левый край блока — как у титульной плашки (PAD в rooms/shell.ts).
+const ORDERS_X = 18;
+const ORDERS_BH = 44;
+
+/** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
+function fmtLeft(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 60_000));
+  const h = Math.floor(total / 60);
+  return `${h}:${String(total % 60).padStart(2, '0')}`;
+}
 
 /**
  * Дуга пьедесталов у задней стены — в долях ширины/высоты комнаты (как декор):
@@ -160,13 +175,124 @@ export function createNursery(ctx: UiContext): Room {
     cryoLayer.addChild(box, snow, badge);
   }
 
+  // --- Стойка заказов: кнопка 📋 слева под названием комнаты + корзина под ней ---
+  // Переехала из Приюта: заказы просят ЦЕННЫХ котов, а живут они здесь — таскать
+  // их через две комнаты ради корзины было незачем. Место выбрано под мобильный
+  // ландшафт: слева свободна полоса стены (декор начинается от 0.18·w), блок не
+  // спорит ни с кормушкой справа, ни с дугой пьедесталов, ни с полом.
+  // Корзина — drag-цель: положенный кот и есть «предъявленный клиенту», только им
+  // можно закрыть заказ (см. actions.claimOrder). Слой пересобирается в refresh()
+  // (состав доски, кот в корзине), а таймер тикает отдельно в tick().
+  const ordersLayer = new Container();
+  shell.container.addChildAt(ordersLayer, shell.container.getChildIndex(floorLayer));
+  // Ширина колонки — по свободной полосе стены слева, высота корзины — от высоты
+  // комнаты: на телефоне сцена низкая, и прежний приютский блок 168×140 занимал бы
+  // там треть экрана. Корзина ровно под кнопкой и во всю её ширину.
+  const ORDERS_BW = Math.round(Math.max(118, Math.min(152, ctx.roomW * 0.15 - ORDERS_X)));
+  const BASKET_W = ORDERS_BW;
+  const BASKET_H = Math.round(Math.max(84, Math.min(132, ctx.roomH * 0.19)));
+  const BASKET_PILL_H = 19; // плашка «подходит/не подходит» — ВНУТРИ корзины, у нижней кромки
+  let basketZone = new Rectangle(0, 0, 0, 0);
+  let ordersBtn: Button | null = null;
+
+  function refreshOrdersDesk(): void {
+    ordersLayer.removeChildren();
+    const cx = ORDERS_X + ORDERS_BW / 2;
+    const cy = ctx.topInset + 8 + TITLE_H + 12 + ORDERS_BH / 2; // сразу под плашкой названия
+
+    const btn = new Button({ text: t('📋 Заказы', '📋 Orders'), w: ORDERS_BW, h: ORDERS_BH, color: COLORS.warn, textColor: COLORS.ink, fontSize: 13 });
+    btn.position.set(cx, cy);
+    btn.onTap = () => ctx.openOrders();
+    ordersBtn = btn;
+    ordersLayer.addChild(btn);
+    updateOrdersBtn();
+
+    // Корзина — зона во всю ширину кнопки ровно под ней. Кот в ней рисуется прямо
+    // тут, поэтому видно, кого именно предъявим клиенту.
+    const bx = cx - BASKET_W / 2;
+    const by = cy + ORDERS_BH / 2 + 8;
+    basketZone = new Rectangle(bx, by, BASKET_W, BASKET_H);
+    const cat = basketCat(ctx.state);
+    // подсветка, когда кот в корзине подходит хоть под один заказ на доске
+    const fits = !!cat && ctx.state.orders.some((o) => matchesOrder(o, cat));
+
+    const box = new Graphics();
+    box.roundRect(bx, by, BASKET_W, BASKET_H, 14)
+      .fill({ color: cat ? 0xfff3d9 : 0xffffff, alpha: cat ? 0.95 : 0.7 })
+      .stroke({ width: fits ? 3 : 2, color: fits ? COLORS.good : COLORS.cardEdge });
+    ordersLayer.addChild(box);
+
+    // вынуть кота из корзины обратно на пол (тап по корзине/коту)
+    const takeOut = (): void => {
+      if (!basketCat(ctx.state)) { ctx.toast(t('Перетащи сюда кота — и открой 📋 Заказы', 'Drag a cat here — then open 📋 Orders')); return; }
+      clearOrderBasket(ctx.state);
+      ctx.commit();
+      ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
+    };
+
+    if (cat) {
+      // арт-спрайт коллекции (тот же вариант, что кот показывает на полу), фолбэк — процедурный
+      const sp = new Sprite(catArtTexture(cat) ?? ctx.catTexture(cat));
+      const feet = by + BASKET_H - BASKET_PILL_H - 6; // лапы кота — над плашкой статуса
+      const k = Math.min((BASKET_W - 20) / sp.texture.width, (feet - by - 8) / sp.texture.height);
+      sp.scale.set(k);
+      sp.anchor.set(0.5, 1);
+      sp.position.set(bx + BASKET_W / 2, feet);
+      // тонкая рамка на фоне комнаты читается плохо — статус подписываем словами.
+      // Плашка лежит ВНУТРИ корзины: снаружи она спорила бы с именами котов на полу.
+      const badge = label(fits ? t('✓ подходит', '✓ matches') : t('не подходит', 'does not match'), 11.5, COLORS.ink, '800');
+      badge.anchor.set(0.5, 0.5);
+      const pill = new Graphics();
+      const pw = Math.min(BASKET_W - 12, badge.width + 14);
+      const pillY = by + BASKET_H - BASKET_PILL_H - 5;
+      pill.roundRect(bx + BASKET_W / 2 - pw / 2, pillY, pw, BASKET_PILL_H, 9)
+        .fill({ color: fits ? COLORS.good : COLORS.cardEdge, alpha: 0.95 });
+      badge.position.set(bx + BASKET_W / 2, pillY + BASKET_PILL_H / 2);
+      ordersLayer.addChild(sp, pill, badge);
+
+      // кота можно не только тапнуть (вынуть на пол), но и взять за шкирку —
+      // утащить на пол в нужную точку или сразу на пьедестал/в криокапсулу
+      sp.eventMode = 'static';
+      sp.cursor = 'grab';
+      sp.on('pointerdown', (e) => ctx.startGrab({
+        cat,
+        displayH: sp.texture.height * k, // «на весу» — того же размера, что в корзине
+        hide: () => { sp.visible = false; pill.visible = false; badge.visible = false; },
+        show: () => { sp.visible = true; pill.visible = true; badge.visible = true; },
+        onTap: takeOut,
+        onDrop: () => { /* никуда не пристроили — кот остаётся в корзине (show вернул) */ },
+      }, e));
+    } else {
+      const hint = label(t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket'), 12.5, COLORS.inkSoft, '700');
+      hint.anchor.set(0.5);
+      hint.position.set(bx + BASKET_W / 2, by + BASKET_H / 2);
+      ordersLayer.addChild(hint);
+    }
+
+    // тап по корзине: с котом — вынуть обратно на пол, пустая — подсказка
+    box.eventMode = 'static';
+    box.cursor = cat ? 'pointer' : 'default';
+    box.on('pointertap', takeOut);
+  }
+
+  /** Подпись кнопки: число заказов + остаток до авто-смены ближайшего (все слоты активны). */
+  function updateOrdersBtn(): void {
+    const orders = ctx.state.orders;
+    const total = orders.length;
+    if (total === 0) { ordersBtn?.setText(t('📋 Заказы 0', '📋 Orders 0')); return; }
+    const soonest = Math.min(...orders.map((o) => msUntilOrderExpiry(o, ctx.now())));
+    ordersBtn?.setText(t(`📋 Заказы ${total}\n⏳ ${fmtLeft(soonest)}`, `📋 Orders ${total}\n⏳ ${fmtLeft(soonest)}`));
+  }
+
   const plane = floorPlane(ctx.roomW, ctx.roomH, ctx.topInset);
   const floor = createLivingFloor(
     ctx, floorLayer,
     plane,
-    // по полу гуляют коты, кроме поставленных в слот вязки и выставленных чемпионов
+    // по полу гуляют коты, кроме поставленных в слот вязки, выставленных чемпионов
+    // и сидящего в корзине заказов (его рисует сама корзина)
     () => catsIn(ctx.state, 'nursery')
-      .filter((c) => !isInSlot(ctx.state, c.id) && !isChampion(ctx.state, c.id)),
+      .filter((c) => !isInSlot(ctx.state, c.id) && !isChampion(ctx.state, c.id)
+        && !isInBasket(ctx.state, c.id)),
   );
 
   /**
@@ -525,6 +651,22 @@ export function createNursery(ctx: UiContext): Room {
     const lp = shell.container.toLocal({ x: gx, y: gy }, ctx.uiRoot);
     const idx = pedestalAt(lp.x, lp.y);
     const wasChampion = isChampion(ctx.state, cat.id);
+    const fromBasket = isInBasket(ctx.state, cat.id); // кота тащат ИЗ корзины
+    // корзина заказов (слева под названием): кот в ней — «предъявленный клиенту»
+    if (basketZone.contains(lp.x, lp.y)) {
+      if (fromBasket) return false; // вернули на место — endGrab покажет кота в корзине
+      if (wasChampion) {
+        // чемпиона сначала снимаем с пьедестала: на полу ему нужно место
+        const off = moveCat(ctx.state, cat.id, 'nursery');
+        if (!off.ok) { ctx.toast(off.reason); return false; }
+      }
+      const r = putCatInBasket(ctx.state, cat.id);
+      if (!r.ok) { ctx.toast(r.reason); return false; }
+      ctx.commit();
+      const fits = ctx.state.orders.some((o) => matchesOrder(o, cat));
+      ctx.toast(fits ? t('Котик в корзине — открой 📋 Заказы 🧺', 'The cat is in the basket — open 📋 Orders 🧺') : t('Котик в корзине, но под заказы не подходит 🧺', 'The cat is in the basket but matches no order 🧺'));
+      return true;
+    }
     if (idx >= 0) {
       if (idx >= championSlots(ctx.state)) { ctx.toast(t('Пьедестал заперт 🔒', 'The pedestal is locked 🔒')); return false; }
       if (championAt(ctx.state, idx)?.id === cat.id) return false; // вернулся на свой же пьедестал
@@ -551,6 +693,17 @@ export function createNursery(ctx: UiContext): Room {
       if (!r.ok) { ctx.toast(r.reason); return false; } // нет места → вернётся на пьедестал
       ctx.commit();
       ctx.toast(t('Кот снят с выставки', 'The cat is off the show'));
+      return true;
+    }
+    if (fromBasket) {
+      // кота вытащили из корзины перетаскиванием — вынимаем на пол в точку сброса
+      // (глубина по Y сброса, как при обычном дропе на «живом полу»)
+      const nz = Math.max(0, Math.min(1, (plane.yNear - lp.y) / Math.max(1, plane.yNear - plane.yFar)));
+      const half = Math.max(1, plane.nearHalfW + (plane.farHalfW - plane.nearHalfW) * nz);
+      rememberFloorPos(cat.id, (lp.x - plane.centerX) / half, nz);
+      clearOrderBasket(ctx.state);
+      ctx.commit();
+      ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
       return true;
     }
     return false;
@@ -672,8 +825,13 @@ export function createNursery(ctx: UiContext): Room {
 
     refreshChampions();
     refreshCryo();   // станция-криокапсула появляется, когда открыт крио-банк
+    refreshOrdersDesk(); // стойка заказов: кнопка с таймером + корзина
     floor.refresh();
   }
+
+  // Таймер до смены ближайшего заказа тикает раз в секунду — пересобирать сцену
+  // ради подписи на кнопке не нужно.
+  let ordersAcc = 0;
 
   return {
     id: 'nursery', title: t('🏆 Питомник', '🏆 Cattery'), container: shell.container,
@@ -684,12 +842,15 @@ export function createNursery(ctx: UiContext): Room {
       updateAuras(dt); // золотая аура зоны дропа под котом «в руках»
       feederAcc += dt;
       if (feederAcc >= FEEDER_UPDATE_S) { feederAcc = 0; feederUpdate?.(); }
+      ordersAcc += dt;
+      if (ordersAcc >= 1) { ordersAcc = 0; updateOrdersBtn(); }
     }, tryDropCat,
     // Обучение новичка (см. ui/tutorial.ts): `cat:<id>` — котик на полу,
-    // 'pedestal' — зона дропа свободной тумбы выставки.
+    // 'pedestal' — зона дропа свободной тумбы выставки, 'orders' — кнопка 📋.
     anchor: (key) => {
       if (key.startsWith('cat:')) return floor.nodeOf(key.slice(4));
       if (key === 'pedestal') return tutorPedestalMark();
+      if (key === 'orders') return ordersBtn && !ordersBtn.destroyed ? ordersBtn : null;
       return null;
     },
   };

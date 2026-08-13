@@ -664,7 +664,7 @@ export function isChampion(state: GameState, catId: string): boolean {
   return (state.champions ?? []).includes(catId);
 }
 
-// --- Корзина заказов (зона в Приюте) ---
+// --- Корзина заказов (зона в Питомнике) ---
 
 /**
  * Кот, стоящий в корзине заказов (null — корзина пуста). Ссылка проверяется по
