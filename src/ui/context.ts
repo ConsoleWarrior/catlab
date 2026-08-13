@@ -124,6 +124,8 @@ export interface UiContext {
   openOrders(): void;
   /** Справка комнаты (кнопка ℹ️ в титульной плашке) — тексты в src/ui/roomHelp.ts. */
   openRoomHelp(roomId: string): void;
+  /** Политика конфиденциальности (п. 3.5) — открывается из ⚙️ Настроек. */
+  openPrivacy(): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;
   /**

@@ -285,7 +285,7 @@ export class Tutorial {
           text: t(
             'Начнём с науки: тапни котика → «🧬 Генетический анализ» → 🎁 бесплатно. '
               + 'Он вскроет родословную и скрытые гены предков — от них зависит, какие породы у тебя родятся',
-            'Science first: tap a cat → «🧬 Genetic analysis» → 🎁 free. '
+            'Science first: tap a cat → "🧬 Genetic analysis" → 🎁 free. '
               + 'It reveals the pedigree and the hidden genes of its ancestors — they decide which breeds you get',
           ),
         };
@@ -317,7 +317,7 @@ export class Tutorial {
           key: cat ? `cat:${cat.id}` : null,
           gesture: 'tap',
           overOverlay: true,
-          text: t('Второго проще: тапни котика → «💞 В свободный слот вязки»', 'The second one is easier: tap a cat → «💞 To a free breeding slot»'),
+          text: t('Второго проще: тапни котика → «💞 В свободный слот вязки»', 'The second one is easier: tap a cat → "💞 To a free breeding slot"'),
         };
       }
       case 'preview':
@@ -333,7 +333,7 @@ export class Tutorial {
       case 'breed':
         return {
           room: 'incubator', key: 'breed', gesture: 'tap',
-          text: t('Теперь жми «Свести» — порода котёнка зависит от родителей', 'Now hit «Breed» — the kitten breed depends on its parents'),
+          text: t('Теперь жми «Свести» — порода котёнка зависит от родителей', 'Now hit "Breed" — the kitten breed depends on its parents'),
         };
       case 'skip':
         return {
@@ -350,8 +350,8 @@ export class Tutorial {
           room: 'incubator', key: 'toShelter', gesture: 'tap',
           text: t(
             'Малыш родился! Пока он в окошке, слот занят. Отправь его кнопкой «🏚️ В приют» — '
-              + 'приют это перевалочный пункт для всех лишних котиков',
-            'The kitten is born! While it sits in the slot, the slot is busy. Send it away with «🏚️ To the shelter» — '
+              + 'приют — это перевалочный пункт для всех лишних котиков',
+            'The kitten is born! While it sits in the slot, the slot is busy. Send it away with "🏚️ To the shelter" — '
               + 'the shelter is the waypoint for every spare cat',
           ),
         };
@@ -377,11 +377,11 @@ export class Tutorial {
         return {
           room: 'shelter', key: 'orders', gesture: 'tap',
           text: t(
-            '📋 Заказы — главный заработок игры. Клиент называет приметы кота (цвет, узор, '
-              + 'уши, порода), ты кладёшь подходящего в 🧺 корзину под кнопкой и жмёшь «Выполнить»: '
+            '📋 Заказы — главный заработок игры. Клиент просит кота определённой породы '
+              + 'или не ниже нужной редкости, ты кладёшь подходящего в 🧺 корзину под кнопкой и жмёшь «Выполнить»: '
               + 'платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
-            '📋 Orders are the main earner of the game. A client names what the cat should look like (colour, pattern, '
-              + 'ears, breed), you put a matching cat into the 🧺 basket under the button and hit «Complete»: '
+            '📋 Orders are the main earner of the game. A client asks for a cat of a certain breed '
+              + 'or of at least a certain rarity, you put a matching cat into the 🧺 basket under the button and hit "Complete": '
               + 'it pays 💰, 💎 and ⭐ XP. An order lives 6 hours and then changes by itself. Open the board',
           ),
         };
@@ -400,7 +400,7 @@ export class Tutorial {
             text: t(
               'Родители всё ещё стоят в окошке вязки. Тапни кота → «🏠 В питомник» — '
                 + 'он пригодится на выставке',
-              'The parents are still standing in the breeding slot. Tap a cat → «🏠 To the cattery» — '
+              'The parents are still standing in the breeding slot. Tap a cat → "🏠 To the cattery" — '
                 + 'it will come in handy at the show',
             ),
           };

@@ -285,7 +285,7 @@ export function createIncubator(ctx: UiContext): Room {
     // Генная инженерия открывается покупкой узла «🥼 Учёный» в Улучшениях (Генолаб),
     // доступного с ур. LAB_UNLOCKS.engineering — до покупки вместо чипов замок.
     if (!isUnlocked(ctx.state, 'engineering')) {
-      const hint = lockHint(t('🧪 Усилители — открой «Учёного» 🔒', '🧪 Boosters — unlock the «Scientist» 🔒'), 13);
+      const hint = lockHint(t('🧪 Усилители — открой «Учёного» 🔒', '🧪 Boosters — unlock the "Scientist" 🔒'), 13);
       hint.anchor.set(0, 0.5);
       hint.position.set(firstCx - CHIP_W / 2, shell.titleH / 2);
       boostBar.addChild(hint);
@@ -951,7 +951,7 @@ export function createIncubator(ctx: UiContext): Room {
   function startSyringeDrag(e: FederatedPointerEvent): void {
     if (syrGhost) return;
     e.stopPropagation();                 // не даём начаться свайпу комнат
-    if (!isUnlocked(ctx.state, 'clinic')) { ctx.toast(t('Открой «Ветеринара» в Генолабе 🔬', 'Unlock the «Vet» in the Genolab 🔬')); return; }
+    if (!isUnlocked(ctx.state, 'clinic')) { ctx.toast(t('Открой «Ветеринара» в Генолабе 🔬', 'Unlock the "Vet" in the Genolab 🔬')); return; }
     ctx.app.canvas.style.cursor = 'grabbing';
     if (syrArtNode) syrArtNode.visible = false; // прячем домашний шприц на время виса
     syrGhost = syringeArt(SYRINGE_H * 1.15, false);

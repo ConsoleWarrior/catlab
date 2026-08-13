@@ -36,7 +36,8 @@ import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, 
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
 import { getMasterVolume, setMasterVolume, sfxEvent, sfxMeow } from './sound.js';
-import { t, tx, lang, setLang, type Lang } from '../i18n.js';
+import { canOfferAuth, isAuthorized, openAuthDialog } from '../platform/ysdk.js';
+import { t, tx, lang, setLang, AVAILABLE, type Lang, type LocStr } from '../i18n.js';
 
 /**
  * Поле ввода текста поверх канваса (HTML-оверлей). Надёжнее window.prompt
@@ -219,6 +220,61 @@ function slider(
   return c;
 }
 
+/**
+ * Политика конфиденциальности — п. 3.5 Требований: её текст должен быть в самой
+ * игре. Ссылкой это закрыть нельзя (внешние ссылки запрещены п. 8.4.2), поэтому
+ * текст лежит здесь и открывается из ⚙️ Настроек.
+ *
+ * Текст обязан отражать правду о том, что игра делает: прогресс в облаке Яндекс
+ * Игр, идентификатор игрока от платформы, реклама и покупки через её же SDK.
+ */
+const PRIVACY: LocStr[] = [
+  ['Игра не собирает и не передаёт разработчику ваши персональные данные: ни имени, ни почты, ни телефона, ни платёжных реквизитов.',
+   'The game does not collect or send the developer any personal data: no name, no email, no phone number, no payment details.'],
+  ['Что сохраняется: игровой прогресс — коты, валюты, уровень лаборатории, настройки. Он хранится на вашем устройстве и в облаке Яндекс Игр, чтобы игра продолжалась с любого устройства.',
+   'What is saved: your game progress — cats, currencies, lab level, settings. It is stored on your device and in the Yandex Games cloud so you can continue from any device.'],
+  ['Прогресс привязан к идентификатору игрока, который выдаёт платформа. Кто вы такой, игра не знает.',
+   'Progress is tied to a player id issued by the platform. The game does not know who you are.'],
+  ['Реклама и покупки кристаллов идут через SDK Яндекс Игр и подчиняются правилам Яндекса. Своих серверов у игры нет, наружу она ничего не отправляет.',
+   'Ads and crystal purchases go through the Yandex Games SDK and follow Yandex rules. The game has no servers of its own and sends nothing outside.'],
+  ['Чтобы удалить прогресс, очистите данные сайта в браузере: облачную копию можно удалить через настройки вашего аккаунта на Яндекс Играх.',
+   'To delete your progress, clear the site data in your browser; the cloud copy can be removed through your Yandex Games account settings.'],
+];
+
+/** Оверлей «Конфиденциальность» — текст политики (п. 3.5). */
+export function buildPrivacyPanel(ctx: UiContext, close: () => void): Container {
+  const W = Math.min(ctx.roomW - 40, 620);
+  const pad = 22;
+  const root = new Container();
+
+  const title = label(t('🔒 Конфиденциальность', '🔒 Privacy'), 19, COLORS.ink, '800');
+
+  let y = 58;
+  const texts: Text[] = [];
+  for (const line of PRIVACY) {
+    const p = new Text({
+      text: `• ${tx(line)}`,
+      style: {
+        fontFamily: FONT, fontSize: 14, fontWeight: '600', fill: COLORS.ink,
+        wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 19, align: 'left',
+      },
+    });
+    p.anchor.set(0, 0);
+    p.position.set(pad, y);
+    texts.push(p);
+    y += p.height + 10;
+  }
+
+  const closeBtn = new Button({ text: t('Понятно!', 'Got it!'), w: 200, h: 46, color: COLORS.primary, fontSize: 16 });
+  closeBtn.position.set(W / 2, y + 28);
+  closeBtn.onTap = close;
+
+  root.addChild(panel(W, y + 58, COLORS.hud, 18));
+  title.position.set(W / 2, 32);
+  root.addChild(title, ...texts, closeBtn);
+  return root;
+}
+
 /** Оверлей настроек. Пока — общая громкость звука (эффекты + музыка). */
 export function buildSettingsPanel(ctx: UiContext, close: () => void): Container {
   const W = 340;
@@ -253,10 +309,11 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   langCap.anchor.set(0, 0.5);
   langCap.position.set(pad, y + 4);
   const langBtns: Button[] = [];
-  const LANGS: { code: Lang; text: string }[] = [
-    { code: 'ru', text: '🇷🇺 RU' },
-    { code: 'en', text: '🇬🇧 EN' },
-  ];
+  // Кнопки строим из AVAILABLE (src/i18n.ts) — списка языков, на которые игра
+  // реально переведена. Своего перечня здесь быть не должно: он разойдётся с тем,
+  // что пишется в `<html lang>` и уходит в черновик Консоли (п. 2.10).
+  const FLAGS: Record<Lang, string> = { ru: '🇷🇺 RU', en: '🇬🇧 EN' };
+  const LANGS = AVAILABLE.map((code) => ({ code, text: FLAGS[code] }));
   LANGS.forEach((l, i) => {
     const on = lang() === l.code;
     const b = new Button({
@@ -270,12 +327,59 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   });
   y += 52;
 
+  const extra: Container[] = [];
+
+  // Вход в Яндекс ID. Строго по нажатию игрока (п. 1.2.1) и никогда не
+  // обязателен: гость играет и сохраняется как прежде (п. 1.2.2). Нужен он ради
+  // п. 1.13.3 — чтобы прогресс и купленные 💎 были доступны с других устройств,
+  // а не жили в localStorage, который на iOS чистится сам.
+  if (canOfferAuth() && !isAuthorized()) {
+    const authBtn = new Button({
+      text: t('🔑 Войти в Яндекс ID', '🔑 Sign in with Yandex ID'),
+      w: W - pad * 2, h: 44, color: COLORS.card, textColor: COLORS.ink, fontSize: 15,
+    });
+    authBtn.position.set(W / 2, y + 22);
+    authBtn.onTap = () => {
+      void openAuthDialog().then((ok) => {
+        if (!ok) return;
+        ctx.toast(t('Готово — прогресс теперь сохраняется в вашем аккаунте',
+          'Done — your progress is now saved to your account'));
+        close();
+      });
+    };
+    extra.push(authBtn);
+    y += 52;
+
+    const hint = new Text({
+      text: t('Гостевой прогресс останется на этом устройстве, пока вы не войдёте.',
+        'Guest progress stays on this device until you sign in.'),
+      style: {
+        fontFamily: FONT, fontSize: 12, fontWeight: '600', fill: COLORS.inkSoft,
+        wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 16, align: 'center',
+      },
+    });
+    hint.anchor.set(0.5, 0);
+    hint.position.set(W / 2, y - 8);
+    extra.push(hint);
+    y += hint.height + 8;
+  }
+
+  // Политика конфиденциальности — п. 3.5: её текст обязан быть в самой игре.
+  const privacyBtn = new Button({
+    text: t('🔒 Конфиденциальность', '🔒 Privacy'),
+    w: W - pad * 2, h: 42, color: COLORS.card, textColor: COLORS.ink, fontSize: 14,
+  });
+  privacyBtn.position.set(W / 2, y + 21);
+  privacyBtn.onTap = () => ctx.openPrivacy();
+  extra.push(privacyBtn);
+  y += 52;
+
   const closeBtn = new Button({ text: t('Готово', 'Done'), w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
   closeBtn.position.set(W / 2, y + 23);
   closeBtn.onTap = close;
   y += 58;
 
-  root.addChild(panel(W, y, COLORS.hud, 18), title, volCap, pctT, sl, langCap, ...langBtns, closeBtn);
+  root.addChild(panel(W, y, COLORS.hud, 18), title, volCap, pctT, sl, langCap, ...langBtns, ...extra, closeBtn);
   return root;
 }
 
@@ -458,7 +562,7 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
     y += 22;
     const hint = label(
       report.cappedByTime
-        ? t('поднять потолок: 🌙 «Ночной смотритель» в Улучшениях', 'raise the cap: 🌙 «Night keeper» in Upgrades')
+        ? t('поднять потолок: 🌙 «Ночной смотритель» в Улучшениях', 'raise the cap: 🌙 "Night keeper" in Upgrades')
         : t('кормушка в Питомнике', 'the feeder is in the Cattery'),
       10.5, COLORS.inkSoft, '600',
     );
@@ -1291,7 +1395,7 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
       hidden.length > 0 ? COLORS.ink : COLORS.inkSoft,
     );
   } else if (fog) {
-    footNote(t('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', '«???» nodes are hidden — a Genetic analysis reveals the whole pedigree and its hidden genes'), COLORS.inkSoft);
+    footNote(t('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', '"???" nodes are hidden — a Genetic analysis reveals the whole pedigree and its hidden genes'), COLORS.inkSoft);
     const anBtn = new Button({ text: t('🧬 Анализ', '🧬 Analyse'), w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
     anBtn.position.set(W / 2, y + 20);
     anBtn.onTap = () => ctx.openAnalyzeConfirm(cat);
@@ -1617,7 +1721,7 @@ export function buildPairPreview(ctx: UiContext, mother: Cat, father: Cat, close
 
   if (anyHidden) {
     const hint = new Text({
-      text: t('🧬 Генетический анализ обоих котов + рецепт в Котодексе раскроют названия «❓» исходов', '🧬 Analyse both cats and learn the recipe in the Catdex to reveal the «❓» outcomes'),
+      text: t('🧬 Генетический анализ обоих котов + рецепт в Котодексе раскроют названия «❓» исходов', '🧬 Analyse both cats and learn the recipe in the Catdex to reveal the "❓" outcomes'),
       style: {
         fontFamily: FONT, fontSize: 11, fontWeight: '600', fill: COLORS.inkSoft,
         align: 'center', wordWrap: true, wordWrapWidth: W - 40, lineHeight: 15,
@@ -1849,9 +1953,9 @@ export function buildLabConfirm(ctx: UiContext, cat: Cat, close: () => void): Co
   const root = new Container();
   const { dna, coins } = labReward(ctx.state, cat);
 
-  const title = label(t('Сдать котика в лабораторию?', 'Send the cat to the lab?'), 18, COLORS.ink, '800');
+  const title = label(t('Передать котика в биобанк?', 'Send the cat to the biobank?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 28);
-  const sub = label(t('на эксперименты — взамен 🧬 гены', 'for experiments — 🧬 genes in return'), 12.5, COLORS.inkSoft, '700');
+  const sub = label(t('на изучение — взамен 🧬 гены', 'for research — 🧬 genes in return'), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 50);
 
   const sp = catSprite(ctx.app, cat, 84);
@@ -1935,9 +2039,9 @@ export function buildBulkLabConfirm(ctx: UiContext, close: () => void): Containe
   const root = new Container();
   const { count, lab } = shelterTotals(ctx.state);
 
-  const title = label(t('Сдать всех в лабораторию?', 'Send every cat to the lab?'), 18, COLORS.ink, '800');
+  const title = label(t('Передать всех в биобанк?', 'Send every cat to the biobank?'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 30);
-  const sub = label(t(`на эксперименты — взамен 🧬 гены · ${count} 🐱`, `for experiments — 🧬 genes in return · ${count} 🐱`), 12.5, COLORS.inkSoft, '700');
+  const sub = label(t(`на изучение — взамен 🧬 гены · ${count} 🐱`, `for research — 🧬 genes in return · ${count} 🐱`), 12.5, COLORS.inkSoft, '700');
   sub.position.set(W / 2, 54);
   const extra = lab.coins > 0 ? `     💰 ${lab.coins}` : '';
   const reward = label(t(`Вы получите:   🧬 ${lab.dna}${extra}`, `You get:   🧬 ${lab.dna}${extra}`), 16, COLORS.ink, '800');
@@ -2089,7 +2193,7 @@ export function buildFreezeConfirm(ctx: UiContext, cat: Cat, close: () => void):
   who.position.set(W / 2, 172);
 
   const note = new Text({
-    text: t('❄️ В капсуле кот не ест и не приносит доход. Разморозки нет — освободить капсулу можно клоном 🧬 или утилизацией.', '❄️ In a capsule the cat neither eats nor earns. There is no thawing — a capsule is freed by cloning 🧬 or by recycling.'),
+    text: t('❄️ В капсуле кот не ест и не приносит доход. Разморозки нет — капсулу освобождает клон 🧬 или отправка кота в биобанк.', '❄️ In a capsule the cat neither eats nor earns. There is no thawing — a capsule is freed by cloning 🧬 or by sending the cat to the biobank.'),
     style: {
       fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 16,
@@ -2227,7 +2331,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
     };
 
     if (confirmDispose) {
-      const warnT = label(t('Утилизировать безвозвратно?', 'Recycle for good?'), 15, COLORS.warn, '800');
+      const warnT = label(t('Освободить капсулу навсегда?', 'Free the cell for good?'), 15, COLORS.warn, '800');
       warnT.position.set(W / 2, y + 4);
       root.addChild(warnT);
       y += 24;
@@ -2277,7 +2381,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
       if (!cat.analyzed && pedigreeHasFog(cat)) {
         addBtn(t('🧬 Генетический анализ', '🧬 Genetic analysis'), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
       }
-      addBtn(t('♻️ Утилизировать', '♻️ Recycle'), COLORS.warn, true, () => { confirmDispose = true; render(); });
+      addBtn(t('♻️ Освободить капсулу', '♻️ Free the cell'), COLORS.warn, true, () => { confirmDispose = true; render(); });
     }
 
     const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
@@ -2343,7 +2447,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     const busy = !!cat && isBusy(ctx.state, cat.id);
     row.addChild(panel(cardW, rowH - 10, COLORS.card, 12));
 
-    const req = label(`«${describeReq(order.req)}»`, 16, COLORS.ink, '800');
+    const req = label(`"${describeReq(order.req)}"`, 16, COLORS.ink, '800');
     req.anchor.set(0, 0.5);
     req.position.set(16, 22);
     row.addChild(req);
@@ -2354,7 +2458,7 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     row.addChild(rew);
 
     // таймер жизни — текстом в правом нижнем углу (под кнопкой «Выполнить»)
-    const timer = label(t(`⏳ сменятся через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), 11.5, COLORS.inkSoft, '600');
+    const timer = label(t(`⏳ сменится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), 11.5, COLORS.inkSoft, '600');
     timer.anchor.set(1, 0.5);
     timer.position.set(cardW - 16, 70);
     row.addChild(timer);

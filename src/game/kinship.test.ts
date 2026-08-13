@@ -151,7 +151,7 @@ describe('интеграция: вязка родственников через
       const events = collectReady(st, i * 100_000 + incubationDuration(st), rng2);
       st.slots[0]!.kittenId = null;
       for (const e of events) {
-        if (e.stillborn || !e.kitten) continue;
+        if (!e.kitten) continue;
         total++;
         expect(e.kinship).toBe('critical');
         if (e.kitten.maxHearts < MAX_HEARTS) reduced++;

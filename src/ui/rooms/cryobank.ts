@@ -70,7 +70,7 @@ export function createCryobank(ctx: UiContext): Room {
       c.addChild(plus, hint);
       c.eventMode = 'static';
       c.cursor = 'pointer';
-      c.on('pointertap', () => { if (!suppressTap) ctx.toast(t('Заморозь кота: в его меню — «🧊 Заморозить»', 'Freeze a cat: «🧊 Freeze» in its menu')); });
+      c.on('pointertap', () => { if (!suppressTap) ctx.toast(t('Заморозь кота: в его меню — «🧊 Заморозить»', 'Freeze a cat: "🧊 Freeze" in its menu')); });
       return c;
     }
 
@@ -153,7 +153,7 @@ export function createCryobank(ctx: UiContext): Room {
 
     // подсказка сверху
     const top = 6;
-    const header = label(t('Заморозь кота (🧊 в его меню) — витрина без живого кота. Клонируй за 🧬 или утилизируй.', 'Freeze a cat (🧊 in its menu) — a showcase without a living cat. Clone it for 🧬 or recycle it.'),
+    const header = label(t('Заморозь кота (🧊 в его меню) — витрина без живого кота. Клонируй за 🧬 или освободи капсулу.', 'Freeze a cat (🧊 in its menu) — a showcase without a living cat. Clone it for 🧬 or free the cell.'),
       12.5, COLORS.inkSoft, '600');
     header.anchor.set(0, 0.5);
     header.position.set(2, top + 10);

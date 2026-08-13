@@ -228,7 +228,7 @@ export function sfxPurrSync(ids: readonly string[]): void {
     if (purring.size >= PURR_MAX) break;
     const alias = purrs[Math.floor(Math.random() * purrs.length)];
     const s = alias ? sound.find(alias) : undefined;
-    if (!s?.isLoaded) return; // ещё грузится — заведём на следующем тике
+    if (!s?.isLoaded) continue; // этот файл ещё грузится — попробуем следующего кота
     const inst = s.play({
       loop: true,
       volume: 0, // фейд поднимет до 1 (итог = volume звука × громкость петли)

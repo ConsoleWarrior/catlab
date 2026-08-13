@@ -121,6 +121,13 @@ export function attachBlink(app: Application, sprite: Sprite): Blinker | null {
 
   const layer = new Container();
   layer.eventMode = 'none';
+  // Веки обязаны быть детьми самого спрайта: тогда они бесплатно наследуют его
+  // позицию, масштаб (дыхание, рост котёнка) и разворот по стороне движения —
+  // сиблингом их пришлось бы синхронизировать каждый кадр, с отставанием.
+  // У Sprite в Pixi v8 приём детей выключен по умолчанию и addChild пишет
+  // Deprecation Warning в консоль (п. 6.4 — при открытых DevTools ошибок и
+  // предупреждений быть не должно); разрешаем осознанно.
+  sprite.allowChildren = true;
   sprite.addChild(layer);
 
   const lids: Container[] = [];

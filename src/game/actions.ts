@@ -235,7 +235,6 @@ export function clearBreederSlot(state: GameState, catId: string): boolean {
 export interface BirthEvent {
   slotIndex: number;
   kitten?: Cat;
-  stillborn: boolean;
   motherBreed?: string;       // родословная (для карточки рождения)
   fatherBreed?: string;
   kinship?: KinshipLevel;     // родство пары (инбридинг) — для пометки в карточке
@@ -264,12 +263,13 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
 
     const rate = E.mutationRate(state);
     let child = breed(mother.genotype, father.genotype, rng, rate);
+    // Двойная вислоухость (fold/fold) нежизнеспособна — такой помёт пересобираем.
+    // Если не повезло и после пересборок пара опять дала fold/fold, котёнок
+    // рождается носителем: одно ухо-ген меняем на прямое. В игре про котов
+    // мёртвых котят не бывает — исход «не выжил» убран совсем.
     let guard = 0;
     while (isLethal(child) && guard++ < 8) child = breed(mother.genotype, father.genotype, rng, rate);
-    if (isLethal(child)) {
-      events.push({ slotIndex: i, stillborn: true }); // мертворождение — родители остаются, малыша нет
-      continue;
-    }
+    if (isLethal(child)) child = { ...child, Ea: ['fold', 'normal'] };
     // Порода котёнка — по РЕЦЕПТАМ (прямые/сцепленные с полом/родословные) с учётом
     // родства пары (инбридинг множит шанс родословных рецептов). Усилители «Генной
     // инженерии» влияют на исход; списываем только сработавшие.
@@ -313,7 +313,7 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     // Игрок решит в карточке рождения — в питомник, в приют или оставить с роднёй.
     slot.kittenId = kitten.id;
     events.push({
-      slotIndex: i, kitten, stillborn: false,
+      slotIndex: i, kitten,
       motherBreed: mother.breed, fatherBreed: father.breed,
       kinship: ctx.kinship, rep: Math.round(rep), newBreed,
     });

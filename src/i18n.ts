@@ -84,7 +84,13 @@ export function plural(n: number, ru: [one: string, few: string, many: string], 
 }
 
 function applyDocumentLang(): void {
-  try { document.documentElement.lang = current; } catch { /* вне браузера (тесты) */ }
+  try {
+    document.documentElement.lang = current;
+    // Заглушка «поверни телефон» живёт в index.html и рисуется до старта Pixi —
+    // единственный кусок интерфейса вне канваса, поэтому язык ей меняем отсюда.
+    const rotate = document.getElementById('rotate-text');
+    if (rotate) rotate.textContent = t('Поверни телефон горизонтально', 'Turn your phone sideways');
+  } catch { /* вне браузера (тесты) */ }
 }
 
 function readStored(): string | null {

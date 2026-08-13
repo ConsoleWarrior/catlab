@@ -7,4 +7,7 @@
 import { Game } from './ui/game.js';
 
 const reset = new URLSearchParams(location.search).has('reset');
-void new Game().start(reset);
+// start() сам разбирается с ошибками старта и в любом случае снимает лоадер
+// платформы (п. 1.19.2). Этот catch — последний рубеж, чтобы в консоль не улетал
+// необработанный промис, если сломается уже сам обработчик ошибки.
+new Game().start(reset).catch((err) => console.error('[catlab] запуск прерван', err));

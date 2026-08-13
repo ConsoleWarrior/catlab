@@ -267,7 +267,7 @@ describe('крио-банк: утилизация', () => {
 });
 
 describe('крио-банк: вместимость от рангов Криогенетики', () => {
-  it('0 без узла, растёт с каждым рангом (база + Σvalue), к макс. рангу ~30', () => {
+  it('0 без узла, растёт с каждым рангом (база + Σvalue), к макс. рангу 30', () => {
     const s = createInitialState(makeRng(17), 0);
     expect(cryoCapacity(s)).toBe(0);
     s.research.r_sel_cryo = 1;
@@ -276,7 +276,7 @@ describe('крио-банк: вместимость от рангов Криог
     s.research.r_sel_cryo = def.levels.length;
     const maxCap = C.CRYO_BASE_CAP + def.levels.reduce((sum, l) => sum + l.value, 0);
     expect(cryoCapacity(s)).toBe(maxCap);
-    expect(maxCap).toBeGreaterThanOrEqual(24);
+    expect(maxCap).toBe(30);
   });
 });
 

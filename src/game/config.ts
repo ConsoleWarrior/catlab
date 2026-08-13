@@ -304,7 +304,7 @@ export const SHELTER_BASE_CAP = 8;
 // --- Крио-банк (криохранилище коллекции) ---
 // Заморозка кота убирает его из state.cats в state.cryo (не ест/не доход/не вязка) —
 // витрина коллекции без 70 живых котов. Разморозки НЕТ (только клон или утилизация).
-// Ёмкость капсул = CRYO_BASE_CAP + узел «❄️ Криогенетика» (cryoCap); к макс. рангу ~30.
+// Ёмкость капсул = CRYO_BASE_CAP + узел «❄️ Криогенетика» (cryoCap); к макс. рангу 30.
 export const CRYO_BASE_CAP = 6;               // стартовые капсулы (даёт 1-й ранг Криогенетики)
 // Клонирование стоит ×3 от выхода лаборатории того же кота (3 × round(market × LAB_DNA_RATE)):
 // привязка к ценности особи + анти-луп (клон втрое дороже сдачи того же кота на опыты).
@@ -504,10 +504,10 @@ export const RESEARCH: readonly ResearchDef[] = [
   { id: 'r_offline', glyph: '🌙', title: ['Ночной смотритель', 'Night keeper'], desc: ['+60 мин к потолку офлайн-дохода за уровень', '+60 min to the offline income cap per level'],
     currency: 'coins', effectKind: 'offline', requires: ['r_collection'], col: 2, row: 1, levels: [
       // база потолка = OFFLINE_CAP_BASE_MIN (120 мин); «всего N» = 120 + накопленное
-      { cost: 1000, value: 60, minLevel: 4, desc: ['+60 мин к потолку времени оффлайн дохода (всего 180 минут)', '+60 min to the offline income cap (total 180 minutes)'] },
-      { cost: 2500, value: 60, minLevel: 6, desc: ['+60 мин к потолку времени оффлайн дохода (всего 240 минут)', '+60 min to the offline income cap (total 240 minutes)'] },
-      { cost: 5000, value: 60, minLevel: 8, desc: ['+60 мин к потолку времени оффлайн дохода (всего 300 минут)', '+60 min to the offline income cap (total 300 minutes)'] },
-      { cost: 10000, value: 60, minLevel: 10, desc: ['+60 мин к потолку времени оффлайн дохода (всего 360 минут)', '+60 min to the offline income cap (total 360 minutes)'] },
+      { cost: 1000, value: 60, minLevel: 4, desc: ['+60 мин к потолку времени офлайн-дохода (всего 180 минут)', '+60 min to the offline income cap (total 180 minutes)'] },
+      { cost: 2500, value: 60, minLevel: 6, desc: ['+60 мин к потолку времени офлайн-дохода (всего 240 минут)', '+60 min to the offline income cap (total 240 minutes)'] },
+      { cost: 5000, value: 60, minLevel: 8, desc: ['+60 мин к потолку времени офлайн-дохода (всего 300 минут)', '+60 min to the offline income cap (total 300 minutes)'] },
+      { cost: 10000, value: 60, minLevel: 10, desc: ['+60 мин к потолку времени офлайн-дохода (всего 360 минут)', '+60 min to the offline income cap (total 360 minutes)'] },
     ] },
 
   // ветка 2 — 🤝 Пристройство (за 💰: 💰/🧬 за отданных котов и заказы)
@@ -517,7 +517,7 @@ export const RESEARCH: readonly ResearchDef[] = [
       { cost: 700, value: 0.20, minLevel: 5 },
       { cost: 2400, value: 0.20, minLevel: 8 },
     ] },
-  { id: 'r_adopt_dna', glyph: '🧫', title: ['Биобанк+', 'Biobank+'], desc: ['+15% 🧬 за сдачу на эксперименты за уровень', '+15% 🧬 for sending cats to experiments, per level'],
+  { id: 'r_adopt_dna', glyph: '🧫', title: ['Биобанк+', 'Biobank+'], desc: ['+15% 🧬 за переданного в биобанк кота за уровень', '+15% 🧬 per cat sent to the biobank, per level'],
     currency: 'coins', effectKind: 'adoptDna', requires: ['r_adopt_coins'], col: 1, row: 2, levels: [
       { cost: 1000, value: 0.15, minLevel: 3 },
       { cost: 2500, value: 0.15, minLevel: 6 },
@@ -566,29 +566,30 @@ export const RESEARCH: readonly ResearchDef[] = [
   // фактом покупки, а не уровнем: станцию «на эксперименты» в Приюте и шприц-ветеринара
   // в Инкубаторе (см. FEATURE_RESEARCH), а также крио-банк (r_sel_cryo — 1-й ранг открывает
   // комнату). За 💰, кроме крио (🧬 + 💰). minLevel узлов = прежние LAB_UNLOCKS этих фич.
-  { id: 'r_lab_station', glyph: '🧪', title: ['На эксперименты', 'To experiments'], desc: ['Открывает в Приюте станцию сдачи котов на опыты (🧬)', 'Opens the station in the Shelter for sending cats to experiments (🧬)'],
+  { id: 'r_lab_station', glyph: '🧪', title: ['Биобанк', 'Biobank'], desc: ['Открывает в Приюте станцию передачи котов учёным (🧬)', 'Opens the station in the Shelter for handing cats to the scientists (🧬)'],
     currency: 'coins', effectKind: 'unlockLab', requires: [], col: 0, row: 4, levels: [
       { cost: 300, value: 1, minLevel: 2 },
     ] },
-  { id: 'r_lab_vet', glyph: '💉', title: ['Ветеринар', 'Vet'], desc: ['Открывает в Инкубаторе возможность лечения здоровья', 'Opens healing in the Incubator'],
+  { id: 'r_lab_vet', glyph: '💉', title: ['Ветеринар', 'Vet'], desc: ['Открывает в Инкубаторе лечение котов', 'Opens healing in the Incubator'],
     currency: 'coins', effectKind: 'unlockLab', requires: ['r_lab_station'], col: 1, row: 4, levels: [
       { cost: 500, value: 1, minLevel: 3 },
     ] },
   // Учёный — гейт «Генной инженерии»: до его покупки чипы усилителей в Инкубаторе заперты
   // (раньше их открывал просто уровень лаборатории). Платится 🧬 + 💰: сами усилители тоже
   // за гены, так что вход в механику стоит той же валюты.
-  { id: 'r_lab_boosts', glyph: '🥼', title: ['Учёный', 'Scientist'], desc: ['Открывает доступ к бустам в Инкубаторе', 'Unlocks boosters in the Incubator'],
+  { id: 'r_lab_boosts', glyph: '🥼', title: ['Учёный', 'Scientist'], desc: ['Открывает доступ к усилителям в Инкубаторе', 'Unlocks boosters in the Incubator'],
     currency: 'dna', effectKind: 'unlockLab', requires: ['r_lab_vet'], col: 2, row: 4, levels: [
       { cost: 100, coins: 1500, value: 1, minLevel: 3 },
     ] },
   // Крио переехала сюда из «Селекции»: 1-й ранг ОТКРЫВАЕТ крио-банк (комнату) + стартовые
-  // капсулы, следующие ранги наращивают вместимость до 24 (CRYO_BASE_CAP 6 + 3×6).
+  // капсулы, следующие ранги наращивают вместимость до 30 (CRYO_BASE_CAP 6 + 4×6).
   // id узла НЕ меняем — по нему хранится прогресс в сейве и завязан cryoUnlocked.
   { id: 'r_sel_cryo', glyph: '❄️', title: ['Криогенетика', 'Cryogenetics'], desc: ['Открывает крио-банк, +6 капсул за уровень', 'Opens the cryobank, +6 capsules per level'],
     currency: 'dna', effectKind: 'cryoCap', requires: ['r_lab_boosts'], col: 3, row: 4, levels: [
       { cost: 300, coins: 5000, value: 6, minLevel: 6 },
       { cost: 550, coins: 7500, value: 6, minLevel: 7 },
       { cost: 900, coins: 10000, value: 6, minLevel: 8 },
+      { cost: 1500, coins: 14000, value: 6, minLevel: 10 },
     ] },
 ];
 

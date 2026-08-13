@@ -25,8 +25,16 @@ const DEV_MOCK_MS = 400; // «просмотр» rewarded вне платфор�
  * Страховка от зависшего колбэка: на время показа игра стоит на паузе, и
  * вернуть её будет нечем. По докам onClose приходит всегда (в том числе после
  * ошибки и когда реклама не открылась), так что это чистая подстраховка.
+ *
+ * Два срока намеренно разные. Пока ролик не открылся, ждать долго незачем.
+ * А вот после onOpen отсчёт начинается заново и с большим запасом: ролик с
+ * интерактивным энд-кардом легко живёт дольше минуты, и прежний общий сторож на
+ * 60 с срабатывал прямо поверх открытой рекламы — снимал паузу (музыка играла
+ * под ролик, нарушение п. 4.7), съедал награду за досмотр и разрешал запустить
+ * второй показ поверх первого.
  */
-const WATCHDOG_MS = 60_000;
+const WATCHDOG_MS = 30_000;
+const WATCHDOG_OPEN_MS = 240_000;
 
 let showing = false;
 
@@ -49,10 +57,11 @@ export function showRewarded(): Promise<boolean> {
   const adv = getAdv();
   if (!adv) return isPlatform() ? Promise.resolve(false) : devMock(DEV_MOCK_MS);
 
-  return run((finish) => {
+  return run((finish, opened) => {
     let rewarded = false;
     adv.showRewardedVideo({
       callbacks: {
+        onOpen: opened,   // ролик реально пошёл — сторожу нужен другой срок
         onRewarded: () => { rewarded = true; },
         onClose: () => finish(rewarded),
         onError: () => finish(false),
@@ -66,12 +75,13 @@ export function showRewarded(): Promise<boolean> {
  * площадки, ровно один резолв (onError и onClose приходят и вместе) и
  * страховочный таймер.
  */
-function run(show: (finish: (ok: boolean) => void) => void): Promise<boolean> {
+function run(show: (finish: (ok: boolean) => void, opened: () => void) => void): Promise<boolean> {
   showing = true;
   gameplayStop(); // площадка реже показывает свою рекламу поверх игры
   pauseUi?.(true); // игра и звук замирают на весь показ (п. 4.7)
   return new Promise((resolve) => {
     let done = false;
+    let timer: ReturnType<typeof setTimeout>;
     const finish = (ok: boolean): void => {
       if (done) return;
       done = true;
@@ -81,8 +91,15 @@ function run(show: (finish: (ok: boolean) => void) => void): Promise<boolean> {
       pauseUi?.(false);
       resolve(ok);
     };
-    const timer = setTimeout(() => finish(false), WATCHDOG_MS);
-    try { show(finish); } catch { finish(false); }
+    // Ролик открылся: колбэки живы, значит onClose придёт — сторож нужен только
+    // на случай совсем зависшего плеера, и ждать он должен дольше самого ролика.
+    const opened = (): void => {
+      if (done) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(false), WATCHDOG_OPEN_MS);
+    };
+    timer = setTimeout(() => finish(false), WATCHDOG_MS);
+    try { show(finish, opened); } catch { finish(false); }
   });
 }
 

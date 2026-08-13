@@ -272,7 +272,7 @@ export function createNursery(ctx: UiContext): Room {
             const r = buyUpgrade(ctx.state, 'championSlots');
             if (r.ok) {
               ctx.commit();
-              ctx.toast(t(`Открыт пьедестал — ${place} место 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% дохода)`, `Pedestal unlocked — place ${place} 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% income)`));
+              ctx.toast(t(`Открыт пьедестал — ${place}-е место 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% дохода)`, `Pedestal unlocked — place ${place} 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% income)`));
             }
             else ctx.toast(r.reason === 'locked' ? t('Пьедестал ещё заперт 🔒', 'The pedestal is still locked 🔒') : r.reason);
           };

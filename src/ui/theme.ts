@@ -82,7 +82,11 @@ export function fmt(n: number): string {
   const v = Math.floor(n);
   if (v < 1000) return String(v);
   if (v < 1_000_000) return (v / 1000).toFixed(v < 10_000 ? 1 : 0).replace('.0', '') + 'k';
-  return (v / 1_000_000).toFixed(1).replace('.0', '') + 'M';
+  if (v < 1_000_000_000) return (v / 1_000_000).toFixed(1).replace('.0', '') + 'M';
+  // Дальше «M» кончалась и число росло в ширину («9000000000M») — доводим шкалу
+  // до миллиардов и триллионов, чтобы подпись не разъезжала HUD.
+  if (v < 1_000_000_000_000) return (v / 1_000_000_000).toFixed(1).replace('.0', '') + 'B';
+  return (v / 1_000_000_000_000).toFixed(1).replace('.0', '') + 'T';
 }
 
 export function label(
@@ -119,6 +123,22 @@ export function stars(tier: RarityTier, size = 13): Container {
   t.anchor.set(0.5);
   c.addChild(t);
   return c;
+}
+
+// Пока идёт полноэкранная реклама (или платформа прислала свою паузу), интерфейс
+// не должен принимать нажатия: п. 4.7 требует остановить именно игровой процесс,
+// а не только анимацию. Раньше пауза замирала лишь update() и свайпы — тап по
+// кнопке проходил сквозь неё и, например, списывал 💎 во время ролика.
+let uiBlocked = false;
+
+/** Заблокировать/разблокировать нажатия по всему интерфейсу (пауза рекламы). */
+export function setUiBlocked(on: boolean): void {
+  uiBlocked = on;
+}
+
+/** Интерфейс сейчас не принимает нажатия. */
+export function isUiBlocked(): boolean {
+  return uiBlocked;
 }
 
 export interface ButtonOpts {
@@ -158,8 +178,8 @@ export class Button extends Container {
     this.bg.eventMode = 'none';
     this.txt.eventMode = 'none';
     this.redraw();
-    this.on('pointertap', () => { if (this._enabled) this.onTap?.(); });
-    this.on('pointerdown', () => { if (this._enabled) this.scale.set(0.95); });
+    this.on('pointertap', () => { if (this._enabled && !uiBlocked) this.onTap?.(); });
+    this.on('pointerdown', () => { if (this._enabled && !uiBlocked) this.scale.set(0.95); });
     const up = (): void => { this.scale.set(1); };
     this.on('pointerup', up);
     this.on('pointerupoutside', up);

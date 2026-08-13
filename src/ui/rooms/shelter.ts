@@ -58,7 +58,7 @@ export function createShelter(ctx: UiContext): Room {
       .fill({ color: 0xbfeae6, alpha: unlocked ? 0.55 : 0.3 });
     const flask = label(unlocked ? '🧪' : '🔒', sw * 0.42, COLORS.ink, '700');
     flask.position.set(labCx, y + sh * 0.56);
-    const badge = stationBadge(labCx, y, unlocked ? t('🧪 на эксперименты', '🧪 to experiments') : t('🔒 открой в Генолабе', '🔒 unlock in the Genolab'));
+    const badge = stationBadge(labCx, y, unlocked ? t('🧪 в биобанк', '🧪 to the biobank') : t('🔒 открой в Генолабе', '🔒 unlock in the Genolab'));
     labLayer.addChild(box, flask, badge);
   }
 
@@ -139,8 +139,8 @@ export function createShelter(ctx: UiContext): Room {
     const labSum = `🧬${totals.lab.dna}${totals.lab.coins > 0 ? `  💰${totals.lab.coins}` : ''}`;
     const labBtn = new Button({
       text: labOpen
-        ? t(`🧪 На эксперименты всех\n${labSum}`, `🧪 All to experiments\n${labSum}`)
-        : t('🧪 На эксперименты всех\n🔒 открой в Генолабе', '🧪 All to experiments\n🔒 unlock in the Genolab'),
+        ? t(`🧪 Всех в биобанк\n${labSum}`, `🧪 All to the biobank\n${labSum}`)
+        : t('🧪 Всех в биобанк\n🔒 открой в Генолабе', '🧪 All to the biobank\n🔒 unlock in the Genolab'),
       w: BW, h: BH, color: COLORS.dna, fontSize: 12.5,
     });
     labBtn.position.set(rightCx, cy);
@@ -308,7 +308,7 @@ export function createShelter(ctx: UiContext): Room {
     }
     if (labZone.contains(lp.x, lp.y)) {
       if (!isUnlocked(ctx.state, 'labStation')) {
-        ctx.toast(t('Открой станцию «На эксперименты» в Генолабе 🔬', 'Unlock the «To experiments» station in the Genolab 🔬'));
+        ctx.toast(t('Открой станцию «В биобанк» в Генолабе 🔬', 'Unlock the "To the biobank" station in the Genolab 🔬'));
         return false;             // заперто → кот вернётся на своё место
       }
       ctx.commit();               // grab-спрайт уже уничтожен — пол пересобран, кот снова виден

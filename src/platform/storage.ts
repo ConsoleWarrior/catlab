@@ -34,7 +34,9 @@ export interface SaveRecord {
 let pending: { raw: string; flush: boolean } | null = null;
 let chain: Promise<boolean> = Promise.resolve(true);
 let lastCloudRaw = '';
+let lastCloudOk = true;
 let warnedSize = false;
+let cloudBlocked = false;
 
 /**
  * Кандидаты на загрузку — от самого свежего к старому. Игра берёт первый,
@@ -76,7 +78,9 @@ export function writeSaveAwait(raw: string): Promise<boolean> {
 
 function enqueue(raw: string, flush: boolean): Promise<boolean> {
   writeLocal(raw);
-  if (!isPlatform()) return Promise.resolve(true); // облака нет — локальной записи достаточно
+  // Облака нет (или оно закрыто на эту сессию, см. adoptLatePlayer) — локальной
+  // записи достаточно, прогресс игрока не теряется.
+  if (!isPlatform() || cloudBlocked) return Promise.resolve(true);
   pending = { raw, flush: flush || (pending?.flush ?? false) };
   // Очередь из одного звена: записи идут строго по одной, а накопившиеся
   // схлопываются в последнюю (см. drainCloud) — так частый автосейв не упирается
@@ -123,20 +127,46 @@ async function readCloud(): Promise<SaveRecord | null> {
 async function drainCloud(): Promise<boolean> {
   const job = pending;
   pending = null;
-  if (!job) return true;                       // нас опередило соседнее звено
+  // Нас опередило соседнее звено — оно унесло в облако в том числе и наши данные,
+  // поэтому отдаём ЕГО результат, а не голое «да». Раньше здесь стояло `true`, и
+  // при неудачной записи покупка гасилась (consumePurchase) без сохранения.
+  if (!job) return lastCloudOk;
   if (job.raw === lastCloudRaw) return true;   // ничего не изменилось
 
   const p = getPlayerApi();
-  if (!p) return false;
-  if (tooBigForCloud(job.raw)) return false;
+  if (!p) return (lastCloudOk = false);
+  if (tooBigForCloud(job.raw)) return (lastCloudOk = false);
 
   try {
     await p.setData({ [CLOUD_SAVE_KEY]: job.raw, [CLOUD_AT_KEY]: Date.now() }, job.flush);
     lastCloudRaw = job.raw;
-    return true;
+    return (lastCloudOk = true);
   } catch {
-    return false; // лимит/сеть: данные уже в localStorage, повторим на следующем сейве
+    // лимит/сеть: данные уже в localStorage, повторим на следующем сейве
+    return (lastCloudOk = false);
   }
+}
+
+/**
+ * Игрок появился уже после старта игры: SDK опоздал, и сессия идёт на локальном
+ * сейве. Писать её в облако вслепую нельзя — там может лежать прогресс свежее,
+ * с другого устройства, и первый же автосейв затёр бы его. Поэтому сверяем время
+ * и, если облако новее, в этой сессии облачную запись запрещаем совсем.
+ *
+ * Возвращает true, если облако подхвачено штатно; false — прогресс в облаке
+ * новее, играть можно, но синхронизация вернётся только после перезапуска.
+ */
+export async function adoptLatePlayer(): Promise<boolean> {
+  const cloud = await readCloud();
+  if (!cloud) return true; // облака нет — пишем как обычно
+
+  const local = readLocal();
+  if (cloud.savedAt <= (local?.savedAt ?? 0)) {
+    lastCloudRaw = cloud.raw; // облако не новее — просто не переписываем тем же
+    return true;
+  }
+  cloudBlocked = true;
+  return false;
 }
 
 function tooBigForCloud(raw: string): boolean {

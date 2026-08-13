@@ -71,6 +71,11 @@ interface Actor {
   turnT: number;             // >0 — доигрывается приседание при развороте
   moodT: number;             // countdown до следующей проверки эмоции-пузырька
   blink: Blinker | null;     // процедурное моргание глаз (eyeBlink.ts)
+  // Подпись над котом (имя + пол) и её габариты в локальных координатах актёра —
+  // по ним в конце тика решается, не наехала ли она на подпись соседа (п. 1.10.3).
+  caption: Container | null;
+  capW: number;
+  capY: number;
   zoneU: number;             // предпочитаемая нормированная позиция по X (-1..1)
   state: ActorState;
   stateLeft: number;         // сколько ещё длится текущее состояние
@@ -163,6 +168,12 @@ export function createLivingFloor(
   let actors: Actor[] = [];
   const effects: GrowFx[] = [];
   const moodFx: MoodFx[] = [];
+  // Занятые прямоугольники подписей за текущий кадр (см. конец tick). Массив
+  // переиспользуется — это горячий путь, мусорить объектами каждый кадр незачем.
+  const capBoxes: { x: number; y: number; halfW: number; halfH: number }[] = [];
+  // Порядок разбора подписей: сначала передний план (больший Y на сцене) — его
+  // подпись важнее, дальние уступают.
+  const captionOrder = (list: Actor[]): Actor[] => [...list].sort((a, b) => b.view.y - a.view.y);
   const { centerX, yNear, yFar, nearHalfW, farHalfW, catH, farScale } = plane;
   const shelf = shelfOpts?.plane ?? null;
   const shelfLayer = shelfOpts?.layer ?? null;
@@ -469,6 +480,9 @@ export function createLivingFloor(
     // цветом редкости с белой обводкой. Имя крупнее (1.5×), значок пола — крупнее (2×),
     // поэтому это отдельные Text в общем контейнере. У котят подписи нет — имя и пол
     // проявляются только когда котёнок вырастет.
+    let caption: Container | null = null;
+    let capW = 0;
+    let capY = 0;
     if (adult) {
       const tierCol = TIER_COLOR[cat.rarityTier];
       const sexGlyph = cat.genotype.sex === 'female' ? '♀' : '♂';
@@ -486,12 +500,15 @@ export function createLivingFloor(
       sexT.anchor.set(0, 0.5);
       const gap = 5;
       const totalW = nameT.width + gap + sexT.width;
-      const caption = new Container();
+      const cap = new Container();
       nameT.position.set(-totalW / 2, 0);
       sexT.position.set(-totalW / 2 + nameT.width + gap, 0);
-      caption.addChild(nameT, sexT);
-      caption.position.set(0, -(catH * sizeF + 16));
-      view.addChild(caption);
+      cap.addChild(nameT, sexT);
+      capY = -(catH * sizeF + 16);
+      cap.position.set(0, capY);
+      view.addChild(cap);
+      caption = cap;
+      capW = totalW;
     }
 
     if (selected) {
@@ -543,6 +560,7 @@ export function createLivingFloor(
       ox, z, targetOx: ox, targetZ: z, facing: prev?.facing ?? mem?.facing ?? 1,
       phase: prev?.phase ?? mem?.phase ?? Math.random() * 6,
       leapT: 0, leapVX: 0, leapPending: false, turnT: 0, moodT: 2 + Math.random() * 6, blink, zoneU,
+      caption, capW, capY,
       state: 'idle', stateLeft: Math.random() * 3, // стартовая рассинхронизация, чтобы не все разом пошли бродить
       stuckT: 0, pushed: 0,
       onShelf, wantShelf: false, jump: null,
@@ -884,6 +902,33 @@ export function createLivingFloor(
       // застрял в толчее и не может пройти — не пихается бесконечно, сдаётся и садится
       if (a.state === 'walk' && a.pushed > 1.5) a.stuckT += dt; else a.stuckT = Math.max(0, a.stuckT - dt * 2);
       if (a.stuckT > STUCK_LIMIT) { a.stuckT = 0; pickNextState(a); }
+    }
+
+    // Подписи, наехавшие друг на друга, гасим (п. 1.10.3 — «элементы и тексты не
+    // накладываются»). В полном приюте имена сливались в кашу, особенно на английском,
+    // где названия пород длиннее. Приоритет у ближних котов: идём от переднего плана
+    // вглубь и оставляем подпись, только если её прямоугольник свободен. Гасим и
+    // возвращаем плавно — иначе на каждом шаге бредущего кота подписи мигали бы.
+    capBoxes.length = 0;
+    for (const a of captionOrder(actors)) {
+      const cap = a.caption;
+      if (!cap) continue;
+      const sx = Math.abs(a.view.scale.x);
+      const sy = a.view.scale.y;
+      const halfW = (a.capW * sx) / 2 + 3;
+      const cx = a.view.x;
+      const cy = a.view.y + a.capY * sy;
+      const halfH = 15 * sy;
+      let free = a.view.visible;
+      if (free) {
+        for (const b of capBoxes) {
+          if (Math.abs(cx - b.x) < halfW + b.halfW && Math.abs(cy - b.y) < halfH + b.halfH) { free = false; break; }
+        }
+      }
+      if (free) capBoxes.push({ x: cx, y: cy, halfW, halfH });
+      const target = free ? 1 : 0;
+      cap.alpha += Math.sign(target - cap.alpha) * Math.min(dt * 5, Math.abs(target - cap.alpha));
+      cap.visible = cap.alpha > 0.02;
     }
 
     // пересобираем повзрослевших — чтобы появилась подпись (имя/пол)

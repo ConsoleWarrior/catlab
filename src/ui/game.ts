@@ -26,7 +26,7 @@ import {
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
-import { Button, COLORS, fmt, label } from './theme.js';
+import { Button, COLORS, fmt, label, setUiBlocked } from './theme.js';
 import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
 import { loadEyeData } from './eyeBlink.js';
 import { initSfx, sfxEvent, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
@@ -46,14 +46,15 @@ import {
   buildHealConfirm, buildCryoMenu, buildGrowConfirm,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel, buildOfflineReport,
-  buildLevelUpPanel,
+  buildLevelUpPanel, buildPrivacyPanel,
 } from './overlays.js';
 import type { OfflineReport, LevelUpInfo } from './overlays.js';
 import { buildRoomHelpPanel } from './roomHelp.js';
 import {
   initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler, platformLang,
+  setLatePlayerHandler,
 } from '../platform/ysdk.js';
-import { loadSaveCandidates, writeSave, writeSaveAwait } from '../platform/storage.js';
+import { loadSaveCandidates, writeSave, writeSaveAwait, adoptLatePlayer } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
 import { setAdPauseHandler } from '../platform/ads.js';
 import { initLang, t, onLangChange, setLang } from '../i18n.js';
@@ -82,6 +83,12 @@ const MIN_ASPECT = 4 / 3;
 // (п. 1.6.2.2); на телефонах лимита нет (п. 1.6.1 — полный экран), поэтому на
 // тач-устройствах заполняем экран целиком (современные телефоны ≤ ~2.4:1)
 const MAX_ASPECT = IS_TOUCH ? 2.5 : 2;
+
+// Последний срок, когда лоадер платформы снимается в любом случае (см. start()).
+// Больше обычного старта с запасом: 14.6 МБ ассетов на медленной мобильной сети
+// грузятся дольше, чем на стенде, а снятый раньше времени лоадер показал бы
+// игроку пустую сцену.
+const START_FAILSAFE_MS = 25_000;
 
 export class Game implements UiContext {
   readonly app = new Application();
@@ -174,6 +181,8 @@ export class Game implements UiContext {
   // прочее
   private incomeAcc = 0;
   private saveTimer = 0;
+  private saveDirty = false;    // есть несохранённые изменения (см. commit/update)
+  private resizePending = false; // ресайз пришёл при открытом поле ввода (см. resize)
   private wasStarving = false;   // для тоста «корм закончился» ровно при переходе к голоду
   // Отчёт «С возвращением» посчитан при загрузке сейва — но сцены тогда ещё нет,
   // поэтому окно показывается в конце start() (см. applyOffline).
@@ -186,7 +195,52 @@ export class Game implements UiContext {
 
   now(): number { return Date.now(); }
 
+  /**
+   * Запуск игры. Тело вынесено в boot(): здесь стоит единственная гарантия, что
+   * лоадер платформы будет снят при ЛЮБОМ исходе (п. 1.19.2).
+   *
+   * Без неё любая ошибка старта — нет WebGL на машине проверяющего, сбой сборки
+   * комнаты, недоступное хранилище — оставляла игрока перед вечным лоадером
+   * портала: `ready()` стоял в конце счастливого пути и просто не доживал.
+   * Страховочный таймер закрывает и третий случай — когда старт не упал, а
+   * «завис» на чём-то внешнем.
+   */
   async start(reset = false): Promise<void> {
+    const failsafe = setTimeout(loadingReady, START_FAILSAFE_MS);
+    try {
+      await this.boot(reset);
+    } catch (err) {
+      this.showStartupFailure(err);
+    } finally {
+      clearTimeout(failsafe);
+      loadingReady(); // идемпотентно: повторный вызов ничего не делает
+    }
+  }
+
+  /**
+   * Старт не удался. Показываем человеческое сообщение вместо чёрного экрана и
+   * стека в консоли: п. 1.14 — «нет технических сообщений». Рисуем средствами
+   * DOM, потому что до Pixi дело могло и не дойти (например, нет WebGL).
+   */
+  private showStartupFailure(err: unknown): void {
+    console.error('[catlab] старт не удался', err);
+    const host = document.getElementById('app');
+    if (!host) return;
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;'
+      + 'align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;'
+      + 'background:#fdf3e7;color:#5a4a42;font:600 18px system-ui,sans-serif;z-index:20';
+    const cat = document.createElement('div');
+    cat.style.fontSize = '56px';
+    cat.textContent = '🙀';
+    const text = document.createElement('p');
+    text.textContent = t('Не получилось загрузить игру. Обновите страницу.',
+      'The game could not load. Please refresh the page.');
+    box.append(cat, text);
+    host.appendChild(box);
+  }
+
+  private async boot(reset: boolean): Promise<void> {
     // SDK платформы поднимаем параллельно со шрифтом и ассетами: его ждёт только
     // загрузка сейва (облако), всему остальному он не нужен.
     const platform = initPlatform();
@@ -339,6 +393,18 @@ export class Game implements UiContext {
     // игры, окно покупок, уход со вкладки (game_api_pause / game_api_resume).
     setPlatformPauseHandler((on) => this.setPause('platform', on));
 
+    // SDK мог опоздать к старту (медленная сеть) — тогда игра уже идёт на
+    // локальном сейве. Хранилище сверит его с облаком: если в облаке прогресс
+    // свежее (играли с другого устройства), запись туда закрывается, чтобы его
+    // не затереть, и мы честно говорим об этом игроку.
+    setLatePlayerHandler(() => {
+      void adoptLatePlayer().then((ok) => {
+        if (ok) return;
+        this.toast(t('В облаке есть сохранение новее — перезапустите игру, чтобы продолжить с него',
+          'A newer save is in the cloud — restart the game to continue from it'));
+      });
+    });
+
     // Магазин поднимаем в фоне: пока каталог не пришёл, кнопка 💎+ просто скрыта
     // (updateHud проверяет доступность каждый кадр). Здесь же платформа отдаёт
     // зависшие покупки — их доначисление обязательно для модерации.
@@ -363,20 +429,37 @@ export class Game implements UiContext {
     // площадки тут нельзя: вне платформы его не будет вовсе.
     document.addEventListener('visibilitychange', () => {
       const hidden = document.hidden;
-      this.setPause('hidden', hidden);
-      if (hidden) { this.save(true); gameplayStop(); return; }
-      gameplayStart();
+      this.setPause('hidden', hidden); // отсюда же уходит gameplayStop/Start
+      if (hidden) { this.save(true); return; }
       // вкладку разморозили: пока она была скрыта, доход не капал — доначисляем
       // за пропущенное время и показываем тот же отчёт, что и при входе в игру
       this.resumeFromBackground();
     });
+    // Переход в другое окно или приложение БЕЗ сворачивания вкладки (второй
+    // монитор, оконный режим) visibilitychange не даёт — а звук по п. 1.3 обязан
+    // замолчать и там. Снимаем причину не только по focus: реклама и окно покупок
+    // забирают фокус и не всегда возвращают его сами, поэтому любое касание сцены
+    // тоже означает «игрок здесь».
+    const wake = (): void => this.setPause('blur', false);
+    window.addEventListener('blur', () => this.setPause('blur', true));
+    window.addEventListener('focus', wake);
+    this.app.canvas.addEventListener('pointerdown', wake);
     window.addEventListener('beforeunload', () => this.save(true));
+    // iOS Safari при закрытии вкладки и уходе в bfcache часто не шлёт
+    // beforeunload — там последний шанс сохраниться именно pagehide (п. 1.9).
+    window.addEventListener('pagehide', () => this.save(true));
     // Канвас привязан к visualViewport — реально видимой области. На мобиле
     // layout-вьюпорт (window.innerHeight) часто больше: низ канваса уходит под
     // адресную строку и под навигацией появляется «пустая полоса». visualViewport
     // даёт точную видимую высоту, поэтому навигация всегда у настоящего низа.
     const onResize = (): void => this.resize();
     window.addEventListener('resize', onResize);
+    // Поле ввода имени могло съесть ресайз окна (см. resize) — как только фокус
+    // ушёл, догоняем пропущенное. Следующим тиком: на момент focusout поле ещё
+    // числится активным.
+    document.addEventListener('focusout', () => {
+      if (this.resizePending) setTimeout(onResize, 0);
+    });
     window.addEventListener('orientationchange', () => setTimeout(onResize, 250));
     window.visualViewport?.addEventListener('resize', onResize);
     window.visualViewport?.addEventListener('scroll', onResize);
@@ -388,6 +471,7 @@ export class Game implements UiContext {
         openOrders: () => this.openOrders(),
         openRoomHelp: (id = 'incubator') => this.openRoomHelp(id),
         openSettings: () => this.openSettings(),
+        openPrivacy: () => this.openPrivacy(),
         setLang: (l: 'ru' | 'en') => setLang(l), // DEV: проверка переключения языка
         openShop: () => this.openShop(),
         shopAvailable: () => shopAvailable(),
@@ -667,7 +751,11 @@ export class Game implements UiContext {
     }
     this.updateHud();
     this.checkLevelUp(); // повышение уровня от любого действия → баннер со списком открытий
-    this.saveTimer = 0; // отложенный сейв в update()
+    // Помечаем «есть что сохранять», но НЕ трогаем таймер: он тикает от первого
+    // несохранённого действия. Раньше здесь стоял сброс, и у игрока, который
+    // действует чаще раза в 8 секунд (обычный темп в Инкубаторе и заказах),
+    // автосейв не наступал вовсе — краш вкладки уносил всю сессию (п. 1.9).
+    this.saveDirty = true;
   }
 
   toast(msg: string): void {
@@ -676,7 +764,7 @@ export class Game implements UiContext {
     // десятка мест ядра — дописываем, куда идти, ровно здесь, ничего не открывая
     // насильно поверх действия игрока.
     if (msg.includes(t('не хватает кристаллов', 'not enough crystals')) && shopAvailable()) {
-      msg = t('Не хватает 💎 — пополнить можно кнопкой «+» в шапке', 'Not enough 💎 — top up with the «+» button in the header');
+      msg = t('Не хватает 💎 — пополнить можно кнопкой «+» в шапке', 'Not enough 💎 — top up with the "+" button in the header');
     }
     this.toastT.text = msg;
     this.toastUntil = this.now() + 2400;
@@ -734,8 +822,14 @@ export class Game implements UiContext {
     if (on) this.pauseReasons.add(reason); else this.pauseReasons.delete(reason);
     const now = this.pauseReasons.size > 0;
     if (now === was) return;
-    this.adPaused = now; // update() замирает: доход, таймеры комнат, анимация
-    sfxPause(now);       // мяуканье, хор мурлыканья и фоновая музыка
+    this.adPaused = now;  // update() замирает: доход, таймеры комнат, анимация
+    sfxPause(now);        // мяуканье, хор мурлыканья и фоновая музыка
+    setUiBlocked(now);    // и кнопки перестают принимать нажатия (п. 4.7)
+    // GameplayAPI платформы (п. 1.19.3) — ровно здесь и только на смене
+    // состояния. Раньше start/stop звались ещё и из обработчика вкладки, и пара
+    // «ушёл со вкладки во время рекламы — вернулся» давала платформе start при
+    // открытом ролике и второй start без парного stop.
+    if (now) gameplayStop(); else gameplayStart();
   }
 
   /** Фоновый эмбиент играет в «технических» комнатах и молчит в жилых. */
@@ -849,6 +943,11 @@ export class Game implements UiContext {
   openRoomHelp(roomId: string): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildRoomHelpPanel(this, roomId, close));
+  }
+
+  /** Политика конфиденциальности (п. 3.5) — из ⚙️ Настроек, текстом в игре. */
+  openPrivacy(): void {
+    this.showOverlay(buildPrivacyPanel(this, () => this.closeOverlay()));
   }
 
   openSettings(): void {
@@ -1011,9 +1110,15 @@ export class Game implements UiContext {
   private resize(): void {
     // Пока в фокусе HTML-поле ввода (переименование кота), мобильная клавиатура
     // ужимает visualViewport — НЕ пересчитываем сцену, иначе игра «схлопывается»
-    // под остаток экрана над клавиатурой. При закрытии поля вьюпорт вернётся и
-    // придёт финальный resize, который всё восстановит.
-    if (document.activeElement instanceof HTMLInputElement) return;
+    // под остаток экрана над клавиатурой.
+    //
+    // Пропущенный ресайз обязательно запоминаем: на мобиле вьюпорт вернётся сам и
+    // пришлёт финальный resize, а вот на десктопе события больше не будет — игрок
+    // потянул край окна при открытом поле, и сцена так и осталась бы обрезанной по
+    // старому размеру (нет правого края комнаты и нижней навигации). Догоняем по
+    // focusout, см. boot().
+    if (document.activeElement instanceof HTMLInputElement) { this.resizePending = true; return; }
+    this.resizePending = false;
     const vv = window.visualViewport;
     const w = Math.max(1, Math.round(vv?.width ?? window.innerWidth));
     const h = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
@@ -1104,8 +1209,29 @@ export class Game implements UiContext {
     this.fitOverlay(); // открытая панель (если есть) — под новый размер экрана
   }
 
+  /**
+   * Снести содержимое контейнера, освободив память. `removeChildren()` только
+   * отцепляет узлы: текстуры их Text остаются висеть, и каждая пересборка сцены
+   * добавляла ~1.5 МБ, которые не возвращались даже после сборки мусора (25
+   * ресайзов окна = +38 МБ, 20 смен языка = +43 МБ).
+   *
+   * Уничтожаем следующим тиком: пересборка часто идёт прямо из обработчика тапа,
+   * а убивать активную цель события внутри её же обработчика нельзя.
+   */
+  private clearNode(node: Container): void {
+    const gone = node.removeChildren();
+    if (!gone.length) return;
+    setTimeout(() => {
+      for (const n of gone) {
+        // texture НЕ трогаем: спрайты держат общие текстуры из Assets (фон HUD,
+        // коты, декор) — их уничтожение сломало бы остальную сцену.
+        if (!n.destroyed) n.destroy({ children: true });
+      }
+    }, 0);
+  }
+
   private buildHud(): void {
-    this.hud.removeChildren();
+    this.clearNode(this.hud);
     const w = this.roomW;
     const ti = this.topInset;
     if (this.hudBgTex) {
@@ -1300,7 +1426,7 @@ export class Game implements UiContext {
   }
 
   private buildNav(): void {
-    this.nav.removeChildren();
+    this.clearNode(this.nav);
     this.dots = [];
     const n = this.rooms.length;
     // точки разведены шире (легче попасть пальцем) и прижаты к самому низу.
@@ -1349,7 +1475,7 @@ export class Game implements UiContext {
   }
 
   private buildToast(): void {
-    this.toastBox.removeChildren();
+    this.clearNode(this.toastBox);
     const t = label('', 15, 0xffffff, '700');
     t.position.set(0, 0);
     this.toastT = t;
@@ -1410,7 +1536,7 @@ export class Game implements UiContext {
   }
 
   private closeOverlay(): void {
-    this.overlayLayer.removeChildren();
+    this.clearNode(this.overlayLayer);
     this.overlayDim = null;
     this.overlayContent = null;
     this.settingsOpen = false;
@@ -1569,7 +1695,6 @@ export class Game implements UiContext {
       const events = collectReady(this.state, this.now(), this.rng);
       this.commit();
       const born = events.filter((e) => e.kitten).length;
-      const dead = events.filter((e) => e.stillborn).length;
       const rep = events.reduce((sum, e) => sum + (e.rep ?? 0), 0);
       if (born) {
         // первую в Котодексе породу отмечаем отдельной фанфарой — событие редкое,
@@ -1577,7 +1702,7 @@ export class Game implements UiContext {
         sfxEvent(events.some((e) => e.kitten && e.newBreed) ? 'newbreed' : 'birth');
         const base = born > 1 ? t(`Малыши родились: ${born} 🐾`, `Kittens born: ${born} 🐾`) : t('Малыш родился! 🐾', 'A kitten is born! 🐾');
         this.toast(rep ? `${base} +${rep} ⭐` : base);
-      } else if (dead) this.toast(t('Котёнок не выжил 😿', 'The kitten did not make it 😿'));
+      }
     }
 
     // доска заказов: заказ, чей 6-часовой таймер жизни истёк, сам сменяется свежим
@@ -1592,7 +1717,7 @@ export class Game implements UiContext {
     if (this.state.recipeResearch?.readyAt > 0 && this.now() >= this.state.recipeResearch.readyAt) {
       const res = finishRecipeResearch(this.state, this.now(), this.rng);
       this.commit();
-      if (res.recipe) this.toast(t(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`, `📜 Recipe researched: «${breedName(res.recipe.result)}»! Check the Catdex`));
+      if (res.recipe) this.toast(t(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`, `📜 Recipe researched: "${breedName(res.recipe.result)}"! Check the Catdex`));
       else if (res.refunded) this.toast(t('Исследовать нечего — все рецепты открыты, ресурсы возвращены ↩', 'Nothing left to research — every recipe is known, resources refunded ↩'));
     }
 
@@ -1602,9 +1727,11 @@ export class Game implements UiContext {
 
     this.updateHud();
 
-    // отложенный автосейв
-    this.saveTimer += dt;
-    if (this.saveTimer > 8) { this.saveTimer = 0; this.save(); }
+    // отложенный автосейв: не чаще раза в 8 с, но и не реже, пока есть изменения
+    if (this.saveDirty) {
+      this.saveTimer += dt;
+      if (this.saveTimer > 8) { this.saveTimer = 0; this.saveDirty = false; this.save(); }
+    }
 
     // затухание тоста
     if (this.toastBox.alpha > 0 && this.now() > this.toastUntil) {

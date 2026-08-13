@@ -12,7 +12,9 @@ import { t, tx, type LocStr } from '../i18n.js';
 
 const PATTERN_NAME: Record<string, LocStr> = {
   ticked: ['тикированный', 'ticked'], spotted: ['пятнистый', 'spotted'],
-  mackerel: ['тигровый', 'tabby'], classic: ['мраморный', 'marbled'],
+  // «tabby» по-английски — родовое название ЛЮБОГО рисунка, для полосок нужен
+  // именно «mackerel» (рядом classic = marbled).
+  mackerel: ['тигровый', 'mackerel'], classic: ['мраморный', 'marbled'],
   solid: ['сплошной', 'solid'],
 };
 const COLOR_NAME: Record<string, LocStr> = {

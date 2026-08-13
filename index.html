@@ -80,7 +80,13 @@
     }
     #rotate .emoji { font-size: 56px; }
     #rotate p { font-size: 18px; font-weight: 600; }
-    @media (orientation: portrait) and (max-width: 820px) {
+    /*
+      Гейт по `pointer: coarse` обязателен: без него заглушка ловит не телефон, а
+      любое окно, где высота больше ширины, — и на десктопе 700×700 игра пропадала
+      целиком вместо честного леттербокса (сцена такое окно держит, MIN_ASPECT в
+      ui/game.ts). Требования 1.10.2 / 1.10.4 / 1.14.
+    */
+    @media (orientation: portrait) and (max-width: 820px) and (pointer: coarse) {
       #app { display: none; }
       #rotate { display: flex; }
     }
@@ -90,8 +96,26 @@
   <div id="app"></div>
   <div id="rotate">
     <div class="emoji">🐱🔄</div>
-    <p>Поверни телефон горизонтально</p>
+    <p id="rotate-text">Поверни телефон горизонтально</p>
   </div>
+  <script>
+    /*
+      Заглушку рисует CSS ещё до загрузки Pixi, поэтому система переводов
+      (src/i18n.ts) до неё не дотягивается — язык определяем здесь, тем же
+      приоритетом «ручной выбор → браузер → русский» и по тому же ключу
+      localStorage. Требование п. 8.2.3: игрок не должен видеть чужой язык.
+      Дальше строку берёт на себя i18n — она обновит её при смене языка.
+    */
+    (function () {
+      var stored = null;
+      try { stored = localStorage.getItem('catlab:lang'); } catch (e) { /* приватный режим */ }
+      var code = String(stored || navigator.language || 'ru').slice(0, 2).toLowerCase();
+      if (code === 'en') {
+        document.documentElement.lang = 'en';
+        document.getElementById('rotate-text').textContent = 'Turn your phone sideways';
+      }
+    })();
+  </script>
   <script>
     /*
       Требования платформы 1.6.1.8 / 1.6.2.7: по полю игры не должно открываться

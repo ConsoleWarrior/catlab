@@ -123,10 +123,24 @@ export function isAuthorized(): boolean {
   try { return player?.isAuthorized() ?? false; } catch { return false; }
 }
 
-/** Предложить вход в Яндекс ID — только по осознанному действию игрока. */
+/** Предложить вход в Яндекс ID — только по осознанному действию игрока (п. 1.2.1). */
 export async function openAuthDialog(): Promise<boolean> {
   if (!sdk?.auth) return false;
-  try { await sdk.auth.openAuthDialog(); return isAuthorized(); } catch { return false; }
+  try {
+    await sdk.auth.openAuthDialog();
+    // После входа объект игрока берём заново: гостевой сменился на аккаунтный, и
+    // облачный сейв должен идти уже в аккаунт (п. 1.13.3 — прогресс доступен с
+    // разных устройств). Не получилось — останется гостевой, игра не ломается.
+    try { player = await withTimeout(sdk.getPlayer({ scopes: false })); } catch { /* оставляем прежнего */ }
+    return isAuthorized();
+  } catch {
+    return false; // игрок закрыл окно входа — обычный сценарий
+  }
+}
+
+/** Вход в Яндекс ID вообще доступен (есть SDK и метод авторизации). */
+export function canOfferAuth(): boolean {
+  return !!sdk?.auth;
 }
 
 /**
@@ -154,19 +168,42 @@ export function getAdv(): YaAdv | null {
   return sdk?.adv ?? null;
 }
 
-/** Убрать лоадер платформы — вызывать, когда игра готова к взаимодействию. */
+let readyDone = false;
+let readyWanted = false;
+let gameplayOn = false;
+
+/**
+ * Убрать лоадер платформы — вызывать, когда игра готова к взаимодействию (п. 1.19.2).
+ *
+ * Два условия, без которых портал показывает игроку вечный лоадер. Первое: вызвать
+ * РОВНО один раз — отсюда `readyDone`, звать можно откуда угодно и сколько угодно.
+ * Второе: не потерять вызов, если игра собралась раньше, чем поднялся SDK (медленная
+ * сеть), — тогда запоминаем намерение и снимаем лоадер сразу, как SDK появится.
+ */
 export function loadingReady(): void {
-  try { sdk?.features?.LoadingAPI?.ready(); } catch { /* метода нет — не критично */ }
+  if (readyDone) return;
+  readyWanted = true;
+  const api = sdk?.features?.LoadingAPI;
+  if (!api) return; // SDK ещё нет — вызовем в flushLifecycle(), как только появится
+  try { api.ready(); readyDone = true; } catch { /* метода нет — не критично */ }
 }
 
 /** Начался активный геймплей (платформа реже показывает рекламу поверх игры). */
 export function gameplayStart(): void {
+  gameplayOn = true;
   try { sdk?.features?.GameplayAPI?.start(); } catch { /* метода нет */ }
 }
 
 /** Геймплей приостановлен (сворачивание, пауза, оверлей). */
 export function gameplayStop(): void {
+  gameplayOn = false;
   try { sdk?.features?.GameplayAPI?.stop(); } catch { /* метода нет */ }
+}
+
+/** SDK поднялся — доигрываем то, что игра успела сообщить до его появления. */
+function flushLifecycle(): void {
+  if (readyWanted) loadingReady();
+  if (gameplayOn) gameplayStart();
 }
 
 let pauseHandler: ((on: boolean) => void) | null = null;
@@ -195,10 +232,23 @@ function bindPauseEvents(): void {
 }
 
 async function bootstrap(): Promise<void> {
-  await waitSdkScript();
+  const settled = await waitSdkScript();
 
+  if (!window.YaGames) {
+    // Тег `/sdk.js` не отработал. Если он просто ещё в пути (медленная сеть) —
+    // не бросаем платформу насовсем: игру запускаем сейчас, на локальном сейве, а
+    // SDK доподнимаем в фоне (см. lateBootstrap). Раньше здесь был тупик: SDK,
+    // опоздавший на секунду, терялся вместе с рекламой, покупками и ready().
+    if (!settled) void lateBootstrap();
+    return; // иначе это честно «не платформа»: локалка, оффлайн, открыт вне фрейма
+  }
+  await connect();
+}
+
+/** Поднимает сам SDK и объект игрока. Наружу исключений не выпускает. */
+async function connect(): Promise<void> {
   const api = window.YaGames;
-  if (!api) return; // тег `/sdk.js` не отдал лоадер: не платформа, локалка, оффлайн
+  if (!api || sdk) return;
 
   try {
     sdk = await withTimeout(api.init());
@@ -207,6 +257,7 @@ async function bootstrap(): Promise<void> {
     return;
   }
   bindPauseEvents(); // SDK появился — вешаем паузу платформы (см. setPlatformPauseHandler)
+  flushLifecycle();  // и снимаем лоадер портала, если игра готова с прошлого кадра
 
   try {
     // scopes: false — доступ к данным игрока БЕЗ запроса личных данных, т.е. без
@@ -218,15 +269,45 @@ async function bootstrap(): Promise<void> {
   }
 }
 
+/** Ждём опоздавший тег сколько потребуется — игра в это время уже играется. */
+async function lateBootstrap(): Promise<void> {
+  try {
+    const ok = await window.__sdkLoaded;
+    if (!ok || sdk) return;
+    await connect();
+    if (player) { lateArrived = true; lateHandler?.(); }
+  } catch { /* платформы нет */ }
+}
+
+let lateHandler: (() => void) | null = null;
+let lateArrived = false;
+
+/**
+ * Игрок появился уже ПОСЛЕ старта игры (только этот случай, не обычный запуск).
+ * Сообщаем хранилищу: сессия идёт на локальном сейве, и писать её в облако
+ * вслепую нельзя — там может лежать более свежий прогресс с другого устройства
+ * (см. storage.adoptLatePlayer). Если SDK успел подняться раньше, чем игра
+ * повесила обработчик, зовём его сразу — событие не теряется.
+ */
+export function setLatePlayerHandler(fn: () => void): void {
+  lateHandler = fn;
+  if (lateArrived) fn();
+}
+
 /**
  * Ждёт тег `<script async src="/sdk.js">` из index.html: при async он может
  * отработать и до, и после модуля игры. Таймаут — на случай, когда запрос висит
- * (плохая сеть): без него старт игры залипнет на ожидании платформы.
+ * (плохая сеть): без него старт игры залипнет на ожидании платформы. Возвращает
+ * true, если тег определился (успехом или ошибкой), false — если истекло время и
+ * ответа всё ещё нет: тогда ожидание продолжается в фоне.
  */
-function waitSdkScript(): Promise<unknown> {
+function waitSdkScript(): Promise<boolean> {
   const loaded = window.__sdkLoaded;
-  if (!loaded) return Promise.resolve(); // страница без тега — просто нет платформы
-  return Promise.race([loaded, new Promise((r) => setTimeout(r, SCRIPT_TIMEOUT_MS))]);
+  if (!loaded) return Promise.resolve(true); // страница без тега — просто нет платформы
+  return Promise.race([
+    loaded.then(() => true, () => true),
+    new Promise<boolean>((r) => setTimeout(() => r(false), SCRIPT_TIMEOUT_MS)),
+  ]);
 }
 
 /** Обещания SDK вне платформы умеют висеть вечно — страхуемся таймаутом. */
