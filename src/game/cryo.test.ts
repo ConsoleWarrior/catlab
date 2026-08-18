@@ -236,12 +236,14 @@ describe('крио-банк: анализ замороженного кота', 
   it('генетический анализ доступен коту в капсуле (не «кот не найден»)', () => {
     const { s, cat } = setup(30);
     attachHiddenPedigree(s, cat, makeRng(31));
-    s.coins = C.analyzeCoinCost(cat.rarityTier);
+    const price = C.analyzeCost(s.level);
+    s.coins = price.coins;
+    s.dna = price.dna;
     freezeCat(s, cat.id, 'ad', 0);
     const frozen = s.cryo.find((c) => c.id === cat.id)!;
     expect(frozen.analyzed).toBe(false);
     expect(pedigreeHasFog(frozen)).toBe(true);
-    const r = analyzeCat(s, cat.id, 'coins', 1000);
+    const r = analyzeCat(s, cat.id, 'pay', 1000);
     expect(r.ok).toBe(true);
     expect(frozen.analyzed).toBe(true);
     expect(pedigreeHasFog(frozen)).toBe(false); // родословная вскрыта прямо в капсуле

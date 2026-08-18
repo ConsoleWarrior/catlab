@@ -27,6 +27,8 @@ import { Container, Graphics, Text } from 'pixi.js';
 import type { Cat } from '../game/index.js';
 import {
   tutorialStep, isInSlot, isAdult, isOld, isChampion, analyzeTarget, adoptTarget,
+  growTarget, shelterTarget,
+  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
 } from '../game/index.js';
 import type { TutorStep } from '../game/index.js';
 import { COLORS, FONT, label } from './theme.js';
@@ -50,6 +52,12 @@ export interface TutorHost {
   anchorIn(roomIndex: number, key: string): Container | null;
   /** Точка навигации нужной комнаты — подсказываем, куда идти. */
   navDot(roomIndex: number): Container | null;
+  /**
+   * Занятые полосы в верхнем ряду ТЕКУЩЕЙ комнаты (Room.topReserve): в этот
+   * коридор встаёт плашка подсказки, когда стоит сверху. null — комната ничего
+   * не резервирует, доступна вся ширина.
+   */
+  topReserve(): { left: number; right: number } | null;
   /** Открыт ли оверлей (меню кота, панель) — кольцо в этот момент не рисуем. */
   overlayOpen(): boolean;
   /** Игрок нажал «пропустить обучение». */
@@ -73,6 +81,9 @@ interface Hint {
 }
 
 const PLATE_MAX_W = 460;
+// Ниже этой ширины плашка не сжимается даже в узком коридоре между панелями
+// комнаты: текст подсказки должен оставаться читаемым (п. 1.10.1).
+const MIN_PLATE_W = 300;
 
 export class Tutorial {
   readonly layer = new Container();
@@ -129,7 +140,7 @@ export class Tutorial {
 
   /** Покадровое обновление. dt — секунды. */
   update(dt: number): void {
-    const step = tutorialStep(this.host.ctx.state);
+    const step = tutorialStep(this.host.ctx.state, this.host.ctx.now());
     if (!step) {
       this.layer.visible = false;
       // Шагов больше нет, а обучение ещё открыто — значит игрок только что
@@ -244,13 +255,28 @@ export class Tutorial {
   }
 
   private layoutPlate(text: string, side: 'top' | 'bottom'): void {
+    // Сверху плашка живёт в коридоре между боковыми панелями комнаты (стойка
+    // заказов и кормушка в Питомнике, массовые кнопки в Приюте): комната сообщает
+    // их ширину через Room.topReserve. Без этого плашка, центрированная по всей
+    // сцене, наезжала на кормушку — п. 1.10.3 требований площадки. Снизу вдоль
+    // краёв ничего нет, там доступна вся ширина.
+    const res = side === 'top' ? this.host.topReserve() : null;
+    const left = res?.left ?? 0;
+    const right = res?.right ?? 0;
+    const corridor = this.host.ctx.roomW - left - right;
+
     // Ширина плашки тянется за шириной сцены: в мобильном ландшафте сцена низкая и
     // широкая, и узкая плашка разворачивала текст в пять строк — такая «стена»
-    // накрывала верхний ряд кнопок комнаты (п. 1.10.3 требований площадки). Чем
-    // шире плашка, тем она ниже, и перекрывать ей уже почти нечего.
-    const W = Math.round(Math.min(
-      Math.max(PLATE_MAX_W, this.host.ctx.roomW * 0.62),
-      this.host.ctx.roomW - 32,
+    // накрывала верхний ряд кнопок комнаты. Чем шире плашка, тем она ниже, и
+    // перекрывать ей уже почти нечего. Коридор уже плашки (узкий экран) — берём
+    // его целиком: наехать на панель хуже, чем стать на строку выше.
+    const W = Math.round(Math.max(
+      MIN_PLATE_W,
+      Math.min(
+        Math.max(PLATE_MAX_W, this.host.ctx.roomW * 0.62),
+        this.host.ctx.roomW - 32,
+        corridor - 16,
+      ),
     ));
     this.plateText.style.wordWrapWidth = W - 76;
     this.plateText.text = text;
@@ -264,7 +290,12 @@ export class Tutorial {
     this.plateText.position.set(20, H / 2);
     this.skipBtn.position.set(W - 26, H / 2);
 
-    const x = (this.host.ctx.roomW - W) / 2;
+    // Центр — по свободному коридору, а не по всей сцене; на всякий случай
+    // прижимаем к краям экрана (коридор мог оказаться уже минимальной ширины).
+    const x = Math.round(Math.min(
+      Math.max(8, left + (corridor - W) / 2),
+      this.host.ctx.roomW - W - 8,
+    ));
     // Сверху плашка встаёт ПОД титульной строкой комнаты: название, счётчик и
     // кнопки рядом с ним должны остаться видимыми (п. 1.10.3 — элементы не
     // перекрывают друг друга). Снизу — над полосой навигации.
@@ -283,10 +314,12 @@ export class Tutorial {
         return {
           room: 'nursery', key: cat ? `cat:${cat.id}` : null, gesture: 'tap', overOverlay: true,
           text: t(
-            'Начнём с науки: тапни котика → «🧬 Генетический анализ» → 🎁 бесплатно. '
-              + 'Он вскроет родословную и скрытые гены предков — от них зависит, какие породы у тебя родятся',
-            'Science first: tap a cat → "🧬 Genetic analysis" → 🎁 free. '
-              + 'It reveals the pedigree and the hidden genes of its ancestors — they decide which breeds you get',
+            'Привет! Начнём с науки — тапни котика → «🧬 Генетический анализ» → 🎁 бесплатно. '
+              + 'Он вскроет родословную и скрытые гены предков — от них зависит, какой породы будут потомки. '
+              + `Первые ${FREE_ANALYZE_COUNT} анализов бесплатны`,
+            'Hi! Science first — tap a cat → "🧬 Genetic analysis" → 🎁 free. '
+              + 'It reveals the pedigree and the hidden genes of its ancestors — they decide which breeds the offspring will be. '
+              + `The first ${FREE_ANALYZE_COUNT} analyses are free`,
           ),
         };
       }
@@ -338,23 +371,52 @@ export class Tutorial {
       case 'skip':
         return {
           room: 'incubator', key: 'freeSkip', gesture: 'tap',
-          text: t('Вязка идёт. Держи подарок лаборатории — ускорь её бесплатно ⚡', 'Breeding is running. Here is a gift from the lab — speed it up for free ⚡'),
+          text: t(
+            `Вязка идёт. Держи подарок лаборатории ⚡ первые ${FREE_SKIP_COUNT} ускорений бесплатно!`,
+            `Breeding is running. Here is a gift from the lab ⚡ the first ${FREE_SKIP_COUNT} speed-ups are free!`,
+          ),
         };
       case 'wait':
         return {
           room: 'incubator', key: 'slot', gesture: 'tap',
           text: t('Малыш вот-вот появится в окошке вязки 🥚', 'The kitten is about to appear in the breeding slot 🥚'),
         };
-      case 'kitten':
+      case 'grow': {
+        // Малыш мог остаться в окошке вязки, а мог сразу уехать в комнату из карточки
+        // рождения — ведём туда, где он сейчас (в комнатах якорь тот же, `cat:<id>`).
+        const kid = growTarget(ctx.state, ctx.now());
         return {
-          room: 'incubator', key: 'toShelter', gesture: 'tap',
+          room: !kid || isInSlot(ctx.state, kid.id) ? 'incubator' : kid.location,
+          key: kid ? `cat:${kid.id}` : 'slot', gesture: 'tap', overOverlay: true,
           text: t(
-            'Малыш родился! Пока он в окошке, слот занят. Отправь его кнопкой «🏚️ В приют» — '
-              + 'приют — это перевалочный пункт для всех лишних котиков',
-            'The kitten is born! While it sits in the slot, the slot is busy. Send it away with "🏚️ To the shelter" — '
-              + 'the shelter is the waypoint for every spare cat',
+            'Малыш родился! Чтобы узнать пол котёнка, он должен вырасти. Тапни по нему → '
+              + `«🌱 Вырастить сейчас» → 🎁 бесплатно. Первые ${FREE_GROWTH_COUNT} ускорений роста бесплатно!`,
+            'The kitten is born! To find out its sex it has to grow up. Tap it → '
+              + `"🌱 Grow up now" → 🎁 free. The first ${FREE_GROWTH_COUNT} grow-ups are free!`,
           ),
         };
+      }
+      case 'kitten':
+        return {
+          room: 'incubator', key: 'toNursery', gesture: 'tap',
+          text: t(
+            'Пока кот в слоте новорождённого — слот занят. Отправь его в питомник',
+            'While the cat sits in the newborn slot, the slot is busy. Send it to the cattery',
+          ),
+        };
+      case 'toShelter': {
+        const cat = shelterTarget(ctx.state);
+        return {
+          room: cat && isInSlot(ctx.state, cat.id) ? 'incubator' : 'nursery',
+          key: cat ? `cat:${cat.id}` : null, gesture: 'tap', overOverlay: true,
+          text: t(
+            'Отправь кота в приют: тапни по нему → «🏚️ В приют». Приют — перевалочный '
+              + 'пункт для всех лишних котиков',
+            'Send the cat to the shelter: tap it → "🏚️ To the shelter". The shelter is '
+              + 'the waypoint for every spare cat',
+          ),
+        };
+      }
       case 'adopt': {
         if (ctx.carrying()) {
           return {
@@ -409,10 +471,10 @@ export class Tutorial {
         return {
           room: 'nursery', key: `cat:${cat.id}`, gesture: 'hold',
           text: t(
-            'Последнее: возьми взрослого котика за шкирку и подними на пьедестал 🏆. '
-              + 'Чемпион на выставке приносит 💰 каждую минуту — даже пока игра закрыта',
-            'Last one: pick an adult cat up by the scruff and lift it onto a pedestal 🏆. '
-              + 'A champion at the show brings 💰 every minute — even while the game is closed',
+            'И последнее: подними взрослого котика за шкирку и поставь на пьедестал 🏆. '
+              + 'Лучшие коты, когда сыты, приносят на выставке постоянный доход 💰',
+            'And the last one: pick an adult cat up by the scruff and put it onto a pedestal 🏆. '
+              + 'Your best cats, as long as they are fed, bring a steady income at the show 💰',
           ),
         };
       }

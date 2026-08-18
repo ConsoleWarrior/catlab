@@ -19,7 +19,9 @@ import {
   healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cloneCostCoins, cryoCount, cryoCapacity,
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
-  analyzeCat, freeAnalyzeCat, analyzeCoinCost, tutorialActive, kinshipName,
+  analyzeCat, freeAnalyzeCat, analyzeCost, ANALYZE_CRYSTAL_COST, FREE_ANALYZE_COUNT, kinshipName,
+  freeGrowKitten, FREE_GROWTH_COUNT,
+  TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   claimOfflineAdBonus, offlineAdBonus, OFFLINE_AD_BONUS,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
@@ -374,12 +376,88 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   extra.push(privacyBtn);
   y += 52;
 
+  // Сброс прогресса. Кнопка нарочно неприметная (цвет карточки, не акцент) и
+  // ведёт в отдельное подтверждение — случайный тап в настройках не должен
+  // стирать партию. Само действие обещано игроку в политике (п. 3.5): «прогресс
+  // можно удалить», и это самый честный способ его сдержать, не заставляя
+  // человека чистить браузер.
+  const resetBtn = new Button({
+    text: t('🗑 Сбросить прогресс', '🗑 Reset progress'),
+    w: W - pad * 2, h: 42, color: COLORS.card, textColor: COLORS.inkSoft, fontSize: 14,
+  });
+  resetBtn.position.set(W / 2, y + 21);
+  resetBtn.onTap = () => ctx.openResetConfirm();
+  extra.push(resetBtn);
+  y += 52;
+
   const closeBtn = new Button({ text: t('Готово', 'Done'), w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
   closeBtn.position.set(W / 2, y + 23);
   closeBtn.onTap = close;
   y += 58;
 
   root.addChild(panel(W, y, COLORS.hud, 18), title, volCap, pctT, sl, langCap, ...langBtns, ...extra, closeBtn);
+  return root;
+}
+
+/**
+ * Подтверждение сброса прогресса (⚙️ Настройки → «🗑 Сбросить прогресс»).
+ *
+ * Действие необратимое и затирает в том числе облачную копию, поэтому здесь —
+ * честная сводка того, что теряется, а «Отмена» стоит акцентной кнопкой. Сам
+ * сброс делает Game (onConfirm): он же пересобирает сцену и ждёт записи в облако,
+ * поэтому на время ожидания кнопки гаснут, а панель закрывает Game.
+ */
+export function buildResetConfirm(ctx: UiContext, close: () => void, onConfirm: () => void): Container {
+  const W = 340;
+  const pad = 22;
+  const root = new Container();
+
+  const title = label(t('Сбросить прогресс?', 'Reset progress?'), 19, COLORS.ink, '800');
+  title.position.set(W / 2, 30);
+
+  const cats = ctx.state.cats.length;
+  const sub = label(
+    t(`Сейчас: ⭐ Ур. ${ctx.state.level},  🐱 ${cats}`, `Now: ⭐ Lv. ${ctx.state.level},  🐱 ${cats}`),
+    13, COLORS.inkSoft, '700',
+  );
+  sub.position.set(W / 2, 54);
+
+  const body = new Text({
+    text: t(
+      'Игра начнётся с нуля: котики, монеты, гены, уровень лаборатории, открытые породы и рецепты пропадут.\n\n'
+      + 'Сбрасывается и облачная копия — вернуть прогресс с другого устройства будет нельзя. '
+      + 'Купленные 💎 не возвращаются.',
+      'The game starts over: cats, coins, genes, lab level, discovered breeds and recipes will be gone.\n\n'
+      + 'The cloud copy is reset too — progress cannot be restored from another device. '
+      + 'Purchased 💎 are not refunded.',
+    ),
+    style: {
+      fontFamily: FONT, fontSize: 13, fontWeight: '600', fill: COLORS.ink,
+      wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 18, align: 'left',
+    },
+  });
+  body.anchor.set(0, 0);
+  body.position.set(pad, 78);
+
+  let y = 78 + body.height + 16;
+  const gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  const noBtn = new Button({ text: t('Отмена', 'Cancel'), w: bw, h: 48, color: COLORS.primary, fontSize: 16 });
+  noBtn.position.set(pad + bw / 2, y + 24);
+  noBtn.onTap = close;
+  const yesBtn = new Button({
+    text: t('Сбросить', 'Reset'), w: bw, h: 48, color: COLORS.card, textColor: COLORS.ink, fontSize: 16,
+  });
+  yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
+  yesBtn.onTap = () => {
+    yesBtn.enabled = false;
+    noBtn.enabled = false;
+    yesBtn.setText(t('Сбрасываю…', 'Resetting…'));
+    onConfirm();
+  };
+  y += 56;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), title, sub, body, noBtn, yesBtn);
   return root;
 }
 
@@ -612,6 +690,75 @@ export function buildOfflineReport(ctx: UiContext, report: OfflineReport, close:
   closeBtn.onTap = close;
   parts.push(closeBtn);
   y += 52;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), ...parts);
+  return root;
+}
+
+/**
+ * Панель «Обучение пройдено»: поздравление + подарок за прохождение (💰 + 💎) с
+ * кнопкой «Забрать». Тостом такой момент не подать — он живёт пару секунд и
+ * теряется среди прочих; финал обучения заслуживает отдельного окна.
+ * Начисление висит на `claim` (его же зовёт закрытие окна — подарок не теряется).
+ */
+export function buildTutorialDonePanel(ctx: UiContext, claim: () => void): Container {
+  void ctx;
+  const W = 340;
+  const pad = 24;
+  const root = new Container();
+  const parts: Container[] = [];
+
+  const title = label(t('🎓 Обучение пройдено!', '🎓 Tutorial complete!'), 20, COLORS.ink, '800');
+  title.position.set(W / 2, 32);
+  parts.push(title);
+
+  let y = 54;
+
+  const plate = panel(W - pad * 2, 76, COLORS.card, 14);
+  plate.position.set(pad, y);
+  const cong = new Text({
+    text: t('Поздравляем! Ты прошёл всю петлю лаборатории: анализ → вязка → малыш → пристройство → заказы → выставка.',
+      'Congratulations! You have been through the whole lab loop: analysis → breeding → kitten → giving away → orders → the show.'),
+    style: {
+      fontFamily: FONT, fontSize: 12.5, fontWeight: '700', fill: COLORS.inkSoft,
+      align: 'center', wordWrap: true, wordWrapWidth: W - pad * 2 - 20, lineHeight: 17,
+    },
+  });
+  cong.anchor.set(0.5, 0.5);
+  cong.position.set(W / 2, y + 38);
+  parts.push(plate, cong);
+  y += 88;
+
+  // Подарок — на золотой плашке, как главный герой окна.
+  const gift = panel(W - pad * 2, 44, COLORS.coins, 12);
+  gift.position.set(pad, y);
+  const gt = label(
+    t(`🎁 Подарок: 💰 +${TUTORIAL_REWARD_COINS} и 💎 +${TUTORIAL_REWARD_CRYSTALS}`,
+      `🎁 Gift: 💰 +${TUTORIAL_REWARD_COINS} and 💎 +${TUTORIAL_REWARD_CRYSTALS}`),
+    16, 0xffffff, '800',
+  );
+  gt.position.set(W / 2, y + 22);
+  parts.push(gift, gt);
+  y += 56;
+
+  const next = new Text({
+    text: t('Дальше — Генолаб: 📖 Котодекс и рецепты пород. Подсказки всегда под кнопкой ℹ️ у названия комнаты.',
+      'Next stop — the Genolab: 📖 the Catdex and breed recipes. Help is always behind the ℹ️ button next to the room title.'),
+    style: {
+      fontFamily: FONT, fontSize: 11.5, fontWeight: '600', fill: COLORS.inkSoft,
+      align: 'center', wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 16,
+    },
+  });
+  next.anchor.set(0.5, 0);
+  next.position.set(W / 2, y);
+  parts.push(next);
+  y += next.height + 14;
+
+  const claimBtn = new Button({ text: t('🎁 Забрать', '🎁 Claim'), w: W - pad * 2, h: 48, color: COLORS.good, textColor: 0xffffff, fontSize: 17 });
+  claimBtn.position.set(W / 2, y + 24);
+  claimBtn.onTap = claim;
+  parts.push(claimBtn);
+  y += 60;
 
   root.addChild(panel(W, y, COLORS.hud, 18), ...parts);
   return root;
@@ -1161,8 +1308,13 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
     addBtn(t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
-  // Ускорение роста: одно подменю «Вырастить сейчас» — там выбор 📺 реклама или 💎 кристаллы.
-  addBtn(t('🌱 Вырастить сейчас', '🌱 Grow up now'), COLORS.primary, true, () => ctx.openGrowConfirm(cat));
+  // Ускорение роста: одно подменю «Вырастить сейчас» — там подарок 🎁 (пока запас цел),
+  // иначе выбор 📺 реклама или 💎 кристаллы. Счётчик подарков — сразу на кнопке.
+  const growFree = ctx.state.freeGrowthLeft;
+  addBtn(growFree > 0
+    ? t(`🌱 Вырастить сейчас · 🎁 ${growFree}`, `🌱 Grow up now · 🎁 ${growFree}`)
+    : t('🌱 Вырастить сейчас', '🌱 Grow up now'),
+  COLORS.primary, true, () => ctx.openGrowConfirm(cat));
 
   addMoveButtons(ctx, cat, close, addBtn);
   addAdoptButton(ctx, cat, addBtn); // малыша из окошка вязки можно сразу пристроить
@@ -1197,10 +1349,12 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
 }
 
 /**
- * Подменю «Вырастить сейчас» котёнка (из инфо-меню). Два пути ускорения роста:
- * 📺 реклама (−N мин, бесплатно, повторяемо) и 💎 кристаллы (мгновенно, цена ∝ остатку
- * роста, ставка GROWTH_SPEEDUP_CRYSTAL_PER_MIN). После действия переоткрываем меню кота:
- * если ещё котёнок — снова его карточка, если вырос — меню взрослого.
+ * Подменю «Вырастить сейчас» котёнка (из инфо-меню). Пути ускорения роста: подарочный
+ * (первые FREE_GROWTH_COUNT котят — бесплатно и мгновенно, `freeGrowKitten`; пока запас
+ * цел, платных вариантов не показываем), затем 📺 реклама (−N мин, повторяемо) и
+ * 💎 кристаллы (мгновенно, цена ∝ остатку роста, ставка GROWTH_SPEEDUP_CRYSTAL_PER_MIN).
+ * После действия переоткрываем меню кота: если ещё котёнок — снова его карточка,
+ * если вырос — меню взрослого (там уже видны пол, имя и облик).
  */
 export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
   const W = 320;
@@ -1221,6 +1375,45 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   root.addChild(title, sp, sub);
 
   const btnW = W - 48;
+
+  // Подарок новой игры: пол, имя и облик проявляются только у взрослого — первые
+  // FREE_GROWTH_COUNT котят растим бесплатно, счётчик остатка на кнопке и в тосте.
+  const freeLeft = ctx.state.freeGrowthLeft;
+  if (freeLeft > 0) {
+    // Счётчик — строкой над кнопкой (не под заголовком: там он налезал бы на котёнка).
+    const counter = label(
+      t(`🎁 Бесплатных ускорений роста: ${freeLeft} из ${FREE_GROWTH_COUNT}`, `🎁 Free grow-ups left: ${freeLeft} of ${FREE_GROWTH_COUNT}`),
+      12.5, COLORS.ink, '800',
+    );
+    counter.position.set(W / 2, y);
+    y += 22;
+    const freeBtn = new Button({
+      text: t(`🎁 Бесплатно · осталось ${freeLeft}`, `🎁 Free · ${freeLeft} left`),
+      w: btnW, h: 44, color: COLORS.warn, textColor: COLORS.ink, fontSize: 14,
+    });
+    freeBtn.position.set(W / 2, y + 22);
+    freeBtn.onTap = () => {
+      const r = freeGrowKitten(ctx.state, cat.id, ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      ctx.commit();
+      ctx.toast(r.left > 0
+        ? t(`Котик вырос! 🌱 бесплатных осталось ${r.left}`, `The cat has grown up! 🌱 ${r.left} free left`)
+        : t('Котик вырос! 🌱 подарки кончились — дальше 📺 или 💎', 'The cat has grown up! 🌱 no free ones left — next: 📺 or 💎'));
+      close(); ctx.openCatMenu(cat);
+    };
+    root.addChild(counter, freeBtn);
+    y += 52;
+
+    const closeOnly = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+    closeOnly.position.set(W / 2, y + 20);
+    closeOnly.onTap = close;
+    root.addChild(closeOnly);
+    y += 50;
+
+    root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+    return root;
+  }
+
   const adBtn = new Button({
     text: t('📺 Реклама · вырастить бесплатно', '📺 Ad · grow up for free'), w: btnW, h: 44,
     color: COLORS.good, textColor: 0xffffff, fontSize: 14,
@@ -1419,10 +1612,23 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
 }
 
 /**
+ * Подпись кнопки анализа в меню кота (Питомник и криокапсула): пока цел запас
+ * подарочных анализов — со счётчиком 🎁, чтобы бесплатные было видно ещё до открытия
+ * окна, а их исчерпание не выглядело внезапным подорожанием.
+ */
+function analyzeBtnLabel(ctx: UiContext): string {
+  const left = ctx.state.freeAnalyzeLeft;
+  return left > 0
+    ? t(`🧬 Генетический анализ · 🎁 ${left}`, `🧬 Genetic analysis · 🎁 ${left}`)
+    : t('🧬 Генетический анализ', '🧬 Genetic analysis');
+}
+
+/**
  * Подтверждение Генетического анализа (система знаний, этап B): вскрывает СРАЗУ
  * всю родословную кота и его скрытые гены (породы предков). Механику не меняет —
- * скрытые гены работали и до анализа. Оплата 💰 (цена по тиру) или 📺 (без кулдауна);
- * самый первый анализ новичку достаётся подарком обучения (см. freeAnalyzeCat).
+ * скрытые гены работали и до анализа. Оплата 💰 + 🧬 (цена по уровню лаборатории),
+ * 💎 (ANALYZE_CRYSTAL_COST) или 📺 (бесплатно, без кулдауна); первые
+ * FREE_ANALYZE_COUNT анализов в новой игре — подарок (см. freeAnalyzeCat).
  * После успеха открывает родословную — показать игроку, что он купил.
  */
 export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void): Container {
@@ -1456,48 +1662,82 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   const btnW = W - 48;
   const done = (): void => { ctx.commit(); ctx.toast(t('Анализ готов 🧬 родословная вскрыта', 'Analysis done 🧬 pedigree revealed')); close(); ctx.openPedigree(cat); };
 
-  // Подарок обучения: САМЫЙ ПЕРВЫЙ анализ бесплатный (см. freeAnalyzeCat) — новичок
-  // должен увидеть, что именно даёт анализ, прежде чем платить за него 💰 или 📺.
-  // Пока подарок цел, платные варианты не показываем: одно очевидное действие.
-  const gift = tutorialActive(ctx.state) && !ctx.state.tutorial.freeAnalyzeUsed && !cat.analyzed;
+  // Подарок новой игры: первые FREE_ANALYZE_COUNT анализов бесплатны (см. freeAnalyzeCat) —
+  // новичок должен успеть сравнить несколько родословных, прежде чем платить 💰 или 📺.
+  // Пока подарки не кончились, платные варианты не показываем: одно очевидное действие.
+  const left = ctx.state.freeAnalyzeLeft;
+  const gift = left > 0 && !cat.analyzed;
   if (gift) {
+    // Счётчик подарков — прямо над кнопкой: игрок должен видеть, сколько их осталось,
+    // а не обнаружить цену внезапно, когда запас кончится.
+    const counter = label(
+      t(`🎁 Бесплатных анализов: ${left} из ${FREE_ANALYZE_COUNT}`, `🎁 Free analyses left: ${left} of ${FREE_ANALYZE_COUNT}`),
+      13, COLORS.ink, '800',
+    );
+    counter.position.set(W / 2, 74);
     const freeBtn = new Button({
-      text: t('🎁 Бесплатно — подарок лаборатории', '🎁 Free — a gift from the lab'),
+      text: t(`🎁 Бесплатно · осталось ${left}`, `🎁 Free · ${left} left`),
       w: btnW, h: 44, color: COLORS.warn, textColor: COLORS.ink, fontSize: 14,
     });
     freeBtn.position.set(W / 2, y + 22);
     freeBtn.onTap = () => {
       const r = freeAnalyzeCat(ctx.state, cat.id);
       if (!r.ok) { ctx.toast(r.reason); return; }
-      done();
+      ctx.commit();
+      // Тост вместо стандартного: после подарка сразу называем остаток запаса.
+      ctx.toast(r.left > 0
+        ? t(`Анализ готов 🧬 бесплатных осталось ${r.left}`, `Analysis done 🧬 ${r.left} free left`)
+        : t('Анализ готов 🧬 подарки кончились — дальше 💰/🧬, 💎 или 📺', 'Analysis done 🧬 no free ones left — next: 💰/🧬, 💎 or 📺'));
+      close();
+      ctx.openPedigree(cat);
     };
-    root.addChild(freeBtn);
+    root.addChild(counter, freeBtn);
     y += 52;
   } else {
-    // 💰 основная цена — по тиру кота (породистого анализировать дороже)
-    const cost = analyzeCoinCost(cat.rarityTier);
-    const afford = ctx.state.coins >= cost;
-    const coinBtn = new Button({
-      text: t(`💰 Провести анализ · ${cost}`, `💰 Run the analysis · ${cost}`),
+    // Основная цена — 💰 + 🧬 по УРОВНЮ ЛАБОРАТОРИИ (не по тиру кота): анализируют
+    // каждого нового кота, и на старте цена должна быть посильной без рекламы.
+    const price = analyzeCost(ctx.state.level);
+    const afford = ctx.state.coins >= price.coins && ctx.state.dna >= price.dna;
+    const payBtn = new Button({
+      // Шрифт с запасом: на тач-экранах label крупнее в UI_SCALE раз, а самая
+      // длинная цена (ур. 10 — 💰 150 + 🧬 50) должна влезать в кнопку целиком.
+      text: t(`Провести · 💰 ${price.coins} + 🧬 ${price.dna}`, `Analyse · 💰 ${price.coins} + 🧬 ${price.dna}`),
       w: btnW, h: 44, color: afford ? COLORS.primary : COLORS.cardEdge,
-      textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+      textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 13,
     });
-    coinBtn.enabled = afford;
-    coinBtn.position.set(W / 2, y + 22);
-    coinBtn.onTap = () => {
-      const r = analyzeCat(ctx.state, cat.id, 'coins', ctx.now());
+    payBtn.enabled = afford;
+    payBtn.position.set(W / 2, y + 22);
+    payBtn.onTap = () => {
+      const r = analyzeCat(ctx.state, cat.id, 'pay', ctx.now());
       if (!r.ok) { ctx.toast(r.reason); return; }
       done();
     };
-    root.addChild(coinBtn);
+    root.addChild(payBtn);
     y += 52;
 
-    // 📺 бесплатная альтернатива (кулдауна больше нет — анализ инфо-действие)
-    const adBtn = new Button({
-      text: t('📺 Бесплатно за рекламу', '📺 Free for an ad'),
-      w: btnW, h: 44, color: COLORS.good, textColor: 0xffffff, fontSize: 15,
+    // Две альтернативы в один ряд: 💎 (когда кончились монеты/гены) и 📺 бесплатно
+    // без кулдауна. Ряд, а не две широкие кнопки: основное действие — оплата валютой.
+    const halfW = (btnW - 8) / 2;
+    const crystalOk = ctx.state.crystals >= ANALYZE_CRYSTAL_COST;
+    const crystalBtn = new Button({
+      text: `💎 ${ANALYZE_CRYSTAL_COST}`,
+      w: halfW, h: 42, color: crystalOk ? COLORS.crystals : COLORS.cardEdge,
+      textColor: crystalOk ? 0xffffff : COLORS.inkSoft, fontSize: 14,
     });
-    adBtn.position.set(W / 2, y + 22);
+    crystalBtn.enabled = crystalOk;
+    crystalBtn.position.set(W / 2 - halfW / 2 - 4, y + 21);
+    crystalBtn.onTap = () => {
+      const r = analyzeCat(ctx.state, cat.id, 'crystals', ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); return; }
+      done();
+    };
+    // «Реклама» в тексте — требование п. 4.5.1: кнопка называет и ролик, и награду.
+    // Две строки: в половинную ширину одна строка с обоими словами не влезает на тач.
+    const adBtn = new Button({
+      text: t('📺 Реклама\nбесплатно', '📺 Ad\nfree'),
+      w: halfW, h: 42, color: COLORS.good, textColor: 0xffffff, fontSize: 11.5,
+    });
+    adBtn.position.set(W / 2 + halfW / 2 + 4, y + 21);
     adBtn.onTap = () => {
       void showRewarded().then((watched) => {
         if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
@@ -1506,8 +1746,8 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
         done();
       });
     };
-    root.addChild(adBtn);
-    y += 52;
+    root.addChild(crystalBtn, adBtn);
+    y += 50;
   }
 
   const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: btnW, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
@@ -1854,8 +2094,9 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   }
 
   // Генетический анализ (система знаний): вскрыть родословную и скрытые гены.
+  // Пока цел запас подарочных анализов — счётчик 🎁 прямо на кнопке (см. freeAnalyzeCat).
   if (!cat.analyzed && pedigreeHasFog(cat)) {
-    addBtn(t('🧬 Генетический анализ', '🧬 Genetic analysis'), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
+    addBtn(analyzeBtnLabel(ctx), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
   }
 
   // Лечение (ветеринар-шприц) и заморозка (криокапсула) — только перетаскиванием кота
@@ -2379,7 +2620,7 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
       }
       // Генетический анализ доступен и в капсуле: вскрыть родословную/скрытые гены.
       if (!cat.analyzed && pedigreeHasFog(cat)) {
-        addBtn(t('🧬 Генетический анализ', '🧬 Genetic analysis'), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
+        addBtn(analyzeBtnLabel(ctx), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
       }
       addBtn(t('♻️ Освободить капсулу', '♻️ Free the cell'), COLORS.warn, true, () => { confirmDispose = true; render(); });
     }
@@ -2419,6 +2660,12 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     cat ? t(`🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}`, `🧺 In the basket: ${cat.name?.trim() || describeCat(cat)}`) : t('🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Питомнике', '🧺 The basket is empty — drag a cat into the basket under the 📋 button in the Cattery'),
     13, cat ? COLORS.ink : COLORS.inkSoft, '800',
   );
+  // Английские строки шапки длиннее русских, а на мобильном масштабе (UI_SCALE)
+  // ещё и крупнее — в панель фиксированной ширины они не влезали и вылезали
+  // текстом на комнату. Переносим по ширине панели, а всё, что ниже, считаем от
+  // фактической высоты шапки: у RU она в одну строку, у EN может стать в две.
+  basket.style.wordWrap = true;
+  basket.style.wordWrapWidth = W - 48;
   basket.anchor.set(0.5, 0);
   basket.position.set(W / 2, 46);
 
@@ -2432,13 +2679,15 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const adHelp = label(
     t('Не выполнил за 6 ч — заказ сменится сам. Просмотр рекламы обновляет заказ досрочно (раз в час на заказ).', 'Not done within 6 h and the order changes by itself. Watching an ad refreshes an order early (once per hour per order).'),
     11.5, COLORS.inkSoft, '600');
+  adHelp.style.wordWrap = true;
+  adHelp.style.wordWrapWidth = W - 48;
   adHelp.anchor.set(0.5, 0);
-  adHelp.position.set(W / 2, 66);
+  adHelp.position.set(W / 2, basket.y + basket.height + 6);
 
   const rowH = 100;
   const cardW = W - 32;
   const orders = ctx.state.orders;
-  let y = 90;
+  let y = adHelp.y + adHelp.height + 10;
   const rows = new Container();
 
   for (const order of orders) {

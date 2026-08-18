@@ -24,7 +24,7 @@ import {
   kinshipLevel, kinshipName, buildBreedingContext,
   speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS, BREED_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
-import { freeSkipBreeding, tutorialActive } from '../../game/index.js';
+import { freeSkipBreeding } from '../../game/index.js';
 import { boostCanFire } from '../../genetics/index.js';
 import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
@@ -444,6 +444,7 @@ export function createIncubator(ctx: UiContext): Room {
     const wireSlotCat = (sprite: Sprite, cat: Cat, glow?: Sprite): void => {
       sprite.eventMode = 'static';
       sprite.cursor = busy ? 'pointer' : 'grab';
+      anchors.set(`cat:${cat.id}`, sprite); // подсветка обучения: «тапни этого кота»
       if (busy) {
         sprite.on('pointertap', () => { sfxMeow(); ctx.openCatMenu(cat); });
       } else {
@@ -530,6 +531,7 @@ export function createIncubator(ctx: UiContext): Room {
       const ksp = kitten;
       ksp.eventMode = 'static';
       ksp.cursor = 'grab';
+      anchors.set(`cat:${kCat.id}`, ksp); // подсветка обучения: «тапни малыша → вырастить»
       ksp.on('pointerdown', (e) => ctx.startGrab({
         cat: kCat,
         displayH: catH * growthScale(kCat, ctx.now()),
@@ -594,18 +596,25 @@ export function createIncubator(ctx: UiContext): Room {
       const bw2 = Math.round(w * 0.45); // хватает на «📺 Реклама −5 мин» (см. п. 4.5.1)
       const yy = barY + 50;
 
-      // Подарок обучения: первую вязку новичок пропускает бесплатно, чтобы не
-      // смотреть пять минут на таймер, не поняв ещё сути игры. Кнопка живёт
-      // только пока подарок цел (freeSkipBreeding), дальше остаются 📺 и 💎.
-      if (tutorialActive(ctx.state) && !ctx.state.tutorial.freeSkipUsed) {
+      // Подарок новой игры: первые FREE_SKIP_COUNT вязок завершаются бесплатно, чтобы
+      // новичок не смотрел пять минут на таймер, не поняв ещё сути игры. Кнопка живёт,
+      // пока в запасе есть подарки (freeSkipBreeding), дальше остаются 📺 и 💎.
+      // Остаток — прямо на кнопке: игрок видит, сколько ускорений ещё бесплатны.
+      const freeLeft = ctx.state.freeSkipLeft;
+      if (freeLeft > 0) {
         const freeBtn = new Button({
-          text: t('⚡ Ускорить бесплатно', '⚡ Speed up for free'), w: Math.round(w * 0.86), h: 30,
+          text: t(`⚡ Ускорить бесплатно · 🎁 ${freeLeft}`, `⚡ Speed up for free · 🎁 ${freeLeft}`),
+          w: Math.round(w * 0.86), h: 30,
           color: COLORS.warn, fontSize: 12,
         });
         freeBtn.position.set(w / 2, yy);
         freeBtn.onTap = () => {
           const r = freeSkipBreeding(ctx.state, i, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast(t('Подарок лаборатории: готово! 🥚', 'A gift from the lab: done! 🥚')); } else ctx.toast(r.reason);
+          if (!r.ok) { ctx.toast(r.reason); return; }
+          ctx.commit();
+          ctx.toast(r.left > 0
+            ? t(`Подарок лаборатории: готово! 🥚 бесплатных осталось ${r.left}`, `A gift from the lab: done! 🥚 ${r.left} free left`)
+            : t('Подарок лаборатории: готово! 🥚 подарки кончились — дальше 📺 или 💎', 'A gift from the lab: done! 🥚 no free ones left — next: 📺 or 💎'));
         };
         card.addChild(freeBtn);
         // 📺/💎 пока не показываем: у новичка ровно одно очевидное действие
@@ -649,8 +658,8 @@ export function createIncubator(ctx: UiContext): Room {
           ctx.toast(room === 'shelter' ? t('Малыш в приюте 🏠', 'The kitten is in the shelter 🏠') : t('Малыш в питомнике 🏆', 'The kitten is in the cattery 🏆'));
         };
         card.addChild(b);
-        // якорь подсветки обучения: шаг «унеси малыша в Приют»
-        if (i === 0 && room === 'shelter') anchors.set('toShelter', b);
+        // якоря подсветки обучения: «освободи слот — в Питомник» и «унеси в Приют»
+        if (i === 0) anchors.set(room === 'shelter' ? 'toShelter' : 'toNursery', b);
       };
       placeBtn(t(`🏠 В питомник (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`, `🏠 To the cattery (${roomCount(ctx.state, 'nursery')}/${nurseryCapacity(ctx.state)})`),
         'nursery', COLORS.primary, stripY + 38);
@@ -1256,7 +1265,8 @@ export function createIncubator(ctx: UiContext): Room {
     id: 'incubator', title: t('🧬 Инкубатор', '🧬 Incubator'), container: shell.container, refresh, tick, tryDropCat,
     // Обучение новичка: 'slot' — карточка первого слота, 'breed' — «Свести»,
     // 'preview' — 🔮 прогноз пары, 'freeSkip' — подарочный ускоритель,
-    // 'toShelter' — «🏚️ В приют» у родившегося малыша (см. ui/tutorial.ts).
+    // 'toNursery'/'toShelter' — кнопки «куда унести» у родившегося малыша,
+    // `cat:<id>` — сам кот в окошке вязки (малыш или родитель), см. ui/tutorial.ts.
     anchor: (key) => {
       const node = anchors.get(key);
       return node && !node.destroyed ? node : null;

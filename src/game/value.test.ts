@@ -271,6 +271,17 @@ describe('лаборатория и ускорение', () => {
     expect(s.cats.find((c) => c.id === cat.id)).toBeUndefined();
   });
 
+  it('цена ускорения — 1 💎 за каждые начатые 5 минут остатка', () => {
+    const g = C.GROWTH_SPEEDUP_CRYSTAL_PER_MIN;
+    expect(speedUpCost(60_000, g)).toBe(1);           // минута остатка — всё равно 1 💎
+    expect(speedUpCost(5 * 60_000, g)).toBe(1);
+    expect(speedUpCost(6 * 60_000, g)).toBe(2);
+    expect(speedUpCost(10 * 60_000, g)).toBe(2);
+    expect(speedUpCost(11 * 60_000, g)).toBe(3);
+    expect(speedUpCost(C.KITTEN_GROWTH_MS, g)).toBe(3);      // полный рост (15 мин) → 3 💎
+    expect(speedUpCost(C.INCUBATION_BASE_MS, C.BREED_SPEEDUP_CRYSTAL_PER_MIN)).toBe(1); // вязка → 1 💎
+  });
+
   it('speedUpBreeding завершает вязку за 💎', () => {
     const rng = makeRng(9);
     const s = createInitialState(rng, 0);

@@ -86,25 +86,70 @@ describe('туман родословной (этап A)', () => {
 });
 
 describe('генетический анализ (этап B)', () => {
-  it('за 💰: списывает монеты по тиру, ставит analyzed и вскрывает дерево', () => {
+  it('за 💰+🧬: списывает обе валюты по УРОВНЮ лабы, ставит analyzed и вскрывает дерево', () => {
     const { s, mom } = setup(20);
     attachHiddenPedigree(s, mom, makeRng(21));
-    const cost = C.analyzeCoinCost(mom.rarityTier);
-    s.coins = cost;
-    const r = analyzeCat(s, mom.id, 'coins', 1000);
-    expect(r).toMatchObject({ ok: true, coins: cost });
+    const price = C.analyzeCost(s.level);
+    s.coins = price.coins;
+    s.dna = price.dna;
+    const r = analyzeCat(s, mom.id, 'pay', 1000);
+    expect(r).toMatchObject({ ok: true, coins: price.coins, dna: price.dna });
     expect(s.coins).toBe(0);
+    expect(s.dna).toBe(0);
     expect(mom.analyzed).toBe(true);
     expect(pedigreeHasFog(mom)).toBe(false);
+  });
+
+  it('цена зависит от уровня лабы, а не от тира кота', () => {
+    const { s, mom } = setup(20);
+    attachHiddenPedigree(s, mom, makeRng(21));
+    s.level = 5;
+    const price = C.analyzeCost(5);
+    expect(price).toEqual(C.ANALYZE_COST_BY_LEVEL[4]);
+    s.coins = price.coins;
+    s.dna = price.dna;
+    expect(analyzeCat(s, mom.id, 'pay', 0)).toMatchObject({ ok: true, coins: price.coins });
   });
 
   it('не хватает монет → отказ без изменений', () => {
     const { s, mom } = setup(22);
     attachHiddenPedigree(s, mom, makeRng(23));
-    s.coins = C.analyzeCoinCost(mom.rarityTier) - 1;
-    expect(analyzeCat(s, mom.id, 'coins', 0)).toMatchObject({ ok: false, reason: 'не хватает монет' });
+    const price = C.analyzeCost(s.level);
+    s.coins = price.coins - 1;
+    s.dna = price.dna;
+    expect(analyzeCat(s, mom.id, 'pay', 0)).toMatchObject({ ok: false, reason: 'не хватает монет' });
     expect(mom.analyzed).toBe(false);
     expect(pedigreeHasFog(mom)).toBe(true);
+  });
+
+  it('не хватает 🧬 → отказ, монеты НЕ списаны (атомарная оплата)', () => {
+    const { s, mom } = setup(22);
+    attachHiddenPedigree(s, mom, makeRng(23));
+    const price = C.analyzeCost(s.level);
+    s.coins = price.coins;
+    s.dna = price.dna - 1;
+    expect(analyzeCat(s, mom.id, 'pay', 0)).toMatchObject({ ok: false, reason: 'не хватает ДНК' });
+    expect(s.coins).toBe(price.coins); // монеты на месте
+    expect(mom.analyzed).toBe(false);
+  });
+
+  it('💎: альтернатива за 1 кристалл, когда нет ни монет, ни генов', () => {
+    const { s, mom } = setup(22);
+    attachHiddenPedigree(s, mom, makeRng(23));
+    s.coins = 0;
+    s.dna = 0;
+    s.crystals = C.ANALYZE_CRYSTAL_COST;
+    expect(analyzeCat(s, mom.id, 'crystals', 0)).toMatchObject({ ok: true, crystals: C.ANALYZE_CRYSTAL_COST });
+    expect(s.crystals).toBe(0);
+    expect(pedigreeHasFog(mom)).toBe(false);
+  });
+
+  it('💎: не хватает кристаллов → отказ', () => {
+    const { s, mom } = setup(22);
+    attachHiddenPedigree(s, mom, makeRng(23));
+    s.crystals = 0;
+    expect(analyzeCat(s, mom.id, 'crystals', 0)).toMatchObject({ ok: false, reason: 'не хватает кристаллов' });
+    expect(mom.analyzed).toBe(false);
   });
 
   it('📺: бесплатно и БЕЗ кулдауна (можно подряд)', () => {
@@ -123,7 +168,7 @@ describe('генетический анализ (этап B)', () => {
     const { s, mom } = setup(27);
     mom.analyzed = true;
     const coins = s.coins;
-    expect(analyzeCat(s, mom.id, 'coins', 0)).toMatchObject({ ok: true, coins: 0 });
+    expect(analyzeCat(s, mom.id, 'pay', 0)).toMatchObject({ ok: true, coins: 0, dna: 0 });
     expect(s.coins).toBe(coins);
   });
 });

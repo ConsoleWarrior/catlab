@@ -12,8 +12,8 @@ import * as C from './config.js';
 describe('createInitialState', () => {
   it('стартовые ресурсы, пара котов, 1 слот и полная доска заказов', () => {
     const s = createInitialState(makeRng(1), 0);
-    expect(s.coins).toBe(100);
-    expect(s.crystals).toBe(5);
+    expect(s.coins).toBe(C.START_COINS);
+    expect(s.crystals).toBe(0);  // 💎 на старте нет — они в подарке за обучение
     expect(s.dna).toBe(0);
     expect(s.level).toBe(1);
     expect(s.cats).toHaveLength(2);

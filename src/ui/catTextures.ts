@@ -28,14 +28,23 @@ export const GLOW_OUT = 1.06;
 /** Насколько крупнее обычного отображаются коты с геном «крупный» (🐘). */
 export const BIG_SIZE_MULT = 1.1;
 
+/** Половой диморфизм: самец на столько крупнее самки той же породы. */
+export const MALE_SIZE_MULT = 1.1;
+
 /** Видимо ли кот «крупный» — ген big в визитке его породы (не дремлющий у предка). */
 export function isBigCat(cat: Cat): boolean {
   return breedTraits(cat.breed).includes('big');
 }
 
-/** Множитель размера спрайта кота: крупные породы ×1.1, остальные ×1. */
+/**
+ * Множитель размера спрайта кота — чистый визуал, на геймплей не влияет.
+ * Складываются два признака (перемножаются): самцы +10% к самкам и крупные
+ * породы (🐘) +10% к обычным. Крупный самец — самый рослый (≈+21%).
+ */
 export function catSizeFactor(cat: Cat): number {
-  return isBigCat(cat) ? BIG_SIZE_MULT : 1;
+  const big = isBigCat(cat) ? BIG_SIZE_MULT : 1;
+  const male = cat.genotype.sex === 'male' ? MALE_SIZE_MULT : 1;
+  return big * male;
 }
 
 /**
@@ -174,7 +183,7 @@ export function aiSitSpriteFor(cat: Cat, targetH: number): Sprite | null {
   if (!tex) return null;
   const sp = new Sprite(tex);
   sp.anchor.set(0.5, 1);
-  sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // крупные породы на 10% больше
+  sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // самцы и крупные породы по +10%
   return sp;
 }
 
@@ -187,7 +196,7 @@ export function aiHeldSpriteFor(cat: Cat, displayH: number): Sprite | null {
   if (!tex) return null;
   const sp = new Sprite(tex);
   sp.anchor.set(0.5, 0.42);                       // палец у загривка
-  sp.scale.set((displayH / tex.height) * 1.12 * catSizeFactor(cat)); // в руках — чуть крупнее; крупные породы +10%
+  sp.scale.set((displayH / tex.height) * 1.12 * catSizeFactor(cat)); // в руках — чуть крупнее; самцы/крупные +10%
   return sp;
 }
 
@@ -215,6 +224,6 @@ export function catSprite(app: Application, cat: Cat, targetH: number): Sprite {
   const tex = catTexture(app, cat);
   const sp = new Sprite(tex);
   sp.anchor.set(0.5, 1);
-  sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // крупные породы на 10% больше
+  sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // самцы и крупные породы по +10%
   return sp;
 }

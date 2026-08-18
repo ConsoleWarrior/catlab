@@ -72,8 +72,8 @@ const HELP: Record<string, RoomHelp> = {
        '🔬 Upgrades — a tree of permanent bonuses: breeding slots, room capacity, speed, new stations. The Selection branch costs 🧬, the rest cost 💰. Levels open with ⭐ XP.'],
       ['🧪 Исследования — стол: за 💰 + 🧬 и время открывает рецепт новой породы из тех, что тебе уже по силам. Выводишь новые породы — пул исследований растёт.',
        '🧪 Research — the bench: for 💰 + 🧬 and some time it unlocks a recipe for a new breed among those already within your reach. Breed new cats and the research pool grows.'],
-      ['Родословная кота скрыта туманом «???». Генетический анализ (из меню кота) вскроет предков и скрытые гены — без них часть рецептов не сработает.',
-       'A cat pedigree is hidden behind "???" fog. A genetic analysis (from the cat menu) reveals ancestors and hidden genes — without them some recipes will not fire.'],
+      ['Родословная кота скрыта туманом «???». Генетический анализ (из меню кота) вскроет предков и скрытые гены — без них часть рецептов не сработает. Первые анализы бесплатны — счётчик 🎁 виден на кнопке.',
+       'A cat pedigree is hidden behind "???" fog. A genetic analysis (from the cat menu) reveals ancestors and hidden genes — without them some recipes will not fire. The first few analyses are free — the 🎁 counter is right on the button.'],
     ],
   },
   cryobank: {

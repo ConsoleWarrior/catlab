@@ -3,7 +3,8 @@
 export * from './types.js';
 export {
   SAVE_VERSION, TIER_MARKET_VALUE, UPGRADES, GENES, BASE_GENES, levelForReputation,
-  ANALYZE_COIN_COST_BY_TIER, analyzeCoinCost,
+  ANALYZE_COST_BY_LEVEL, ANALYZE_CRYSTAL_COST, analyzeCost,
+  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
   RECIPE_RESEARCH_COINS_PER_LEVEL, RECIPE_RESEARCH_DNA_PER_LEVEL, RECIPE_RESEARCH_MS_PER_LEVEL,
   recipeResearchCost, recipeResearchMs,
   BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
@@ -24,6 +25,7 @@ export {
   ORDER_REP_BASE, ORDER_REP_GROWTH, orderRepFor,
   PEDESTAL_COSTS, PEDESTAL_PLACES, PLACE_INCOME_MULT,
   OFFLINE_CAP_BASE_MIN, OFFLINE_REPORT_MIN_MS, OFFLINE_AD_BONUS,
+  START_COINS, START_CRYSTALS, START_DNA, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature, CrystalPack } from './config.js';
 export {
@@ -68,7 +70,7 @@ export {
   collectIncome, offlineAdBonus, claimOfflineAdBonus,
   startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
   keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
-  speedUpBreeding, adSkipBreeding, freeSkipBreeding, speedUpGrowth, adSkipGrowth,
+  speedUpBreeding, adSkipBreeding, freeSkipBreeding, speedUpGrowth, adSkipGrowth, freeGrowKitten,
   putCatInBasket, clearOrderBasket,
   buyUpgrade, unlockGene, analyzeCat, freeAnalyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
@@ -78,6 +80,6 @@ export {
 export type { Result, BirthEvent, OfflineIncome } from './actions.js';
 export {
   tutorialStep, tutorialActive, finishTutorial, restartTutorial, markTutorialSeen,
-  analyzeTarget, adoptTarget,
+  grantTutorialReward, analyzeTarget, adoptTarget, kittenInSlot, growTarget, shelterTarget,
 } from './tutorial.js';
 export type { TutorStep } from './tutorial.js';

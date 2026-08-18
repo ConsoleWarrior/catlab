@@ -853,5 +853,9 @@ export function createNursery(ctx: UiContext): Room {
       if (key === 'orders') return ordersBtn && !ordersBtn.destroyed ? ordersBtn : null;
       return null;
     },
+    // Верхний ряд занят с обеих сторон: слева стойка заказов, справа кормушка.
+    // Плашка подсказки обучения встаёт между ними и ничего не перекрывает
+    // (п. 1.10.3 требований площадки); PAD титульной плашки — 18, см. shell.ts.
+    topReserve: { left: ORDERS_X + ORDERS_BW, right: COL_W + 18 },
   };
 }

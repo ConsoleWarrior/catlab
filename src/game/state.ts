@@ -7,6 +7,8 @@ import type { Rng } from '../genetics/index.js';
 import type { GameState } from './types.js';
 import {
   BASE_GENES, MAX_HEARTS, SAVE_VERSION, FOOD_CAP_BASE, ORDER_REFRESH_MS, ORDER_SELL_SLOTS,
+  START_COINS, START_CRYSTALS, START_DNA,
+  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
   levelForReputation,
 } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
@@ -17,9 +19,9 @@ import { initOrders } from './orders.js';
 export function createInitialState(rng: Rng, now: number): GameState {
   const state: GameState = {
     version: SAVE_VERSION,
-    coins: 100,
-    crystals: 5,
-    dna: 0,
+    coins: START_COINS,
+    crystals: START_CRYSTALS, // 💎 на старте нет — весь капитал в подарке за обучение
+    dna: START_DNA,
     level: 1,
     reputation: 0,
     cats: [],
@@ -41,14 +43,18 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastSeenAt: now,
     lastHealAdAt: 0,     // 📺-лечение в клинике доступно всегда (кулдауна нет)
     lastAnalyzeAdAt: 0,  // 📺-вариант Генетического анализа сразу доступен
+    freeAnalyzeLeft: FREE_ANALYZE_COUNT, // первые анализы новичку — подарок лаборатории
+    freeSkipLeft: FREE_SKIP_COUNT,       // первые вязки новичок ускоряет бесплатно
+    freeGrowthLeft: FREE_GROWTH_COUNT,   // и первых котят растит бесплатно
     lastFreezeAdAt: 0,   // 📺-вариант заморозки сразу доступен
     lastBoostAdAt: 0,    // 📺-зарядка усилителя сразу доступна
     processedPurchases: [],
     firstPurchaseDone: false,
-    // новая игра — обучение с нуля (оба подарка целы, ничего ещё не показано)
+    // новая игра — обучение с нуля (подарки целы, ничего ещё не показано)
     tutorial: {
-      done: false, freeSkipUsed: false, freeAnalyzeUsed: false,
+      done: false,
       bornOnce: false, previewSeen: false, ordersSeen: false, adoptDone: false,
+      rewardTaken: false,
     },
     nextId: 1,
   };
@@ -137,17 +143,16 @@ export function deserialize(json: string): GameState {
   // Такому сейву обучение сразу закрыто (и подарочный ускоритель не положен).
   if (!data.tutorial || typeof data.tutorial !== 'object') {
     data.tutorial = {
-      done: true, freeSkipUsed: true, freeAnalyzeUsed: true,
+      done: true,
       bornOnce: true, previewSeen: true, ordersSeen: true, adoptDone: true,
+      rewardTaken: true,
     };
   } else {
     const t = data.tutorial;
     if (typeof t.done !== 'boolean') t.done = true;
-    if (typeof t.freeSkipUsed !== 'boolean') t.freeSkipUsed = true;
-    // Поля второй половины обучения (анализ, прогноз пары, пристройство, заказы)
+    // Поля второй половины обучения (прогноз пары, пристройство, заказы)
     // добавлены позже. Сейву с ЗАКРЫТЫМ обучением они уже ни на что не влияют, а
     // недопройденному отдаём «ещё не показано» — подсказки продолжатся с нужного шага.
-    if (typeof t.freeAnalyzeUsed !== 'boolean') t.freeAnalyzeUsed = t.done;
     // факт первого рождения у старого сейва восстанавливаем по самим котам
     // (tutorialStep умеет и так — держим значения согласованными)
     if (typeof t.bornOnce !== 'boolean') {
@@ -156,7 +161,32 @@ export function deserialize(json: string): GameState {
     if (typeof t.previewSeen !== 'boolean') t.previewSeen = t.done;
     if (typeof t.ordersSeen !== 'boolean') t.ordersSeen = t.done;
     if (typeof t.adoptDone !== 'boolean') t.adoptDone = t.done;
+    // Подарок за обучение появился позже стартовых 💎: сейву с уже ЗАКРЫТЫМ обучением
+    // он не положен (тот игрок начинал с 5 💎 на руках), недопройденному — положен.
+    if (typeof t.rewardTaken !== 'boolean') t.rewardTaken = t.done;
   }
+  // Запасы подарков (анализы и ускорения вязки): раньше каждый подарок был ОДИН и жил
+  // флагом в tutorial (freeAnalyzeUsed / freeSkipUsed). Сейву с уже закрытым обучением
+  // запас не положен (тот игрок свои подарки отыграл), недопройденному отдаём остаток
+  // нового запаса за вычетом потраченного подарка. Легаси-флаги убираем из сейва.
+  const legacy = data.tutorial as { freeAnalyzeUsed?: boolean; freeSkipUsed?: boolean };
+  if (typeof data.freeAnalyzeLeft !== 'number') {
+    data.freeAnalyzeLeft = data.tutorial.done ? 0
+      : FREE_ANALYZE_COUNT - (legacy.freeAnalyzeUsed ? 1 : 0);
+  }
+  if (typeof data.freeSkipLeft !== 'number') {
+    data.freeSkipLeft = data.tutorial.done ? 0
+      : FREE_SKIP_COUNT - (legacy.freeSkipUsed ? 1 : 0);
+  }
+  // У роста подарка раньше не было вовсе — легаси-флага нет, правило то же.
+  if (typeof data.freeGrowthLeft !== 'number') {
+    data.freeGrowthLeft = data.tutorial.done ? 0 : FREE_GROWTH_COUNT;
+  }
+  delete legacy.freeAnalyzeUsed;
+  delete legacy.freeSkipUsed;
+  data.freeAnalyzeLeft = Math.max(0, Math.floor(data.freeAnalyzeLeft));
+  data.freeSkipLeft = Math.max(0, Math.floor(data.freeSkipLeft));
+  data.freeGrowthLeft = Math.max(0, Math.floor(data.freeGrowthLeft));
   // Миграция тумана родословной: в старых сейвах у узлов pedigree нет флага known →
   // всё дерево ушло бы в туман. Анализированным котам вскрываем дерево целиком;
   // рождённым в инкубаторе (есть motherBreed/fatherBreed) раскрываем родителей —

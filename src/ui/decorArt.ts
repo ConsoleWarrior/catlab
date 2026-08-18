@@ -74,7 +74,7 @@ export const ROOM_DECOR: Record<string, DecorItem[]> = {
     { sprite: 'wreath_gold', xN: 0.5, yN: 0.315, scale: 0.14 },        // венок над подиумом
     { sprite: 'ncab_seed8403', xN: 0.205, yN: 0.748, scale: 0.27 },    // мед. шкаф слева
     { sprite: 'nlamp2_seed8112', xN: 0.815, yN: 0.75, scale: 0.24 },   // лежанка с лампой справа
-    { sprite: 'nscale_seed8302', xN: 0.3, yN: 0.79, scale: 0.065 },    // весы перед шкафом
+    { sprite: 'nscale_seed8302', xN: 0.163, yN: 0.8, scale: 0.065 },   // весы слева от шкафа, за ковром
   ],
 };
 

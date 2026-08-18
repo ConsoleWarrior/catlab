@@ -497,19 +497,21 @@ export function adSkipBreeding(state: GameState, slotIndex: number, now: number)
 }
 
 /**
- * Подарочный ускоритель обучения: мгновенно завершает первую вязку бесплатно.
- * Выдаётся ровно один раз (`tutorial.freeSkipUsed`) — иначе новичок первые пять
- * минут игры смотрит на таймер, ничего не понимая. Дальше ускорение только
- * штатное: 📺 реклама или 💎.
+ * Подарочный ускоритель: мгновенно и бесплатно завершает вязку. Запас — первые
+ * C.FREE_SKIP_COUNT вязок новой игры (счётчик `state.freeSkipLeft`): иначе новичок
+ * первые пять минут игры смотрит на таймер, ничего не понимая, а за один подарок
+ * цикл «вязка → котёнок → куда его» не успевает уложиться. Кончился запас —
+ * ускорение только штатное: 📺 реклама или 💎.
+ * Возвращает остаток подарков — UI показывает его на кнопке и в тосте.
  */
-export function freeSkipBreeding(state: GameState, slotIndex: number, now: number): Result {
+export function freeSkipBreeding(state: GameState, slotIndex: number, now: number): Result<{ left: number }> {
   const slot = state.slots[slotIndex];
   if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
   if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
-  if (state.tutorial.freeSkipUsed) return { ok: false, reason: t('ускоритель уже использован', 'the speed-up is already used') };
-  state.tutorial.freeSkipUsed = true;
+  if (state.freeSkipLeft <= 0) return { ok: false, reason: t('бесплатные ускорения закончились', 'no free speed-ups left') };
+  state.freeSkipLeft -= 1;
   slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
-  return { ok: true };
+  return { ok: true, left: state.freeSkipLeft };
 }
 
 /** Мгновенно вырастить котёнка за 💎 (скип роста). Стоимость ∝ остатку роста. */
@@ -522,6 +524,25 @@ export function speedUpGrowth(state: GameState, catId: string, now: number): Res
   if (!spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
   cat.bornAt = now - E.effGrowthMs(cat); // возраст ≥ срок → сразу взрослый
   return { ok: true, crystals: cost };
+}
+
+/**
+ * Подарочный ускоритель роста: котёнок мгновенно взрослеет бесплатно. Запас — первые
+ * C.FREE_GROWTH_COUNT котят новой игры (счётчик `state.freeGrowthLeft`). Смысл тот же,
+ * что у подарочных вязок: пол, имя и облик проявляются только у взрослого, и без
+ * подарка новичок полчаса не знает, кто у него родился. Кончился запас — остаются
+ * штатные 📺 и 💎. Возвращает остаток подарков (UI показывает его на кнопке и в тосте).
+ */
+export function freeGrowKitten(state: GameState, catId: string, now: number): Result<{ left: number }> {
+  const cat = findCat(state, catId);
+  if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
+  // Взрослому подарок не тратим: расти уже некуда (котёнок мог дорасти сам,
+  // пока диалог был открыт) — просто ничего не делаем.
+  if (E.growthRemainingMs(cat, now) <= 0) return { ok: true, left: state.freeGrowthLeft };
+  if (state.freeGrowthLeft <= 0) return { ok: false, reason: t('бесплатные ускорения роста закончились', 'no free grow-ups left') };
+  state.freeGrowthLeft -= 1;
+  cat.bornAt = now - E.effGrowthMs(cat); // возраст ≥ срок → сразу взрослый
+  return { ok: true, left: state.freeGrowthLeft };
 }
 
 /**
@@ -747,43 +768,58 @@ export function unlockGene(state: GameState, geneId: string): Result {
  * Генетический анализ кота (система знаний, этап B): вскрывает СРАЗУ всё дерево
  * родословной (туман) и список скрытых генов — пород предков. Механику НЕ меняет:
  * скрытые гены влияли на рецепты и до анализа, игрок лишь получает информацию.
- * Оплата: 💰 (цена по тиру кота, analyzeCoinCost) или '📺 ad' — бесплатно и БЕЗ
- * кулдауна (анализ — инфо-действие, реальный SDK рекламы — бэклог).
+ * Три способа оплаты: 'pay' = 💰 + 🧬 по УРОВНЮ ЛАБОРАТОРИИ (C.analyzeCost — цена растёт
+ * вместе с доходами игрока, а не с тиром кота), 'crystals' = ANALYZE_CRYSTAL_COST 💎
+ * (страховка, когда кончились и монеты, и гены) или '📺 ad' — бесплатно и БЕЗ кулдауна.
  */
 export function analyzeCat(
-  state: GameState, catId: string, mode: 'coins' | 'ad' = 'coins', now = 0,
-): Result<{ coins: number }> {
+  state: GameState, catId: string, mode: 'pay' | 'crystals' | 'ad' = 'pay', now = 0,
+): Result<{ coins: number; dna: number; crystals: number }> {
   void now; // кулдауна у анализа больше нет — параметр оставлен ради совместимости сигнатуры
   // Анализ доступен и замороженным котам (крио-банк) — родословную вскрывают и в капсуле.
   const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
-  if (cat.analyzed) { revealPedigree(cat); return { ok: true, coins: 0 }; } // уже изучен
-  const cost = C.analyzeCoinCost(cat.rarityTier);
+  const free = { ok: true as const, coins: 0, dna: 0, crystals: 0 };
+  if (cat.analyzed) { revealPedigree(cat); return free; } // уже изучен
+  const price = C.analyzeCost(state.level);
+  let paid = free;
   if (mode === 'ad') {
     state.lastAnalyzeAdAt = Math.max(1, now); // фиксируем факт просмотра (кулдауна нет)
-  } else if (!spend(state, 'coins', cost)) {
-    return { ok: false, reason: t('не хватает монет', 'not enough coins') };
+  } else if (mode === 'crystals') {
+    if (!spend(state, 'crystals', C.ANALYZE_CRYSTAL_COST)) {
+      return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
+    }
+    paid = { ...free, crystals: C.ANALYZE_CRYSTAL_COST };
+  } else {
+    // 💰 и 🧬 списываем атомарно: проверяем ОБЕ валюты до первого списания, иначе
+    // ушли бы монеты, а на гены бы не хватило (та же схема, что у unlockResearch).
+    if (state.coins < price.coins) return { ok: false, reason: t('не хватает монет', 'not enough coins') };
+    if (state.dna < price.dna) return { ok: false, reason: t('не хватает ДНК', 'not enough DNA') };
+    spend(state, 'coins', price.coins);
+    spend(state, 'dna', price.dna);
+    paid = { ...free, coins: price.coins, dna: price.dna };
   }
   cat.analyzed = true;
   revealPedigree(cat);
-  return { ok: true, coins: mode === 'coins' ? cost : 0 };
+  return paid;
 }
 
 /**
- * Подарочный Генетический анализ обучения: первый кот изучается бесплатно
- * (`tutorial.freeAnalyzeUsed`, ровно один раз). Смысл тот же, что у подарочного
- * ускорителя вязки: новичок должен увидеть, ЧТО даёт анализ, до того как решит,
- * стоит ли он 💰 или просмотра рекламы.
+ * Подарочный Генетический анализ: первые C.FREE_ANALYZE_COUNT котов изучаются
+ * бесплатно (счётчик `state.freeAnalyzeLeft`). Смысл тот же, что у подарочного
+ * ускорителя вязки, только запаса хватает дальше обучения: новичок должен успеть
+ * сравнить несколько родословных и понять, за что потом платит 💰 или 📺.
+ * Возвращает остаток подарков — UI показывает его в тосте и на кнопках.
  */
-export function freeAnalyzeCat(state: GameState, catId: string): Result {
-  if (state.tutorial.freeAnalyzeUsed) return { ok: false, reason: t('подарок уже использован', 'the gift is already used') };
+export function freeAnalyzeCat(state: GameState, catId: string): Result<{ left: number }> {
+  if (state.freeAnalyzeLeft <= 0) return { ok: false, reason: t('бесплатные анализы закончились', 'no free analyses left') };
   const cat = findCat(state, catId) ?? (state.cryo ?? []).find((c) => c.id === catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (cat.analyzed) return { ok: false, reason: t('кот уже изучен', 'the cat is already analysed') };
-  state.tutorial.freeAnalyzeUsed = true;
+  state.freeAnalyzeLeft -= 1;
   cat.analyzed = true;
   revealPedigree(cat);
-  return { ok: true };
+  return { ok: true, left: state.freeAnalyzeLeft };
 }
 
 // --- Исследование рецептов (вкладка «Исследования» Генолаба, этап D) ---

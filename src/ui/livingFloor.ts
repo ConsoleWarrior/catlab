@@ -454,7 +454,7 @@ export function createLivingFloor(
     // не подпрыгивает вместе с котом (см. body ниже). Приподнята на 2/3 своей
     // толщины (полная высота главной тени = 2×8=16 → ≈10.7px), чтобы лежать ПОД
     // котом, а не «перед» ним (иначе кажется оторванной у лап).
-    const sizeF = catSizeFactor(cat); // крупные породы (🐘) на 10% больше — сам спрайт, тень и подписи
+    const sizeF = catSizeFactor(cat); // самцы и крупные породы (🐘) по +10% — сам спрайт, тень и подписи
     const shUp = (2 * 8) * (2 / 3);
     const shadow = new Graphics();
     if (selected) shadow.ellipse(0, -4 - shUp, catH * 0.42 * sizeF, 12).fill({ color: COLORS.primary, alpha: 0.55 });

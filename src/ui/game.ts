@@ -21,7 +21,8 @@ import {
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
   finishRecipeResearch, refreshExpiredOrders,
   grantCrystals, isKnownPack, tutorialActive, tutorialStep, finishTutorial, restartTutorial,
-  markTutorialSeen, OFFLINE_REPORT_MIN_MS,
+  markTutorialSeen, grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
+  OFFLINE_REPORT_MIN_MS,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
@@ -41,12 +42,12 @@ import { createShelter } from './rooms/shelter.js';
 import { createGenolab } from './rooms/genolab.js';
 import { createCryobank } from './rooms/cryobank.js';
 import {
-  buildCatMenu, buildOrdersPanel, buildBirthCard, buildPedigreePanel,
+  buildCatMenu, buildOrdersPanel, buildBirthCard, buildPedigreePanel, buildTutorialDonePanel,
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
   buildHealConfirm, buildCryoMenu, buildGrowConfirm,
   buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
   buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel, buildOfflineReport,
-  buildLevelUpPanel, buildPrivacyPanel,
+  buildLevelUpPanel, buildPrivacyPanel, buildResetConfirm,
 } from './overlays.js';
 import type { OfflineReport, LevelUpInfo } from './overlays.js';
 import { buildRoomHelpPanel } from './roomHelp.js';
@@ -54,7 +55,7 @@ import {
   initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler, platformLang,
   setLatePlayerHandler,
 } from '../platform/ysdk.js';
-import { loadSaveCandidates, writeSave, writeSaveAwait, adoptLatePlayer } from '../platform/storage.js';
+import { loadSaveCandidates, writeSave, writeSaveAwait, adoptLatePlayer, resetSave } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
 import { setAdPauseHandler } from '../platform/ads.js';
 import { initLang, t, onLangChange, setLang } from '../i18n.js';
@@ -190,6 +191,9 @@ export class Game implements UiContext {
   // Повышение уровня лаборатории ждёт показа панелью: копится в checkLevelUp (из
   // любого источника опыта), показывается в update, когда экран свободен от оверлеев.
   private pendingLevelUp: LevelUpInfo | null = null;
+  // Финал обучения ждёт показа панелью «Обучение пройдено» с подарком и кнопкой
+  // «Забрать» (ставится в Tutorial.finish, показывается в update на свободном экране).
+  private pendingTutorDone = false;
   private toastT: Text | null = null;
   private toastUntil = 0;
 
@@ -323,6 +327,7 @@ export class Game implements UiContext {
       currentRoomIndex: () => this.currentRoom,
       anchorIn: (i, key) => this.rooms[i]?.anchor?.(key) ?? null,
       navDot: (i) => this.dots[i] ?? null,
+      topReserve: () => this.rooms[this.currentRoom]?.topReserve ?? null,
       overlayOpen: () => this.overlayOpen,
       skip: () => {
         finishTutorial(this.state); this.commit();
@@ -330,10 +335,14 @@ export class Game implements UiContext {
           'Hints are off — help is behind the ℹ️ button next to the room title'));
       },
       finish: () => {
+        // Обучение закрываем сразу (иначе Tutorial.update звал бы finish каждый кадр),
+        // а поздравление с подарком ставим в очередь: покажем панелью, когда экран
+        // свободен от оверлеев. Подарок начисляется по кнопке «Забрать» в ней
+        // (крестик «пропустить» подарка не даёт вовсе — см. skip выше).
         finishTutorial(this.state);
         this.commit();
         this.save();
-        this.toast(t('Обучение пройдено! 🎓 Дальше — Генолаб: 📖 Котодекс и рецепты пород', 'Tutorial complete! 🎓 Next stop — the Genolab: 📖 Catdex and breed recipes'));
+        this.pendingTutorDone = true;
       },
     });
     this.root.addChild(
@@ -472,6 +481,7 @@ export class Game implements UiContext {
         openRoomHelp: (id = 'incubator') => this.openRoomHelp(id),
         openSettings: () => this.openSettings(),
         openPrivacy: () => this.openPrivacy(),
+        openReset: () => this.openResetConfirm(),
         setLang: (l: 'ru' | 'en') => setLang(l), // DEV: проверка переключения языка
         openShop: () => this.openShop(),
         shopAvailable: () => shopAvailable(),
@@ -494,6 +504,10 @@ export class Game implements UiContext {
         openHeal: (id?: string) => { // диалог ветеринара (проверка UI лечения)
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openHealConfirm(c);
+        },
+        openAnalyze: (id?: string) => { // окно Генетического анализа (💰+🧬 / 💎 / 📺)
+          const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
+          if (c) this.openAnalyzeConfirm(c);
         },
         pedigreeDemo: () => {
           const base = this.state.cats[0];
@@ -760,6 +774,12 @@ export class Game implements UiContext {
 
   toast(msg: string): void {
     if (!this.toastT) return;
+    // Предохранитель к п. 1.14 («никаких технических сообщений»): ядро отдаёт
+    // единственный служебный код-причину — 'locked'. Все известные места его уже
+    // разбирают по-человечески, но кнопка запертой механики может появиться и в
+    // новой комнате — тогда игрок увидит английское служебное слово. Заменяем
+    // здесь, в одной точке, через которую проходят все тосты игры.
+    if (msg === 'locked') msg = t('Пока закрыто 🔒', 'Still locked 🔒');
     // Единственная подсказка про магазин: отказ «не хватает кристаллов» приходит из
     // десятка мест ядра — дописываем, куда идти, ровно здесь, ничего не открывая
     // насильно поверх действия игрока.
@@ -948,6 +968,50 @@ export class Game implements UiContext {
   /** Политика конфиденциальности (п. 3.5) — из ⚙️ Настроек, текстом в игре. */
   openPrivacy(): void {
     this.showOverlay(buildPrivacyPanel(this, () => this.closeOverlay()));
+  }
+
+  /** Подтверждение сброса прогресса (⚙️ Настройки → «🗑 Сбросить прогресс»). */
+  openResetConfirm(): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildResetConfirm(this, close, () => void this.resetProgress()));
+  }
+
+  /**
+   * Начать игру заново по требованию игрока. Обещание «прогресс можно удалить»
+   * стоит в политике конфиденциальности (п. 3.5), и раньше единственным способом
+   * его сдержать была чистка данных браузера — на телефоне это нереально.
+   *
+   * Порядок важен: сначала подменяем состояние и пересобираем сцену (комнаты
+   * держат ссылки на прежние объекты котов), и только потом ждём хранилище —
+   * облачная запись может идти секунды, а игрок должен увидеть результат сразу.
+   * Пишем именно новое состояние, а не «удаляем сейв»: пустое облако при
+   * следующем запуске уступило бы старому локальному сейву (см. resetSave).
+   */
+  private async resetProgress(): Promise<void> {
+    this.state = createInitialState(this.rng, this.now());
+    this.freshGame = true;
+    this.shownLevel = this.state.level;
+    this.wasStarving = isStarving(this.state);
+    // всё, что копилось от прежней партии: отчёты, выбор пары, фокус на коте
+    this.pendingOffline = null;
+    this.pendingLevelUp = null;
+    this.pendingTutorDone = false;
+    this.catInfoFocus = null;
+    this.clearSelection();
+    this.incomeAcc = 0;
+    this.saveDirty = false;
+    this.saveTimer = 0;
+
+    this.closeOverlay();
+    this.layout();   // сцена целиком под новое состояние (как при смене языка)
+    this.fitRoot();
+    this.goRoom(this.roomIndex('nursery')); // как на первом запуске — оттуда ведёт обучение
+
+    const ok = await resetSave(serialize(this.state));
+    this.toast(ok
+      ? t('Прогресс сброшен — начинаем заново 🐾', 'Progress reset — starting over 🐾')
+      : t('Сброшено на этом устройстве; облачная копия обновится позже',
+        'Reset on this device; the cloud copy will update later'));
   }
 
   openSettings(): void {
@@ -1416,6 +1480,29 @@ export class Game implements UiContext {
     this.pendingLevelUp = { level: to, crystals, unlocks };
   }
 
+  /**
+   * Панель «Обучение пройдено» с подарком за прохождение. Начисление висит на
+   * закрытии панели (кнопка «Забрать» и тап мимо ведут в один и тот же claim) —
+   * так подарок не потеряется, даже если игрок закроет окно мимо кнопки.
+   */
+  private showTutorDonePanel(): void {
+    this.pendingTutorDone = false;
+    sfxEvent('levelup'); // фанфара под поздравление
+    const claim = (): void => {
+      if (grantTutorialReward(this.state)) {
+        this.commit();
+        this.save();
+        this.toast(t(`Подарок получен: +${TUTORIAL_REWARD_COINS} 💰 и +${TUTORIAL_REWARD_CRYSTALS} 💎`,
+          `Gift claimed: +${TUTORIAL_REWARD_COINS} 💰 and +${TUTORIAL_REWARD_CRYSTALS} 💎`));
+      }
+      this.closeOverlay();
+    };
+    this.showOverlay(buildTutorialDonePanel(this, claim));
+    // тап по затемнению — тоже «забрать»: подарок заработан, терять его нельзя
+    this.overlayDim?.removeAllListeners('pointertap');
+    this.overlayDim?.on('pointertap', claim);
+  }
+
   /** Показать накопленную панель повышения уровня (экран уже свободен от оверлеев). */
   private showLevelUpPanel(): void {
     const info = this.pendingLevelUp;
@@ -1724,6 +1811,11 @@ export class Game implements UiContext {
     // Панель повышения уровня — когда экран свободен: не поверх другого оверлея и
     // не вместо окна «С возвращением» (у него приоритет при входе в игру).
     if (this.pendingLevelUp && !this.overlayOpen && !this.pendingOffline) this.showLevelUpPanel();
+    // Поздравление с окончанием обучения — там же в очереди, после уровня: подарок
+    // за обучение не должен спорить с фанфарой уровня за одного и того же кота.
+    if (this.pendingTutorDone && !this.overlayOpen && !this.pendingOffline && !this.pendingLevelUp) {
+      this.showTutorDonePanel();
+    }
 
     this.updateHud();
 

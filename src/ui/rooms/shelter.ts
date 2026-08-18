@@ -20,6 +20,13 @@ import { Button, COLORS, label } from '../theme.js';
 import { createLivingFloor } from '../livingFloor.js';
 import { t } from '../../i18n.js';
 
+// Правая колонка шапки приюта: пара массовых кнопок и «Купить котика» под ними.
+// Ширина колонки нужна и раскладке кнопок, и подсказке обучения (Room.topReserve).
+const BULK_BW = 176;
+const BULK_GAP = 10;
+const BULK_RPAD = 18;
+const BULK_COL_W = BULK_BW * 2 + BULK_GAP + BULK_RPAD;
+
 export function createShelter(ctx: UiContext): Room {
   const shell = roomShell(ctx, 'shelter', t('🏠 Приют', '🏠 Shelter'));
 
@@ -91,7 +98,7 @@ export function createShelter(ctx: UiContext): Room {
     const totals = shelterTotals(ctx.state);
     const labOpen = isUnlocked(ctx.state, 'labStation');
 
-    const BW = 176, BH = 44, GAP = 10, RPAD = 18;
+    const BW = BULK_BW, BH = 44, GAP = BULK_GAP, RPAD = BULK_RPAD;
     const cy = ctx.topInset + 8 + 22;              // центр по титульной плашке комнаты
     const rightCx = ctx.roomW - RPAD - BW / 2;
     const leftCx = rightCx - BW - GAP;
@@ -237,5 +244,8 @@ export function createShelter(ctx: UiContext): Room {
       if (key === 'adopt') return adoptLayer.children.length > 0 ? adoptLayer : null;
       return null;
     },
+    // Справа вверху — массовые кнопки и «Купить котика» (см. refreshBulkButtons):
+    // подсказка обучения обязана встать левее, а не поверх них (п. 1.10.3).
+    topReserve: { left: 0, right: BULK_COL_W },
   };
 }

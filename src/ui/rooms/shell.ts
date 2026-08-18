@@ -119,8 +119,8 @@ export function floorPlane(w: number, h: number, topInset: number): FloorPlane {
  * пропорции экрана.
  *
  *   y        — верх доски, он же «линия лап» стоящего на ней кота;
- *   walkHalf — половина ХОДИМОЙ части (уже доски: по краям лежат плед и горшок,
- *              и кот не должен свешиваться с торца);
+ *   walkHalf — половина ХОДИМОЙ части (уже доски: кот не должен свешиваться
+ *              с торца);
  *   scale    — масштаб кота на полке. Полка — на самой стене, дальше задней
  *              кромки ходимого пола, поэтому коты там мельче, чем при z = 1.
  */
@@ -153,7 +153,7 @@ const SHELF_BLIND: readonly [number, number] = [0.434, 0.573];
 export function shelfPlane(w: number, h: number, plane: FloorPlane): ShelfPlane {
   const scale = plane.farScale * 0.88;
   const halfW = w * SHELF_HALF_WN;
-  const pad = plane.catH * scale * 0.5; // полкорпуса кота + место под краевой декор
+  const pad = plane.catH * scale * 0.5; // полкорпуса кота — чтобы не свешивался с торца
   const walkHalf = Math.max(30, halfW - pad);
   const catW = plane.catH * scale * 0.55;
   return {
@@ -170,12 +170,12 @@ export function shelfPlane(w: number, h: number, plane: FloorPlane): ShelfPlane 
 }
 
 /**
- * Отрисовка полки: тёплая деревянная доска на деревянных кронштейнах, по краям
- * (вне ходимой части) сложенный плед и горшок с зеленью. Рисуем процедурно —
- * доска должна попадать точно в геометрию `shelfPlane`, по которой ходят коты.
+ * Отрисовка полки: тёплая деревянная доска на деревянных кронштейнах, без
+ * предметов сверху (доска целиком под котов). Рисуем процедурно — доска должна
+ * попадать точно в геометрию `shelfPlane`, по которой ходят коты.
  */
 export function buildShelf(s: ShelfPlane): Container {
-  const { cx, halfW, walkHalf, y, thick } = s;
+  const { cx, halfW, y, thick } = s;
   const c = new Container();
   c.eventMode = 'none'; // рисунок полки не должен перехватывать тапы по котам на ней
   const g = new Graphics();
@@ -213,31 +213,6 @@ export function buildShelf(s: ShelfPlane): Container {
   g.roundRect(x0, y, halfW * 2, top + thick, 4).stroke({ width: 2, color: woodEdge, alpha: 0.45 });
   c.addChild(g);
 
-  // Краевой декор — в поле между ходимой частью и торцом доски.
-  const d = new Graphics();
-  const dw = Math.max(20, (halfW - walkHalf) * 1.3);
-  // слева — мягкая подушечка (кот на полке любит на неё улечься)
-  const px = x0 + dw * 0.66, ph = Math.max(11, dw * 0.5);
-  const pillow = (ox: number, oy: number, w: number, h: number, col: number): void => {
-    d.moveTo(ox - w / 2, oy - h * 0.4)
-      .quadraticCurveTo(ox - w * 0.54, oy - h * 1.05, ox, oy - h * 0.92)
-      .quadraticCurveTo(ox + w * 0.54, oy - h * 1.05, ox + w / 2, oy - h * 0.4)
-      .quadraticCurveTo(ox + w * 0.54, oy + h * 0.12, ox, oy)
-      .quadraticCurveTo(ox - w * 0.54, oy + h * 0.12, ox - w / 2, oy - h * 0.4)
-      .closePath().fill(col);
-  };
-  pillow(px, y + 2, dw, ph, 0xe8756b);
-  pillow(px, y - ph * 0.52, dw * 0.82, ph * 0.78, 0xf59d92);
-  d.circle(px, y - ph * 0.78, Math.max(1.5, ph * 0.09)).fill({ color: 0xc04f47, alpha: 0.8 });
-  // справа — горшок с зеленью
-  const gx = x1 - dw * 0.62, pw = dw * 0.62, poth = dw * 0.52;
-  d.ellipse(gx, y - poth - pw * 0.46, pw * 0.54, pw * 0.44).fill(0x74b072);
-  d.ellipse(gx - pw * 0.44, y - poth - pw * 0.22, pw * 0.36, pw * 0.31).fill(0x8cc487);
-  d.ellipse(gx + pw * 0.44, y - poth - pw * 0.28, pw * 0.32, pw * 0.27).fill(0x63a065);
-  d.poly([gx - pw / 2, y - poth, gx + pw / 2, y - poth, gx + pw * 0.36, y + 1, gx - pw * 0.36, y + 1])
-    .fill(0xd98b62);
-  d.roundRect(gx - pw * 0.57, y - poth - 4, pw * 1.14, 7, 3).fill(0xeaa87f);
-  c.addChild(d);
   return c;
 }
 

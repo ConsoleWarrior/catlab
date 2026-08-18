@@ -3,8 +3,8 @@
 Готовые поля на двух языках (ru + en). Тексты отражают реальные механики (требование п. 8.2:
 описание не должно вводить игрока в заблуждение) и не упоминают площадку внутри игры.
 
-Точные лимиты символов в форме Консоли не задокументированы публично — где поле окажется
-короче, режьте по маркеру «✂️ короткий вариант».
+Лимиты: «Об игре» и «Как играть» — до 1000 символов каждый, описание для SEO — до 160.
+Тексты ниже уже уложены в них (фактическая длина указана у каждого блока) — копируйте как есть.
 
 ---
 
@@ -20,116 +20,76 @@
 
 ---
 
-## 2. Краткое описание
+## 2. Описание для SEO (до 160 символов)
 
-**ru** (85 симв.)
+**ru** (139 симв.)
 ```
-Выводите кошек по рецептам генетики, собирайте 70 пород и выполняйте заказы клиентов.
-```
-✂️ короткий вариант (52 симв.)
-```
-Селекция кошек: 70 пород, генетика, заказы клиентов.
+Котолаборатория — симулятор селекции кошек: выводите котят по рецептам генетики, собирайте 70 пород, выполняйте заказы и растите чемпионов.
 ```
 
-**en** (90 симв.)
+**en** (131 chars)
 ```
-Breed cats using genetic recipes, collect all 70 breeds and fulfil orders from picky clients.
-```
-✂️ короткий вариант (53 симв.)
-```
-Cat breeding sim: 70 breeds, genetics, client orders.
+Catlab is a cat breeding sim: hatch kittens from genetic recipes, collect 70 breeds, fulfil client orders and raise show champions.
 ```
 
 ---
 
-## 3. Об игре (полное описание)
+## 3. Об игре (до 1000 символов)
 
-### ru (1 693 симв.)
+### ru (967 симв.)
 ```
-Добро пожаловать в котолабораторию — место, где кошек не покупают, а выводят.
+Котолаборатория — игра о селекции кошек. Начинаете с двух дворовых котиков и одного инкубатора: ставите пару в слот вязки, ждёте таймер и получаете котёнка. Какая выйдет порода, решает рецепт пары — британская с персидской дадут совсем не то, что мейн-кун с бенгальской. Так собирается коллекция из 70 пород: от домашней короткошёрстной до легендарных Саванны, Каракета и Ашеры.
 
-Всё начинается с двух беспородных котиков и одного инкубатора. Ставите пару в слот вязки — и через таймер рождается котёнок. Вот только какой именно, решает рецепт пары: британская короткошёрстная с персидской дадут совсем не то, что мейн-кун с бенгальской. Так, шаг за шагом, из дворовых котов вырастает коллекция из 70 пород — от домашней короткошёрстной до легендарных Саванны, Каракета и Ашеры.
+Главная интрига — родословная. Гены предков скрыты туманом, пока не сделан генетический анализ, и вязка идёт вслепую. Анализ вскрывает предков, прогноз пары показывает шансы пород, а инбридинг режет здоровье котёнка: считать выгоднее, чем угадывать.
 
-Главная интрига — родословная. У каждого кота есть скрытые гены предков, и пока вы не сделали генетический анализ, дерево предков затянуто туманом: вязка идёт вслепую. Анализ вскрывает породы предков, а прогноз пары показывает, каких котят она может дать и с какой вероятностью — селекция превращается из лотереи в расчёт. Родство тоже считается: инбридинг режет здоровье котёнка, а слишком плотная линия однажды даст бесплодного.
+Ценных котов ставьте на пьедестал выставки — чемпионы приносят доход даже офлайн. Остальных отдавайте «в добрые руки» за монеты, в биобанк ради ДНК или под заказ клиента: монеты, кристаллы и опыт.
 
-Что делать с котами:
-• Ценных — на пьедестал выставки: чемпионы приносят доход даже пока вы офлайн.
-• Простых — в приют и «в добрые руки» за монеты либо в биобанк ради ДНК.
-• Любых — под заказ: клиент называет породу или редкость, вы кладёте подходящего кота в корзину и получаете монеты, кристаллы и опыт. Заказ живёт 6 часов и сменяется сам.
-
-Заработанное уходит в Генолаб — дерево улучшений из 19 узлов и 50 уровней: слоты вязки, места в питомнике, экономия корма, шансы рецептов, ветеринар со шприцем здоровья, генные усилители вязки (Стабилизатор, Катализатор, Активатор, Деградатор) и, ближе к финалу, крио-банк с клонированием, где коллекция хранится в капсулах.
-
-10 уровней лаборатории, 70 рецептов, полная родословная у каждого кота — и ни одного одинакового котёнка.
+Прибыль уходит в Генолаб — дерево из 19 улучшений: слоты вязки, места в питомнике, шансы рецептов, ветеринар, усилители генов и крио-банк.
 ```
 
-✂️ короткий вариант ru (546 симв.)
+### en (996 chars)
 ```
-Котолаборатория — игра про селекцию кошек. Ставите пару в инкубатор, ждёте таймер, получаете котёнка: какая выйдет порода, решает рецепт пары. Всего 70 пород — от дворовых до легендарной Саванны.
+Catlab is a cat breeding game. You start with two alley cats and one incubator: put a pair into a breeding slot, wait out the timer, get a kitten. The pair's recipe decides which breed you get — a British Shorthair with a Persian yields nothing like a Maine Coon with a Bengal. Step by step you collect 70 breeds, from the Domestic Shorthair to the legendary Savannah, Caracat and Ashera.
 
-Генетический анализ вскрывает скрытых предков, прогноз пары показывает шансы, а инбридинг наказывает здоровьем — вязать вслепую невыгодно.
+The real intrigue is the pedigree. Ancestor genes stay hidden in fog until you run a genetic analysis, so you breed blind. Analysis reveals the ancestors, the pair forecast shows the odds, and inbreeding cuts a kitten's health: calculating beats guessing.
 
-Ценные коты идут на пьедестал выставки за пассивный доход, остальные — в заказы клиентов и в биобанк. Прибыль вкладывается в дерево улучшений: слоты вязки, усилители генов, ветеринар, крио-банк с клонированием.
-```
+Put valuable cats on the show pedestal — champions earn even while you're away. Rehome the rest for coins, send them to the biobank for DNA, or fill a client order for coins, crystals and experience.
 
-### en (1 746 симв.)
-```
-Welcome to the catlab — a place where cats aren't bought, but bred.
-
-You start with two ordinary cats and a single incubator. Put a pair into a breeding slot, wait out the timer, and a kitten is born — but which breed you get is decided by the pair's recipe: a British Shorthair with a Persian yields nothing like a Maine Coon with a Bengal. Step by step, a pair of alley cats grows into a collection of 70 breeds, from the Domestic Shorthair to the legendary Savannah, Caracat and Ashera.
-
-The real intrigue is the pedigree. Every cat carries hidden ancestor genes, and until you run a genetic analysis the family tree stays shrouded in fog — you're breeding blind. The analysis reveals the ancestors' breeds, the pair forecast shows which kittens the couple can produce and at what odds, and selection turns from a lottery into a calculation. Kinship counts too: inbreeding cuts a kitten's health, and a line kept too tight will eventually produce a sterile cat.
-
-What to do with your cats:
-• Valuable ones go on the show pedestal — champions earn money even while you're away.
-• Plain ones go to the shelter: rehome them for coins, or send them to the biobank for DNA.
-• Any of them can fill an order: a client names a breed or a rarity, you put a matching cat in the basket and collect coins, crystals and experience. Orders live 6 hours, then rotate on their own.
-
-Profits flow into the Genolab — an upgrade tree of 19 nodes and 50 levels: breeding slots, cattery space, cheaper food, better recipe odds, a vet who patches up your cats' health, gene boosters (Stabiliser, Catalyst, Activator, Degrader) and, later on, a cryobank with cloning to store the collection in capsules.
-
-10 lab levels, 70 recipes, a full pedigree behind every cat — and no two kittens alike.
-```
-
-✂️ короткий вариант en (539 симв.)
-```
-Catlab is a cat breeding sim. Put a pair into the incubator, wait for the timer, get a kitten — the pair's recipe decides which of the 70 breeds you get, from alley cats to the legendary Savannah.
-
-A genetic analysis reveals hidden ancestors, the pair forecast shows the odds, and inbreeding punishes you with poor health — breeding blind doesn't pay.
-
-Valuable cats go on the show pedestal for passive income, the rest into client orders and the biobank. Profits buy upgrades: breeding slots, gene boosters, a vet, a cryobank with cloning.
+Profits flow into the Genolab — a tree of 19 upgrades: breeding slots, cattery space, recipe odds, a vet, gene boosters and a cryobank with cloning.
 ```
 
 ---
 
-## 4. Как играть (управление и первые шаги)
+## 4. Как играть (до 1000 символов)
 
-### ru (1 038 симв.)
+### ru (976 симв.)
 ```
-Управление: мышь или касания, всё делается тапом и перетаскиванием. Между комнатами лаборатории переключайтесь свайпом или стрелками внизу экрана. Игра идёт в горизонтальной ориентации.
+Управление: мышь или касания — всё делается тапом и перетаскиванием. Между комнатами переключайтесь свайпом или стрелками внизу экрана. Игра горизонтальная.
 
-1. Питомник. Игра начинается здесь — стартовая пара котиков уже ваша. Если котов не осталось совсем, приют выдаст новую пару бесплатно.
-2. Анализ. Тапните кота → «Генетический анализ»: он вскроет родословную и скрытые гены предков. От них зависит, какие породы у вас родятся.
-3. Вязка. Перетащите самку и самца в слот вязки в Инкубаторе и запустите таймер. Перед запуском загляните в прогноз пары — он показывает шансы пород.
-4. Котёнок. Родившегося малыша заберите из слота: ценного — в Питомник, простого — в Приют.
-5. Заказы. Откройте доску заказов в Питомнике (кнопка слева под названием комнаты), положите подходящего кота в корзину и получите награду.
-6. Выставка. Поднимите взрослого кота на пьедестал в Питомнике — он будет приносить доход, пока вы играете и пока вас нет.
-7. Генолаб. Тратьте монеты и ДНК на дерево улучшений: новые слоты вязки, шансы рецептов, ветеринар, усилители генов.
+1. Питомник. Старт здесь: пара котиков уже ваша. Если коты кончатся, приют выдаст новую пару бесплатно.
+2. Анализ. Тапните кота → «Генетический анализ»: он вскроет скрытые гены предков, от которых зависит порода котят.
+3. Вязка. Перетащите самку и самца в слот в Инкубаторе, загляните в прогноз пары (шансы пород) и запустите таймер.
+4. Котёнок. Заберите малыша из слота: ценного — в Питомник, простого — в Приют.
+5. Заказы. Откройте доску заказов в Питомнике (кнопка слева под названием комнаты) и положите нужного кота в корзину.
+6. Выставка. Поднимите взрослого кота на пьедестал в Питомнике — он приносит доход и пока вас нет.
+7. Генолаб. Тратьте монеты и ДНК на улучшения: слоты вязки, шансы рецептов, ветеринар, усилители генов.
 
-Не забывайте про кормушку: пока она пуста, доход не капает и новые вязки не запускаются.
+Не забывайте про кормушку: пока она пуста, доход не капает и вязки не запускаются.
 ```
 
-### en (1 033 симв.)
+### en (990 chars)
 ```
-Controls: mouse or touch — everything is done by tapping and dragging. Swipe or use the arrows at the bottom to move between lab rooms. The game runs in landscape.
+Controls: mouse or touch — tap and drag to do everything. Swipe or use the arrows at the bottom to move between rooms. Landscape orientation.
 
-1. Cattery. This is where the game starts — your first pair of cats is already there. If you ever run out of cats entirely, the shelter hands you a new pair for free.
-2. Analysis. Tap a cat → "Genetic analysis": it reveals the pedigree and the hidden genes of its ancestors, which decide the breeds you can get.
-3. Breeding. Drag a female and a male into a breeding slot in the Incubator and start the timer. Check the pair forecast first — it shows the odds for each breed.
-4. Kitten. Take the newborn out of the slot: valuable ones to the Cattery, plain ones to the Shelter.
-5. Orders. Open the order board in the Cattery (the button on the left under the room title), put a matching cat into the basket and claim the reward.
-6. Show. Lift an adult cat onto a pedestal in the Cattery — it earns income while you play and while you're away.
-7. Genolab. Spend coins and DNA on the upgrade tree: extra breeding slots, better recipe odds, a vet, gene boosters.
+1. Cattery. You start here with a free pair of cats. If you ever run out, the shelter hands you a new pair.
+2. Analysis. Tap a cat → "Genetic analysis": it reveals the hidden ancestor genes that decide which breeds you can get.
+3. Breeding. Drag a female and a male into a slot in the Incubator, check the pair forecast for the odds, then start the timer.
+4. Kitten. Take the newborn from the slot: valuable ones to the Cattery, plain ones to the Shelter.
+5. Orders. Open the order board in the Cattery (button on the left under the room title) and put a matching cat into the basket.
+6. Show. Lift an adult cat onto a pedestal in the Cattery — it earns income even while you're away.
+7. Genolab. Spend coins and DNA on upgrades: breeding slots, recipe odds, a vet, gene boosters.
 
-Keep the feeder full: while it's empty, income stops and no new breeding can start.
+Keep the feeder full: while it's empty, income and breeding stop.
 ```
 
 ---

@@ -267,6 +267,26 @@ let musicUnlockHooked = false;
 // вкладку во время рекламного ролика запускал бы трек поверх рекламы (п. 4.7).
 let audioPaused = false;
 
+/**
+ * Системный медиа-плеер (шторка Android, кнопки на гарнитуре).
+ *
+ * Chrome заводит его сам для любого <audio> длиннее ~5 секунд — фоновому треку
+ * этого хватает. Опасен там не сам значок, а кнопка «play»: по умолчанию она
+ * запускает элемент напрямую, в обход игры, — и музыка заиграет поверх свёрнутой
+ * вкладки или поверх рекламного ролика. Это нарушает п. 1.3 требований площадки
+ * («при сворачивании страницы звук останавливается») и п. 4.7 (звук молчит на
+ * время рекламы). Поэтому оба действия забираем себе: играть решает только игра —
+ * когда снята последняя причина паузы (см. sfxPause).
+ */
+function bindMediaSession(): void {
+  const ms = navigator.mediaSession;
+  if (!ms?.setActionHandler) return;
+  try {
+    ms.setActionHandler('play', () => { if (!audioPaused && musicOn) tryPlayMusic(); });
+    ms.setActionHandler('pause', () => musicEl?.pause());
+  } catch { /* старый браузер без MediaSession — поведение по умолчанию */ }
+}
+
 function musicTick(ts: number): void {
   const dt = Math.min(0.1, (ts - musicPrev) / 1000);
   musicPrev = ts;
@@ -316,6 +336,7 @@ export function sfxMusic(on: boolean): void {
       });
       el.src = musicList[musicIdx]!;
       musicEl = el;
+      bindMediaSession();
       // Вкладку свернули — пауза (сами эффекты @pixi/sound делают это за себя).
       // Возобновление отсюда НЕ делаем: вернуть звук вправе только sfxPause, когда
       // ушла последняя причина паузы (см. Game.setPause). Иначе возврат на вкладку

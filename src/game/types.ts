@@ -141,6 +141,9 @@ export interface GameState {
   lastSeenAt: number;               // для офлайн/пассивного дохода
   lastHealAdAt: number;             // факт последнего 📺-лечения в клинике (кулдауна нет)
   lastAnalyzeAdAt: number;          // глобальный кулдаун 📺-варианта Генетического анализа
+  freeAnalyzeLeft: number;          // осталось подарочных Генетических анализов (старт — FREE_ANALYZE_COUNT)
+  freeSkipLeft: number;             // осталось подарочных ускорений вязки (старт — FREE_SKIP_COUNT)
+  freeGrowthLeft: number;           // осталось подарочных ускорений роста (старт — FREE_GROWTH_COUNT)
   lastFreezeAdAt: number;           // глобальный кулдаун 📺-варианта заморозки в крио-банке
   lastBoostAdAt: number;            // глобальный кулдаун 📺-зарядки усилителя вязки (один на все три)
   // --- Инап-покупки 💎 (Яндекс Игры, см. GDD.md §6.4) ---
@@ -161,8 +164,9 @@ export interface GameState {
  */
 export interface TutorialState {
   done: boolean;         // обучение пройдено или пропущено — подсказок больше нет
-  freeSkipUsed: boolean; // подарочный ускоритель первой вязки уже потрачен
-  freeAnalyzeUsed: boolean; // подарочный Генетический анализ (на одного кота) потрачен
+  // Подарки новичка живут НЕ здесь, а в state.freeAnalyzeLeft / freeSkipLeft / freeGrowthLeft:
+  // их запасы переживают обучение (FREE_ANALYZE_COUNT / FREE_SKIP_COUNT / FREE_GROWTH_COUNT),
+  // а само обучение расходует лишь по одному — на первом анализе, вязке и котёнке.
   // Отметки шагов, которые НЕЛЬЗЯ вычислить из состояния: открытие панели ничего
   // в игре не меняет, а пристроенный/проданный кот из состояния исчезает вместе
   // со следом события. Остальные шаги по-прежнему чистые функции.
@@ -170,4 +174,5 @@ export interface TutorialState {
   previewSeen: boolean;  // открывал 🔮 прогноз пары перед первой вязкой
   ordersSeen: boolean;   // открывал доску 📋 Заказы
   adoptDone: boolean;    // отдал кота «в добрые руки» (adoptCat)
+  rewardTaken: boolean;  // подарок за пройденное обучение (💰/💎) уже начислен
 }

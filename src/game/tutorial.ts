@@ -1,8 +1,9 @@
 /**
  * Обучение новичка (FTUE) — ядро. Ведёт по всей базовой петле игры:
  * бесплатный генетический анализ → пара в слот вязки → прогноз пары → «Свести» →
- * первый котёнок → пристройство «в добрые руки» → доска заказов (📋 в Питомнике) →
- * кот на пьедестале выставки.
+ * первый котёнок → вырастить его (иначе не видно ни пола, ни облика) → освободить
+ * слот, отправив в Питомник → отвести родителя в Приют → пристройство «в добрые
+ * руки» → доска заказов (📋 в Питомнике) → кот на пьедестале выставки.
  *
  * Активный шаг — ЧИСТАЯ ФУНКЦИЯ ОТ СОСТОЯНИЯ, а не счётчик в сейве: игрок,
  * который сделал действие раньше подсказки (или сделал его другим способом),
@@ -16,7 +17,11 @@
  */
 
 import type { Cat, GameState } from './types.js';
-import { isInSlot, isChampion, isInBasket } from './economy.js';
+import { isInSlot, isChampion, isInBasket, isAdult } from './economy.js';
+import {
+  TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
+  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
+} from './config.js';
 
 /**
  * Шаг обучения:
@@ -25,19 +30,25 @@ import { isInSlot, isChampion, isInBasket } from './economy.js';
  * - `menu`     — в слоте один кот: второго отправляем кнопкой из меню кота;
  * - `preview`  — пара собрана, но 🔮 прогноз пары ещё не смотрели;
  * - `breed`    — пара готова: жмём «Свести»;
- * - `skip`     — вязка идёт, подарочный ускоритель ещё цел: ускоряем бесплатно;
- * - `wait`     — вязка идёт, ускоритель потрачен: просто ждём котёнка;
- * - `kitten`   — малыш сидит в окошке вязки: отправляем его в Приют;
+ * - `skip`     — вязка идёт, в запасе есть подарочные ускорения: ускоряем бесплатно;
+ * - `wait`     — вязка идёт, запас ускорений пуст: просто ждём котёнка;
+ * - `grow`     — малыш в окошке вязки ещё котёнок: тап по нему → «Вырастить сейчас» (подарок);
+ * - `kitten`   — в окошке вязки сидит выросший кот: слот занят, отправляем его в Питомник;
+ * - `toShelter`— слот освобождён: уводим родителя (отца помёта) в Приют;
  * - `adopt`    — в Приюте есть кот: отдаём «в добрые руки» (станция 🤝);
  * - `orders`   — открываем доску 📋 Заказы (кнопка слева в Питомнике);
  * - `champion` — ставим взрослого кота на пьедестал выставки в Питомнике.
  */
 export type TutorStep =
   | 'analyze' | 'drag' | 'menu' | 'preview' | 'breed' | 'skip' | 'wait'
-  | 'kitten' | 'adopt' | 'orders' | 'champion';
+  | 'grow' | 'kitten' | 'toShelter' | 'adopt' | 'orders' | 'champion';
 
-/** Активный шаг обучения или null, если обучение пройдено/пропущено. */
-export function tutorialStep(state: GameState): TutorStep | null {
+/**
+ * Активный шаг обучения или null, если обучение пройдено/пропущено. `now` нужен
+ * только шагу `grow` (котёнок это ещё малыш или уже вырос) — по умолчанию берём
+ * реальное время, тесты передают своё.
+ */
+export function tutorialStep(state: GameState, now = Date.now()): TutorStep | null {
   if (state.tutorial?.done !== false) return null;
   // Первый котёнок уже был — обучение перешло во вторую половину, что бы дальше ни
   // происходило со слотом. Флаг `bornOnce` ставит сам `collectReady`: по живым
@@ -45,7 +56,7 @@ export function tutorialStep(state: GameState): TutorStep | null {
   // чего он из состояния исчезает. Родословная от вязки — запасной признак для
   // сейвов, сделанных до появления флага (по discoveredBreeds судить нельзя:
   // породы стартовых дворовых попадают в Котодекс при создании новой игры).
-  if (state.tutorial.bornOnce || bornInLab(state)) return afterBirthStep(state);
+  if (state.tutorial.bornOnce || bornInLab(state)) return afterBirthStep(state, now);
 
   // Первое действие новичка — наука, а не вязка: подарочный анализ вскрывает
   // родословную и скрытые гены, от которых зависят будущие породы. Шага нет,
@@ -54,7 +65,7 @@ export function tutorialStep(state: GameState): TutorStep | null {
 
   const slot = state.slots[0];
   if (!slot) return null;
-  if (slot.readyAt > 0) return state.tutorial.freeSkipUsed ? 'wait' : 'skip';
+  if (slot.readyAt > 0) return state.freeSkipLeft > 0 ? 'skip' : 'wait';
 
   const inSlot = (slot.motherId ? 1 : 0) + (slot.fatherId ? 1 : 0);
   if (inSlot === 0) return 'drag';
@@ -64,16 +75,21 @@ export function tutorialStep(state: GameState): TutorStep | null {
 }
 
 /**
- * Вторая половина обучения (после первого котёнка): пристройство → заказы →
- * выставка. Пристройство пропускается, если пристраивать некого (малыша унесли в
- * Питомник) и обратно не возвращается, как только игрок дошёл до заказов —
- * иначе подсказка прыгала бы назад от любого кота, забредшего в Приют.
+ * Вторая половина обучения (после первого котёнка): вырастить малыша → освободить
+ * слот → отвести родителя в Приют → пристройство → заказы → выставка. Пристройство
+ * пропускается, если пристраивать некого, и обратно не возвращается, как только
+ * игрок дошёл до заказов — иначе подсказка прыгала бы назад от любого кота,
+ * забредшего в Приют.
  */
-function afterBirthStep(state: GameState): TutorStep | null {
+function afterBirthStep(state: GameState, now: number): TutorStep | null {
   const t = state.tutorial;
   if (!t.ordersSeen && !t.adoptDone) {
-    if (adoptTarget(state)) return 'adopt';
-    if (state.slots.some((s) => s.kittenId)) return 'kitten';
+    // Сначала растим малыша: у котёнка не видно ни пола, ни облика (и растить его
+    // можно где угодно — в окошке вязки или уже в комнате). Растить нечем — идём дальше.
+    if (growTarget(state, now)) return 'grow';
+    if (kittenInSlot(state)) return 'kitten';      // выросший занимает слот — уносим в Питомник
+    if (adoptTarget(state)) return 'adopt';        // кто-то в Приюте — учим отдавать
+    if (shelterTarget(state)) return 'toShelter';  // Приют пуст — уводим туда родителя
   }
   if (!t.ordersSeen) return 'orders';
   if (!state.champions?.some(Boolean)) return 'champion';
@@ -105,9 +121,46 @@ export function adoptTarget(state: GameState): Cat | null {
     && !isInSlot(state, c.id) && !isInBasket(state, c.id)) ?? null;
 }
 
+/** Малыш, оставленный в окошке вязки: пока он там, слот занят под новую пару. */
+export function kittenInSlot(state: GameState): Cat | null {
+  for (const slot of state.slots) {
+    const kid = slot.kittenId ? state.cats.find((c) => c.id === slot.kittenId) : undefined;
+    if (kid) return kid;
+  }
+  return null;
+}
+
+/**
+ * Котёнок для подарочного ускорения роста (шаг «Вырастить сейчас»): сперва тот, что
+ * сидит в окошке вязки, иначе любой малыш на полу комнат — из карточки рождения его
+ * могли сразу унести в Питомник или Приют, и шаг должен догонять его там. Подарков в
+ * запасе нет — цели нет и шага нет: посылать новичка платить 📺/💎 обучение не должно.
+ */
+export function growTarget(state: GameState, now: number): Cat | null {
+  if (state.freeGrowthLeft <= 0) return null;
+  const kid = kittenInSlot(state);
+  if (kid && !isAdult(kid, now)) return kid;
+  return state.cats.find((c) => !isAdult(c, now) && !isChampion(state, c.id)
+    && (c.location === 'nursery' || c.location === 'shelter')) ?? null;
+}
+
+/**
+ * Кот для шага «отправь в Приют» — отец помёта: `collectReady` оставляет родителей
+ * стоять в окошке вязки, так что его и учим увести (тап по коту → «🏚️ В приют»).
+ * Отца уже увели сами — сойдёт любой кот с пола Питомника.
+ */
+export function shelterTarget(state: GameState): Cat | null {
+  for (const slot of state.slots) {
+    const dad = slot.fatherId ? state.cats.find((c) => c.id === slot.fatherId) : undefined;
+    if (dad && dad.location !== 'shelter') return dad;
+  }
+  return state.cats.find((c) => c.location === 'nursery'
+    && !isInSlot(state, c.id) && !isChampion(state, c.id)) ?? null;
+}
+
 /** Обучение идёт прямо сейчас (для гейтов: подарки новичку, подсказки и т.п.). */
-export function tutorialActive(state: GameState): boolean {
-  return tutorialStep(state) !== null;
+export function tutorialActive(state: GameState, now = Date.now()): boolean {
+  return tutorialStep(state, now) !== null;
 }
 
 /**
@@ -129,13 +182,33 @@ export function finishTutorial(state: GameState): void {
 }
 
 /**
- * Прогнать обучение заново (дев-кнопка 🎓). Возвращает и подарки, и отметки
- * просмотров: шаг всё равно вычисляется от состояния, так что на уже отыгранной
- * партии подсветка встанет туда, куда дотянулся прогресс.
+ * Подарок за ПРОЙДЕННОЕ обучение (TUTORIAL_REWARD_COINS 💰 + TUTORIAL_REWARD_CRYSTALS 💎):
+ * стартовый капитал новичка перенесён сюда — на старте у игрока 💎 нет вовсе, а внутри
+ * обучения они и не нужны (анализ и ускорение первой вязки подарочные). Выдаётся один
+ * раз (флаг `rewardTaken`) и только за реальное прохождение всех шагов — крестик
+ * «пропустить» подсказки просто выключает, подарка не даёт. Возвращает true, если
+ * начислили (UI показывает тост).
+ */
+export function grantTutorialReward(state: GameState): boolean {
+  if (state.tutorial.rewardTaken) return false;
+  state.tutorial.rewardTaken = true;
+  state.coins += TUTORIAL_REWARD_COINS;
+  state.crystals += TUTORIAL_REWARD_CRYSTALS;
+  return true;
+}
+
+/**
+ * Прогнать обучение заново (дев-кнопка 🎓). Возвращает и подарки (включая запас
+ * бесплатных анализов), и отметки просмотров: шаг всё равно вычисляется от состояния,
+ * так что на уже отыгранной партии подсветка встанет туда, куда дотянулся прогресс.
  */
 export function restartTutorial(state: GameState): void {
   state.tutorial = {
-    done: false, freeSkipUsed: false, freeAnalyzeUsed: false,
+    done: false,
     bornOnce: false, previewSeen: false, ordersSeen: false, adoptDone: false,
+    rewardTaken: false,
   };
+  state.freeAnalyzeLeft = FREE_ANALYZE_COUNT;
+  state.freeSkipLeft = FREE_SKIP_COUNT;
+  state.freeGrowthLeft = FREE_GROWTH_COUNT;
 }
