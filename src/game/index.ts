@@ -4,12 +4,12 @@ export * from './types.js';
 export {
   SAVE_VERSION, TIER_MARKET_VALUE, UPGRADES, GENES, BASE_GENES, levelForReputation,
   ANALYZE_COST_BY_LEVEL, ANALYZE_CRYSTAL_COST, analyzeCost,
-  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
+  FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
   RECIPE_RESEARCH_COINS_PER_LEVEL, RECIPE_RESEARCH_DNA_PER_LEVEL, RECIPE_RESEARCH_MS_PER_LEVEL,
   recipeResearchCost, recipeResearchMs,
   BOOSTS, RESEARCH, MAX_HEARTS, PEDIGREE_DEPTH,
-  HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, AD_SKIP_MS, RECIPE_AD_SKIP_MS, BOOST_AD_COOLDOWN_MS,
-  BREED_SPEEDUP_CRYSTAL_PER_MIN, GROWTH_SPEEDUP_CRYSTAL_PER_MIN, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
+  HIDDEN_GENE_TIER_WEIGHTS, KINSHIP_HEALTH, RECIPE_AD_SKIP_MS, BOOST_AD_COOLDOWN_MS,
+  BREED_MS_BY_TIER, GROWTH_SPEEDUP_CRYSTAL_PER_MIN, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, nextLevelRep, unlocksAtLevel, levelCrystalReward, LAB_UNLOCKS,
   SLOT_UNLOCK_LEVELS, PEDESTAL_UNLOCK_LEVELS,
   REP_BIRTH_RATE, REP_NEW_BREED_MULT, REP_ADOPT_MULT, REP_LAB_MULT,
@@ -30,7 +30,7 @@ export {
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature, CrystalPack } from './config.js';
 export {
   lvl, emptySlot, slotCount, nurseryCapacity, shelterCapacity, capacityOf,
-  incubationDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot, freeBreedSlot,
+  breedingDuration, mutationRate, offlineCapMin, catsIn, roomCount, isBusy, isInSlot, freeBreedSlot,
   passiveRatePerMin, netIncomePerMin, adoptReward, upgradeCost, upgradeMaxed,
   researchExtraCoins, canAffordResearch,
   foodEnabled, foodCap, foodLevel, foodRatePerMin, isStarving, foodMinutesLeft, consumeFood,
@@ -70,7 +70,7 @@ export {
   collectIncome, offlineAdBonus, claimOfflineAdBonus,
   startBreeding, assignBreeder, clearBreederSlot, collectReady, adoptCat, moveCat,
   keepKittenWithParents, renameCat, sendToLab, adoptAll, sendAllToLab, setChampion, unsetChampion,
-  speedUpBreeding, adSkipBreeding, freeSkipBreeding, speedUpGrowth, adSkipGrowth, freeGrowKitten,
+  speedUpGrowth, adSkipGrowth, freeGrowKitten,
   putCatInBasket, clearOrderBasket,
   buyUpgrade, unlockGene, analyzeCat, freeAnalyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,

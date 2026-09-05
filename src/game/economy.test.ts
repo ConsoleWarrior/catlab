@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { makeRng } from '../genetics/index.js';
 import {
-  createInitialState, nurseryCapacity, shelterCapacity, incubationDuration,
+  createInitialState, nurseryCapacity, shelterCapacity, breedingDuration,
   mutationRate, offlineCapMin, upgradeCost, upgradeMaxed, passiveRatePerMin,
   adoptReward, labReward, isOld, breedsLeft, isSterile, heartsOf, catMarketValue, ORDER_TARGET,
   freeBreedSlot,
@@ -35,11 +35,15 @@ describe('геттеры прокачки', () => {
     expect(shelterCapacity(s)).toBe(C.SHELTER_BASE_CAP + 3); // 1 уровень × +3
   });
 
-  it('длительность инкубации постоянна (апгрейд скорости удалён на C0)', () => {
-    const s = createInitialState(makeRng(3), 0);
-    expect(incubationDuration(s)).toBe(Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS));
-    s.upgrades.speed = 2; // легаси-ключ больше ни на что не влияет
-    expect(incubationDuration(s)).toBe(Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS));
+  it('длительность вязки растёт с тиром будущего котёнка (от 5 с до 5 мин)', () => {
+    const tiers = ['common', 'uncommon', 'rare', 'epic', 'legendary'] as const;
+    for (const tier of tiers) expect(breedingDuration(tier)).toBe(C.BREED_MS_BY_TIER[tier]);
+    // порядок важен: длина ожидания — единственная подсказка о ценности помёта
+    for (let i = 1; i < tiers.length; i++) {
+      expect(breedingDuration(tiers[i]!)).toBeGreaterThan(breedingDuration(tiers[i - 1]!));
+    }
+    expect(breedingDuration('common')).toBe(5_000);
+    expect(breedingDuration('legendary')).toBe(300_000);
   });
 
   it('шанс мутации постоянный (базовый; апгрейд мутагена удалён)', () => {

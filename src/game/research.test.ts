@@ -4,7 +4,7 @@ import {
   createInitialState, makeCatInstance,
   breedChanceMult, kinshipSafety, extraHearts, applyExtraHearts, rollKittenHearts,
   feedEfficiency, foodRatePerMin, autoFeedEnabled, collectIncome, claimOrder,
-  researchBonus, offlineCapMin, incubationDuration, upgradeCost, upgradeMaxed,
+  researchBonus, offlineCapMin, upgradeCost, upgradeMaxed,
   passiveRatePerMin, setChampion,
   hiddenRaritySteps, hiddenTierWeights, buyCat, buyCatCost,
 } from './index.js';
@@ -23,7 +23,6 @@ describe('C0: чистка легаси-апгрейдов', () => {
     s.upgrades.show = 5; s.upgrades.speed = 3; s.upgrades.offline = 2;
     s.upgrades.connections = 4; s.upgrades.biobank = 2; s.upgrades.mutation = 9;
     expect(offlineCapMin(s)).toBe(C.OFFLINE_CAP_BASE_MIN);
-    expect(incubationDuration(s)).toBe(Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS));
     expect(upgradeCost(s, 'show')).toBeNull();       // удалённого апгрейда нет
     expect(upgradeMaxed(s, 'show')).toBe(true);
   });

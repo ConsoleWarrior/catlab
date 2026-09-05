@@ -1,6 +1,6 @@
 /**
  * Обучение новичка (FTUE) — визуальный слой. Ведёт по базовой петле игры:
- * 🧬 анализ → пара в слот → 🔮 прогноз пары → «Свести» → ⚡ подарочное ускорение →
+ * 🧬 анализ → пара в слот → 🔮 прогноз пары → «Свести» → 🌱 подарочное взросление →
  * малыш в Приют → 🤝 в добрые руки → 📋 заказы (доска в Питомнике) → 🏆 пьедестал.
  * Логика шага — чистая функция ядра (`game/tutorial.ts`), здесь только показ.
  *
@@ -28,7 +28,7 @@ import type { Cat } from '../game/index.js';
 import {
   tutorialStep, isInSlot, isAdult, isOld, isChampion, analyzeTarget, adoptTarget,
   growTarget, shelterTarget,
-  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
+  FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
 } from '../game/index.js';
 import type { TutorStep } from '../game/index.js';
 import { COLORS, FONT, label } from './theme.js';
@@ -368,18 +368,15 @@ export class Tutorial {
           room: 'incubator', key: 'breed', gesture: 'tap',
           text: t('Теперь жми «Свести» — порода котёнка зависит от родителей', 'Now hit "Breed" — the kitten breed depends on its parents'),
         };
-      case 'skip':
-        return {
-          room: 'incubator', key: 'freeSkip', gesture: 'tap',
-          text: t(
-            `Вязка идёт. Держи подарок лаборатории ⚡ первые ${FREE_SKIP_COUNT} ускорений бесплатно!`,
-            `Breeding is running. Here is a gift from the lab ⚡ the first ${FREE_SKIP_COUNT} speed-ups are free!`,
-          ),
-        };
       case 'wait':
         return {
           room: 'incubator', key: 'slot', gesture: 'tap',
-          text: t('Малыш вот-вот появится в окошке вязки 🥚', 'The kitten is about to appear in the breeding slot 🥚'),
+          text: t(
+            'Вязка пошла! Малыш вот-вот появится прямо в окошке 🥚 '
+              + 'Чем дольше идёт вязка — тем ценнее помёт',
+            'Breeding has started! The kitten will show up right in the slot 🥚 '
+              + 'The longer the breeding runs, the rarer the litter',
+          ),
         };
       case 'grow': {
         // Малыш мог остаться в окошке вязки, а мог сразу уехать в комнату из карточки
@@ -389,10 +386,12 @@ export class Tutorial {
           room: !kid || isInSlot(ctx.state, kid.id) ? 'incubator' : kid.location,
           key: kid ? `cat:${kid.id}` : 'slot', gesture: 'tap', overOverlay: true,
           text: t(
-            'Малыш родился! Чтобы узнать пол котёнка, он должен вырасти. Тапни по нему → '
-              + `«🌱 Вырастить сейчас» → 🎁 бесплатно. Первые ${FREE_GROWTH_COUNT} ускорений роста бесплатно!`,
-            'The kitten is born! To find out its sex it has to grow up. Tap it → '
-              + `"🌱 Grow up now" → 🎁 free. The first ${FREE_GROWTH_COUNT} grow-ups are free!`,
+            'Малыш родился! Чтобы узнать пол котёнка, он должен вырасти, и это занимает время. '
+              + 'Взросление можно ускорить: тапни по нему → «🌱 Вырастить сейчас» → 🎁 бесплатно. '
+              + `Первые ${FREE_GROWTH_COUNT} ускорений роста в подарок!`,
+            'The kitten is born! To find out its sex it has to grow up, and that takes time. '
+              + 'Growing up can be rushed: tap it → "🌱 Grow up now" → 🎁 free. '
+              + `The first ${FREE_GROWTH_COUNT} grow-ups are a gift!`,
           ),
         };
       }

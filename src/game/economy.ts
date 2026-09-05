@@ -173,8 +173,13 @@ export function capacityOf(state: GameState, room: LiveRoom): number {
   return room === 'nursery' ? nurseryCapacity(state) : shelterCapacity(state);
 }
 
-export function incubationDuration(_state: GameState): number {
-  return Math.max(C.INCUBATION_MIN_MS, C.INCUBATION_BASE_MS);
+/**
+ * Сколько идёт вязка ради котёнка данного тира (скрытая формула, C.BREED_MS_BY_TIER):
+ * серый — 5 с, легендарный — минута. Тир известен уже на «Свести» — порода будущего
+ * котёнка бросается там же (slot.plannedBreed). Ускорений у вязки нет.
+ */
+export function breedingDuration(tier: RarityTier): number {
+  return C.BREED_MS_BY_TIER[tier] ?? C.BREED_MS_BY_TIER.common;
 }
 
 export function mutationRate(_state: GameState): number {

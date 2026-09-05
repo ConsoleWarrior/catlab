@@ -37,6 +37,7 @@ import type { UiContext } from './context.js';
 import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, tierName, TIER_COLOR, UI_SCALE } from './theme.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
+import { breedFaceTexture } from './breedFace.js';
 import { getMasterVolume, setMasterVolume, sfxEvent, sfxMeow } from './sound.js';
 import { canOfferAuth, isAuthorized, openAuthDialog } from '../platform/ysdk.js';
 import { t, tx, lang, setLang, AVAILABLE, type Lang, type LocStr } from '../i18n.js';
@@ -227,20 +228,21 @@ function slider(
  * игре. Ссылкой это закрыть нельзя (внешние ссылки запрещены п. 8.4.2), поэтому
  * текст лежит здесь и открывается из ⚙️ Настроек.
  *
- * Текст обязан отражать правду о том, что игра делает: прогресс в облаке Яндекс
- * Игр, идентификатор игрока от платформы, реклама и покупки через её же SDK.
+ * Текст обязан отражать правду о том, что игра делает: прогресс в облаке
+ * платформы, идентификатор игрока от неё же, реклама и покупки через её SDK.
+ * Названий и марок площадки в тексте нет — игра говорит «игровая платформа».
  */
 const PRIVACY: LocStr[] = [
   ['Игра не собирает и не передаёт разработчику ваши персональные данные: ни имени, ни почты, ни телефона, ни платёжных реквизитов.',
    'The game does not collect or send the developer any personal data: no name, no email, no phone number, no payment details.'],
-  ['Что сохраняется: игровой прогресс — коты, валюты, уровень лаборатории, настройки. Он хранится на вашем устройстве и в облаке Яндекс Игр, чтобы игра продолжалась с любого устройства.',
-   'What is saved: your game progress — cats, currencies, lab level, settings. It is stored on your device and in the Yandex Games cloud so you can continue from any device.'],
+  ['Что сохраняется: игровой прогресс — коты, валюты, уровень лаборатории, настройки. Он хранится на вашем устройстве и в облаке игровой платформы, чтобы игра продолжалась с любого устройства.',
+   'What is saved: your game progress — cats, currencies, lab level, settings. It is stored on your device and in the game platform cloud so you can continue from any device.'],
   ['Прогресс привязан к идентификатору игрока, который выдаёт платформа. Кто вы такой, игра не знает.',
    'Progress is tied to a player id issued by the platform. The game does not know who you are.'],
-  ['Реклама и покупки кристаллов идут через SDK Яндекс Игр и подчиняются правилам Яндекса. Своих серверов у игры нет, наружу она ничего не отправляет.',
-   'Ads and crystal purchases go through the Yandex Games SDK and follow Yandex rules. The game has no servers of its own and sends nothing outside.'],
-  ['Чтобы удалить прогресс, очистите данные сайта в браузере: облачную копию можно удалить через настройки вашего аккаунта на Яндекс Играх.',
-   'To delete your progress, clear the site data in your browser; the cloud copy can be removed through your Yandex Games account settings.'],
+  ['Реклама и покупки кристаллов идут через SDK игровой платформы и подчиняются её правилам. Своих серверов у игры нет, наружу она ничего не отправляет.',
+   'Ads and crystal purchases go through the platform SDK and follow the platform rules. The game has no servers of its own and sends nothing outside.'],
+  ['Чтобы удалить прогресс, очистите данные сайта в браузере: облачную копию можно удалить через настройки вашего аккаунта на игровой платформе.',
+   'To delete your progress, clear the site data in your browser; the cloud copy can be removed through your platform account settings.'],
 ];
 
 /** Оверлей «Конфиденциальность» — текст политики (п. 3.5). */
@@ -331,13 +333,13 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
 
   const extra: Container[] = [];
 
-  // Вход в Яндекс ID. Строго по нажатию игрока (п. 1.2.1) и никогда не
+  // Вход в аккаунт платформы. Строго по нажатию игрока (п. 1.2.1) и никогда не
   // обязателен: гость играет и сохраняется как прежде (п. 1.2.2). Нужен он ради
   // п. 1.13.3 — чтобы прогресс и купленные 💎 были доступны с других устройств,
   // а не жили в localStorage, который на iOS чистится сам.
   if (canOfferAuth() && !isAuthorized()) {
     const authBtn = new Button({
-      text: t('🔑 Войти в Яндекс ID', '🔑 Sign in with Yandex ID'),
+      text: t('🔑 Войти в аккаунт', '🔑 Sign in'),
       w: W - pad * 2, h: 44, color: COLORS.card, textColor: COLORS.ink, fontSize: 15,
     });
     authBtn.position.set(W / 2, y + 22);
@@ -426,10 +428,10 @@ export function buildResetConfirm(ctx: UiContext, close: () => void, onConfirm: 
     text: t(
       'Игра начнётся с нуля: котики, монеты, гены, уровень лаборатории, открытые породы и рецепты пропадут.\n\n'
       + 'Сбрасывается и облачная копия — вернуть прогресс с другого устройства будет нельзя. '
-      + 'Купленные 💎 не возвращаются.',
+      + 'Кристаллы 💎 на счету сохранятся, но потраченные не возвращаются.',
       'The game starts over: cats, coins, genes, lab level, discovered breeds and recipes will be gone.\n\n'
       + 'The cloud copy is reset too — progress cannot be restored from another device. '
-      + 'Purchased 💎 are not refunded.',
+      + 'Your 💎 balance carries over, but spent crystals are not refunded.',
     ),
     style: {
       fontFamily: FONT, fontSize: 13, fontWeight: '600', fill: COLORS.ink,
@@ -484,7 +486,7 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
     title.position.set(W / 2, 30);
     parts.push(title);
 
-    const sub = label(t('Ускоряют вязку и рост, лечат котов, заряжают усилители', 'Speed up breeding and growth, heal cats, charge boosters'), 11.5, COLORS.inkSoft, '600');
+    const sub = label(t('Ускоряют рост и рецепты, лечат котов, заряжают усилители', 'Speed up growth and recipes, heal cats, charge boosters'), 11.5, COLORS.inkSoft, '600');
     sub.position.set(W / 2, 50);
     parts.push(sub);
 
@@ -551,7 +553,7 @@ export function buildShopPanel(ctx: UiContext, close: () => void): Container {
       y += 22;
     }
 
-    const note = label(t('Покупки проходят через Яндекс Игры', 'Purchases go through Yandex Games'), 10.5, COLORS.inkSoft, '600');
+    const note = label(t('Покупки проходят через игровую платформу', 'Purchases go through the game platform'), 10.5, COLORS.inkSoft, '600');
     note.position.set(W / 2, y + 8);
     parts.push(note);
     y += 24;
@@ -1457,12 +1459,26 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   return root;
 }
 
+/** Смешать два цвета: f=0 → a, f=1 → b (мягкие подложки медальонов). */
+function mixColor(a: number, b: number, f: number): number {
+  const ch = (sh: number): number => {
+    const x = Math.round((((a >> sh) & 0xff) * (1 - f)) + (((b >> sh) & 0xff) * f));
+    return Math.max(0, Math.min(255, x));
+  };
+  return (ch(16) << 16) | (ch(8) << 8) | ch(0);
+}
+
 /**
- * Дерево родословной кота: колонки-поколения слева направо
- * (сам кот → родители → деды → прадеды). Туман родословной: рисуются только
- * ИЗВЕСТНЫЕ узлы (known), неизвестный предок — серая ячейка «???» без намёка на
- * тир, его поддерево не раскрывается. Вскрыть всё — Генетический анализ (кнопка
- * внизу). Если столбцы не влезают — Game вписывает панель в экран (showOverlay).
+ * Дерево родословной кота — вертикальное: сам кот стоит корнем внизу, предки
+ * растут кроной вверх (родители → деды → прадеды). Узел — круглый медальон с
+ * мордочкой своей породы (вырезается из спрайта, см. ui/breedFace.ts) в кольце
+ * цвета тира; чем ближе поколение к коту, тем медальон крупнее. Мать всегда
+ * слева, отец справа — на медальоне это ещё и бейдж ♀/♂.
+ *
+ * Туман родословной: рисуются только ИЗВЕСТНЫЕ узлы (known), неизвестный предок —
+ * серый медальон с силуэтом и «?» БЕЗ намёка на тир, его ветка не раскрывается.
+ * Вскрыть всё — Генетический анализ (кнопка внизу). Панель шире экрана? Game
+ * вписывает её целиком (showOverlay → fitOverlay).
  */
 export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void): Container {
   const root = new Container();
@@ -1471,92 +1487,190 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   const subject: Ancestor = { id: cat.id, breed: cat.breed, known: true, mother: ped.mother, father: ped.father };
   const maxDepth = PEDIGREE_DEPTH; // 0=кот, 1=родители, 2=деды, 3=прадеды
 
-  // геометрия ячеек/колонок; на таче (k=1.2) весь чертёж крупнее — ячейки И текст
-  // растут вместе, чтобы длинные названия пород не вылезали. На ПК k=1 (без изменений).
-  // Панель всё равно вписывается в экран (fitOverlay), так что полное 4-поколенное
-  // дерево на узком экране ужмётся как раньше, а короткие деревья станут читаемее.
+  // Геометрию дерева НЕ множим на UI_SCALE: полная родословная — это восемь
+  // прадедов в ряд, и на телефоне раздутую панель fitOverlay всё равно сжал бы
+  // обратно, только вместе с текстом. Растут (k) лишь подписи.
   const k = UI_SCALE;
-  const cellW = 108 * k, cellH = 42 * k, colGap = 16 * k, rowGap = 9 * k;
-  const slotH = cellH + rowGap;
-  const padX = 16 * k, padTop = 64 * k, headerY = 46 * k;
-  const colX = (d: number): number => padX + d * (cellW + colGap) + cellW / 2;
+  const R = [38, 29, 25, 22];                                  // радиус медальона по поколению
+  const rOf = (d: number): number => R[Math.min(d, R.length - 1)]!;
+  const rowH = 112;                                            // шаг поколений
+  // Шаг соседей: в полном дереве восемь прадедов в ряд — там он минимальный, а в
+  // коротком (родители известны, деды ещё нет) медальонам дают больше воздуха.
+  const colW = pedigreeDepth(cat) >= 3 ? 80 : pedigreeDepth(cat) === 2 ? 90 : 106;
+  const padX = 14, padTop = 52;
+  const capH = 30;                                             // табличка с названием под медальоном
 
-  type Placed = { node: Ancestor; depth: number; x: number; y: number; isRoot: boolean };
+  // Раскладка — строгая генеалогическая сетка: у каждого узла свой слот (мать —
+  // левая половина отрезка отца-и-матери, отец — правая), поэтому дерево всегда
+  // симметрично, кот стоит ровно по центру, а пропуски (предок неизвестен либо
+  // его вовсе нет в данных) остаются честными пустотами, а не перекашивают ряды.
+  type Placed = { node: Ancestor; depth: number; slot: number; isRoot: boolean; sex: 'female' | 'male' | null };
   const placed: Placed[] = [];
-  const links: Array<[number, number, number, number]> = []; // x1,y1,x2,y2
-  let leafIndex = 0;
+  const links: Array<[number, number, number]> = [];           // слот ребёнка, его глубина, слот родителя
   let usedDepth = 0;
 
-  const layout = (node: Ancestor, depth: number, isRoot: boolean): number => {
+  const layout = (node: Ancestor, depth: number, slot: number, isRoot: boolean, sex: Placed['sex']): void => {
     usedDepth = Math.max(usedDepth, depth);
-    const kids: Ancestor[] = [];
+    placed.push({ node, depth, slot, isRoot, sex });
     // в поддерево неизвестного узла не заглядываем — «???» схлопывает ветку
-    if (depth < maxDepth && node.known) {
-      if (node.mother) kids.push(node.mother);
-      if (node.father) kids.push(node.father);
-    }
-    let y: number;
-    if (kids.length === 0) {
-      y = padTop + (leafIndex + 0.5) * slotH;
-      leafIndex++;
-    } else {
-      const ys = kids.map((k) => layout(k, depth + 1, false));
-      y = ys.reduce((a, b) => a + b, 0) / ys.length;
-      for (const cy of ys) links.push([colX(depth) + cellW / 2, y, colX(depth + 1) - cellW / 2, cy]);
-    }
-    placed.push({ node, depth, x: colX(depth), y, isRoot });
-    return y;
+    if (depth >= maxDepth || !node.known) return;
+    if (node.mother) { links.push([slot, depth, slot * 2]); layout(node.mother, depth + 1, slot * 2, false, 'female'); }
+    if (node.father) { links.push([slot, depth, slot * 2 + 1]); layout(node.father, depth + 1, slot * 2 + 1, false, 'male'); }
   };
-  layout(subject, 0, true);
+  layout(subject, 0, 0, true, cat.genotype.sex === 'male' ? 'male' : 'female');
 
-  const W = padX * 2 + (usedDepth + 1) * cellW + usedDepth * colGap;
-  const treeBottom = padTop + leafIndex * slotH;
+  // ряд d считаем снизу вверх: 0 (кот) — самый нижний
+  const yOf = (d: number): number => padTop + (usedDepth - d) * rowH + rOf(0);
+  // ширина слота удваивается с каждым поколением вниз: корень занимает всю крону
+  const spanOf = (d: number): number => colW * Math.pow(2, usedDepth - d);
+  const treeW = padX * 2 + spanOf(0);
+  const W = Math.max(392, treeW);
+  const dx = (W - treeW) / 2;
+  const xOf = (d: number, slot: number): number => padX + dx + (slot + 0.5) * spanOf(d);
+  const treeBottom = yOf(0) + rOf(0) + capH + 6;
   const known = pedigreeDepth(cat); // поколений предков в данных (включая туман)
   const fog = pedigreeHasFog(cat);  // есть ли скрытые узлы — предложим анализ
 
-  // соединители (рисуем под ячейками)
-  const wires = new Graphics();
-  for (const [x1, y1, x2, y2] of links) {
-    const midX = (x1 + x2) / 2;
-    wires.moveTo(x1, y1).lineTo(midX, y1).lineTo(midX, y2).lineTo(x2, y2);
+  // полки-подложки поколений: мягкая полоса за каждым рядом (у корня — в цвет
+  // его тира), чтобы поколения читались рядами, а не россыпью кружков
+  const shelves = new Graphics();
+  const rootX = xOf(0, 0);
+  for (let d = 0; d <= usedDepth; d++) {
+    const r = rOf(d);
+    const yc = yOf(d);
+    if (d === 0) {
+      // у корня полка короткая — постамент под самим котом, а не пустая полоса
+      const w = Math.max(224, colW * 2);
+      shelves.roundRect(rootX - w / 2, yc - r - 10, w, r * 2 + capH + 14, 18)
+        .fill({ color: mixColor(COLORS.card, TIER_COLOR[tierOfBreed(cat.breed)], 0.2), alpha: 0.95 });
+    } else {
+      shelves.roundRect(padX, yc - r - 8, W - padX * 2, r * 2 + capH + 10, 16)
+        .fill({ color: COLORS.card, alpha: 0.6 });
+    }
   }
-  wires.stroke({ width: 1.5, color: COLORS.cardEdge, alpha: 0.9 });
 
-  // ячейка-предок: рамка в цвет тира + точка тира + имя породы (с переносом);
-  // узел в тумане — серый «🔒 ???» БЕЗ цвета тира (не подсказываем редкость)
-  const cell = (p: Placed): Container => {
-    const c = new Container();
-    const hidden = !p.isRoot && !p.node.known;
-    const col = hidden ? COLORS.cardEdge : TIER_COLOR[tierOfBreed(p.node.breed)];
+  // Ветки: от макушки ребёнка вверх, развилка идёт НИЗОМ коридора (сразу над
+  // ребёнком) и лишь потом поднимается к родителю. Так горизонталь не режет
+  // таблички с названиями — они висят под медальонами родителей, а концы веток
+  // прячутся под ними: медальоны рисуются поверх проводов.
+  const wires = new Graphics();
+  for (const [cSlot, cd, pSlot] of links) {
+    const x1 = xOf(cd, cSlot), x2 = xOf(cd + 1, pSlot);
+    const yTop = yOf(cd) - rOf(cd) - 2;          // макушка ребёнка
+    const yBot = yOf(cd + 1) + rOf(cd + 1) - 2;  // низ родителя (уходит под кольцо)
+    const yBand = yTop - 13;                     // полоса развилки
+    wires.moveTo(x1, yTop).lineTo(x1, yBand);
+    if (Math.abs(x2 - x1) < 1) {
+      wires.lineTo(x2, yBot);
+    } else {
+      const rr = Math.min(14, Math.abs(x2 - x1) / 2, Math.max(2, (yBand - yBot) / 2));
+      wires.moveTo(x1, yBand).arcTo(x2, yBand, x2, yBot, rr).lineTo(x2, yBot);
+    }
+  }
+  wires.stroke({ width: 2.5, color: mixColor(COLORS.cardEdge, COLORS.ink, 0.28), alpha: 1 });
+
+  // силуэт мордочки для узла в тумане — ушки + голова, без намёка на породу
+  const unknownFace = (r: number): Graphics => {
     const g = new Graphics();
-    g.roundRect(-cellW / 2, -cellH / 2, cellW, cellH, 9)
-      .fill({ color: p.isRoot ? COLORS.card : COLORS.hud, alpha: hidden ? 0.7 : 1 })
-      .stroke({ width: p.isRoot ? 3 : 2, color: col, alpha: hidden ? 0.8 : 0.95 });
-    g.circle(-cellW / 2 + 11 * k, 0, 4 * k).fill({ color: col });
-    const name = hidden ? '🔒 ???'
-      : p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
-    const t = new Text({
-      text: name,
-      style: {
-        fontFamily: FONT, fontSize: 11 * k, fontWeight: '700', fill: hidden ? COLORS.inkSoft : COLORS.ink,
-        wordWrap: true, breakWords: true, wordWrapWidth: cellW - 26 * k, lineHeight: 12 * k, align: 'center',
-      },
-    });
-    t.anchor.set(0.5);
-    t.position.set(5 * k, 0);
-    c.addChild(g, t);
-    c.position.set(p.x, p.y);
-    return c;
+    const s = r / 22;
+    g.moveTo(-11 * s, -2 * s).lineTo(-9 * s, -13 * s).lineTo(-1 * s, -6 * s).closePath();
+    g.moveTo(11 * s, -2 * s).lineTo(9 * s, -13 * s).lineTo(1 * s, -6 * s).closePath();
+    g.circle(0, 2 * s, 10 * s);
+    g.fill({ color: COLORS.inkSoft, alpha: 0.26 });
+    return g;
   };
 
-  // заголовки колонок поколений
-  const COL_RU = ['', t('родители', 'parents'), t('деды', 'grandparents'), t('прадеды', 'great-grandparents')];
-  const headers: Container[] = [];
-  for (let d = 1; d <= usedDepth; d++) {
-    const h = label(COL_RU[d] ?? '', 12, COLORS.inkSoft, '800');
-    h.position.set(colX(d), headerY);
-    headers.push(h);
-  }
+  // медальон: тень → подложка в цвет тира → мордочка породы → кольцо → бейдж ♀/♂
+  const medallion = (p: Placed): Container => {
+    const c = new Container();
+    const r = rOf(p.depth);
+    const hidden = !p.isRoot && !p.node.known;
+    const tier = tierOfBreed(p.node.breed);
+    const col = hidden ? COLORS.cardEdge : TIER_COLOR[tier];
+
+    const back = new Graphics();
+    if (!hidden && (tier === 'epic' || tier === 'legendary')) {
+      back.circle(0, 0, r * 1.3).fill({ color: col, alpha: 0.10 });
+      back.circle(0, 0, r * 1.15).fill({ color: col, alpha: 0.14 });
+    }
+    back.circle(0, 3, r).fill({ color: COLORS.ink, alpha: 0.12 });
+    back.circle(0, 0, r).fill({ color: hidden ? COLORS.card : mixColor(COLORS.hud, col, 0.16) });
+    c.addChild(back);
+
+    if (hidden) {
+      c.addChild(unknownFace(r));
+      const q = label('?', r * 0.95, COLORS.inkSoft, '800');
+      q.alpha = 0.85;
+      c.addChild(q);
+    } else {
+      const face = breedFaceTexture(ctx.app, p.node.breed);
+      if (face) {
+        const sp = new Sprite(face);
+        sp.anchor.set(0.5);
+        sp.scale.set((r * 2) / face.width);
+        c.addChild(sp);
+      } else {
+        c.addChild(label('🐾', r * 0.9, COLORS.inkSoft, '700'));
+      }
+    }
+
+    const ring = new Graphics()
+      .circle(0, 0, r)
+      .stroke({ width: p.isRoot ? 4 : 3, color: col, alpha: hidden ? 0.8 : 1 });
+    c.addChild(ring);
+
+    if (p.sex) {
+      const br = r * 0.36;
+      const bx = r * 0.72, by = r * 0.72;
+      const badge = new Graphics()
+        .circle(bx, by, br)
+        .fill({ color: p.sex === 'female' ? COLORS.primary : COLORS.secondary })
+        .stroke({ width: 2, color: COLORS.hud });
+      const sign = label(p.sex === 'female' ? '♀' : '♂', br * 1.5, COLORS.hud, '800');
+      sign.position.set(bx, by);
+      c.addChild(badge, sign);
+    }
+
+    // Табличка с названием: у корня — кличка кота, у предков — порода (в тумане
+    // «???»). Плашка непрозрачная и рисуется поверх веток — конец провода уходит
+    // под неё, поэтому длинные названия не спорят с чертежом.
+    const name = hidden ? '???'
+      : p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
+    // Длинные породы («Домашняя короткошёрстная») уводило в три строки с разрывом
+    // слова, и таблички соседей смыкались — поэтому кегль подбираем под две строки.
+    const capW = p.isRoot ? 160 : colW - 2;
+    const mkCap = (size: number): Text => new Text({
+      text: name,
+      style: {
+        fontFamily: FONT, fontSize: size, fontWeight: p.isRoot ? '800' : '700',
+        fill: hidden ? COLORS.inkSoft : COLORS.ink, wordWrap: true, breakWords: true,
+        wordWrapWidth: capW, lineHeight: size + 1.5, align: 'center',
+      },
+    });
+    let cap = mkCap(p.isRoot ? 13 : p.depth >= 2 ? 10 : 10.5);
+    for (const size of [9.5, 8.5]) {
+      if (p.isRoot || cap.height <= (cap.style.lineHeight as number) * 2 + 1) break;
+      cap.destroy();
+      cap = mkCap(size);
+    }
+    cap.anchor.set(0.5, 0);
+    cap.position.set(0, r + 6);
+    // у кота с кличкой порода уходит второй строкой — иначе её негде прочитать
+    const sub = p.isRoot && cat.name?.trim()
+      ? label(breedName(p.node.breed), 10, COLORS.inkSoft, '700')
+      : null;
+    if (sub) { sub.anchor.set(0.5, 0); sub.position.set(0, r + 6 + cap.height + 2); }
+    const textH = cap.height + (sub ? sub.height + 2 : 0);
+    const plateW = Math.min(p.isRoot ? 180 : colW + 4, Math.max(cap.width, sub?.width ?? 0) + 14);
+    const plate = new Graphics()
+      .roundRect(-plateW / 2, r + 2, plateW, textH + 8, 8)
+      .fill({ color: COLORS.hud, alpha: 0.97 });
+    c.addChild(plate, cap);
+    if (sub) c.addChild(sub);
+
+    c.position.set(xOf(p.depth, p.slot), yOf(p.depth));
+    return c;
+  };
 
   const title = label(t('🌳 Родословная', '🌳 Pedigree'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 26 * k);
@@ -1605,8 +1719,8 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   y += 44;
 
   const H = y;
-  root.addChild(panel(W, H, COLORS.hud, 18), title, ...headers, wires);
-  for (const p of placed) root.addChild(cell(p));
+  root.addChild(panel(W, H, COLORS.hud, 18), title, shelves, wires);
+  for (const p of placed) root.addChild(medallion(p));
   root.addChild(...footer, closeBtn);
   return root;
 }

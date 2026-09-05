@@ -30,6 +30,16 @@ type EyeData = Record<string, { eyes: EyeMark[] } | undefined>;
 // через loadEyeData(). Без этого игра видит старый eyes.json и всё падает в автодетект.
 let EYES = eyesJson as unknown as EyeData;
 
+/**
+ * Разметка глаз спрайта (`<breed>__<n>`) в нормированных координатах, либо null,
+ * если спрайт не размечен. Кроме моргания по ней кадрируются мордочки-медальоны
+ * в дереве родословной (см. ui/breedFace.ts) — глаза задают центр и масштаб морды.
+ */
+export function eyeMarksFor(fileKey: string): EyeMark[] | null {
+  const entry = EYES[fileKey];
+  return entry && entry.eyes.length > 0 ? entry.eyes : null;
+}
+
 /** DEV: подтянуть свежую разметку глаз из эндпоинта тэггера. */
 export async function loadEyeData(): Promise<void> {
   if (!import.meta.env.DEV) return;

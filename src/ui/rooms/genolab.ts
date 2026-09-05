@@ -55,6 +55,12 @@ const BRANCHES: { row: number; label: LocStr }[] = [
   { row: 2, label: ['🤝 Пристройство · 💰', '🤝 Rehoming · 💰'] },
 ];
 
+// Раскладка карточки узла: поля у краёв и зазор между строками. Мелкие числа,
+// но общие для всех состояний — держим рядом, чтобы правились разом.
+const PAD_Y = 5;    // отступ от края карточки до крайней строки
+const GAP_Y = 3;    // просвет между соседними строками
+const MIN_FONT = 8; // ниже этого кегля текст уже не ужимаем — лучше пусть жмётся полоса
+
 /** Затемнить цвет: умножить RGB-компоненты на f (<1 — темнее). */
 function shade(color: number, f: number): number {
   const r = Math.round(((color >> 16) & 0xff) * f);
@@ -246,6 +252,27 @@ export function createGenolab(ctx: UiContext): Room {
     return t;
   }
 
+  /**
+   * То же, но с гарантией «влезет в maxH»: пока текст выше отведённой полосы,
+   * кегль падает по полшага. Без этого длинная подпись просто росла в обе
+   * стороны от центра и наезжала на соседнюю строку карточки — на телефоне,
+   * где карточка узкая и любой заголовок ломается на две строки, это было видно
+   * в каждом втором узле.
+   */
+  function fitted(
+    text: string, size: number, color: number, weight: '600' | '700' | '800',
+    maxW: number, maxH: number,
+  ): Text {
+    const t = wrapped(text, size, color, weight, maxW);
+    let s = size;
+    while (t.height > maxH && s > MIN_FONT) {
+      s = Math.max(MIN_FONT, s - 0.5);
+      t.style.fontSize = s;
+      t.style.lineHeight = s + 2;
+    }
+    return t;
+  }
+
   /** Ряд пипсов уровня узла: ● куплено (цветом валюты) / ○ осталось. */
   function levelPips(owned: number, total: number, curColor: number, dot: number): Container {
     const c = new Container();
@@ -294,25 +321,12 @@ export function createGenolab(ctx: UiContext): Room {
       });
     c.addChild(bg);
 
-    const title = wrapped(`${def.glyph} ${tx(def.title)}`, Math.min(15.5, nh * 0.155), COLORS.ink, '800', nw - 12);
-    title.position.set(0, -nh / 2 + nh * 0.19);
-    c.addChild(title);
-
-    // если у уровней есть своё описание — показываем текст СЛЕДУЮЩЕГО покупаемого
-    // уровня (с накопленным итогом), а на максимуме — последнего; иначе общий desc.
-    const descIdx = Math.min(owned, total - 1);
-    const descText = tx(def.levels[descIdx]?.desc ?? def.desc);
-    const desc = wrapped(descText, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600', nw - 14);
-    desc.position.set(0, -nh / 2 + nh * 0.47);
-    c.addChild(desc);
-
-    // пипсы уровней (только у многоуровневых узлов)
-    if (total > 1) {
-      const pips = levelPips(owned, total, curColor, Math.max(2.5, nh * 0.03));
-      pips.position.set(0, nh / 2 - nh * 0.32);
-      c.addChild(pips);
-    }
-
+    // Раскладка карточки — снизу вверх по ФАКТИЧЕСКИМ высотам строк, а не по
+    // долям nh. Доли ломались на телефоне: подписи цены и «✓ макс» идут через
+    // label(), а он на тач-экранах крупнее в UI_SCALE раз, тогда как заголовок и
+    // описание переносятся на две-три строки — строки наезжали друг на друга.
+    // Теперь цена стоит у нижнего края, над ней пипсы, заголовок — у верхнего, а
+    // описанию достаётся ровно то, что осталось между ними (и оно ужимается).
     const status = maxed
       ? label(t('✓ макс', '✓ max'), Math.min(14, nh * 0.14), COLORS.good, '800')
       : !reqMet
@@ -323,8 +337,37 @@ export function createGenolab(ctx: UiContext): Room {
             extraCoins > 0 ? `${curGlyph}${next!.cost}+💰${extraCoins}` : `${curGlyph} ${next!.cost}`,
             Math.min(extraCoins > 0 ? 12.5 : 15, nh * 0.15), affordable ? curColor : COLORS.inkSoft, '800',
           );
-    status.position.set(0, nh / 2 - nh * 0.13);
+    status.position.set(0, nh / 2 - PAD_Y - status.height / 2);
     c.addChild(status);
+    let bottom = nh / 2 - PAD_Y - status.height - GAP_Y; // куда нельзя заходить сверху
+
+    // пипсы уровней (только у многоуровневых узлов)
+    if (total > 1) {
+      const dot = Math.max(2.5, Math.min(3.4, nh * 0.03));
+      const pips = levelPips(owned, total, curColor, dot);
+      pips.position.set(0, bottom - dot);
+      c.addChild(pips);
+      bottom -= dot * 2 + GAP_Y;
+    }
+
+    const title = fitted(
+      `${def.glyph} ${tx(def.title)}`, Math.min(15.5, nh * 0.155), COLORS.ink, '800',
+      nw - 12, nh * 0.42, // заголовку — не больше двух с небольшим строк
+    );
+    title.position.set(0, -nh / 2 + PAD_Y + title.height / 2);
+    c.addChild(title);
+    const top = -nh / 2 + PAD_Y + title.height + GAP_Y;
+
+    // если у уровней есть своё описание — показываем текст СЛЕДУЮЩЕГО покупаемого
+    // уровня (с накопленным итогом), а на максимуме — последнего; иначе общий desc.
+    const descIdx = Math.min(owned, total - 1);
+    const descText = tx(def.levels[descIdx]?.desc ?? def.desc);
+    const desc = fitted(
+      descText, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600',
+      nw - 14, Math.max(MIN_FONT * 2, bottom - top),
+    );
+    desc.position.set(0, (top + bottom) / 2);
+    c.addChild(desc);
 
     c.eventMode = 'static';
     c.cursor = 'pointer';
@@ -442,7 +485,10 @@ export function createGenolab(ctx: UiContext): Room {
     const rowGap = 16;
     const labelH = 22;
     const nodeW = (viewW - colGap * (maxCols - 1)) / maxCols;
-    const nodeH = Math.max(104, Math.min(140, viewH * 0.27));
+    // Нижний предел высоты держим с запасом: в узкую колонку телефона заголовок
+    // почти всегда ложится в две строки, и при 104 px описанию оставалось так
+    // мало, что fitted ужимал его до нечитаемого. Ряды всё равно прокручиваются.
+    const nodeH = Math.max(116, Math.min(140, viewH * 0.27));
     const cxOf = (col: number): number => col * (nodeW + colGap) + nodeW / 2;
 
     let y = 4;

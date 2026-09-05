@@ -3,7 +3,7 @@
  * Время передаётся параметром `now` (тестируемо), RNG — параметром. См. GAME.md §10.
  */
 
-import { breed, isLethal, simpleCat, resolveBreeding, recipeKey } from '../genetics/index.js';
+import { breed, isLethal, simpleCat, resolveBreeding, recipeKey, tierOfBreed } from '../genetics/index.js';
 import { t } from '../i18n.js';
 import type { Rng, BreedBoosts, KinshipLevel, Recipe, Sex } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
@@ -141,12 +141,21 @@ export function buyFood(state: GameState, mode: 'pack' | 'full' = 'pack'): Resul
 
 // --- Инкубатор ---
 
+/**
+ * Запустить вязку. Здесь же РЕШАЕТСЯ, кто родится: порода котёнка бросается прямо
+ * сейчас (resolveBreeding, усилители тратятся тут же) и кладётся в `slot.plannedBreed`,
+ * а от её тира зависит длительность вязки — от 5 с за серого до минуты за легендарного
+ * (E.breedingDuration). Ускорять вязку нечем и незачем: ожидание короткое, а его длина —
+ * единственная подсказка о том, кто там внутри. Сам котёнок собирается при рождении
+ * (collectReady) — генотип, родословная и сердца бросаются уже там.
+ */
 export function startBreeding(
   state: GameState,
   slotIndex: number,
   motherId: string,
   fatherId: string,
   now: number,
+  rng: Rng = Math.random,
 ): Result {
   const slot = state.slots[slotIndex];
   if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
@@ -170,10 +179,19 @@ export function startBreeding(
   }
   // Место в питомнике НЕ требуется: вязку можно запустить всегда, котёнок
   // родится даже при переполненном питомнике (его потом пристраивают).
+  // Кто родится — решаем сейчас: рецепты (с учётом родства и усилителей «Генной
+  // инженерии») дают породу, порода даёт тир, тир — длительность вязки. Заряды
+  // сработавших усилителей списываются здесь же, в момент нажатия «Свести».
+  const used: BreedBoosts = {};
+  const plannedBreed = resolveBreeding(
+    buildBreedingContext(mother, father), rng, E.activeBoosts(state), used, E.breedChanceMult(state),
+  );
+  E.consumeBoosts(state, used);
   slot.motherId = motherId;
   slot.fatherId = fatherId;
   slot.startedAt = now;
-  slot.readyAt = now + E.incubationDuration(state);
+  slot.plannedBreed = plannedBreed;
+  slot.readyAt = now + E.breedingDuration(tierOfBreed(plannedBreed));
   // вязка засчитана обоим: приближает к статусу «Старый»
   mother.breedCount = (mother.breedCount ?? 0) + 1;
   father.breedCount = (father.breedCount ?? 0) + 1;
@@ -258,10 +276,13 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
       // родителя удалили — вязка отменяется, слот полностью очищаем
       slot.motherId = null;
       slot.fatherId = null;
+      slot.plannedBreed = undefined;
       continue;
     }
 
     const rate = E.mutationRate(state);
+    const plannedBreed = slot.plannedBreed;
+    slot.plannedBreed = undefined; // вязка закончилась — план отработан
     let child = breed(mother.genotype, father.genotype, rng, rate);
     // Двойная вислоухость (fold/fold) нежизнеспособна — такой помёт пересобираем.
     // Если не повезло и после пересборок пара опять дала fold/fold, котёнок
@@ -270,14 +291,17 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     let guard = 0;
     while (isLethal(child) && guard++ < 8) child = breed(mother.genotype, father.genotype, rng, rate);
     if (isLethal(child)) child = { ...child, Ea: ['fold', 'normal'] };
-    // Порода котёнка — по РЕЦЕПТАМ (прямые/сцепленные с полом/родословные) с учётом
-    // родства пары (инбридинг множит шанс родословных рецептов). Усилители «Генной
-    // инженерии» влияют на исход; списываем только сработавшие.
-    const used: BreedBoosts = {};
+    // Порода котёнка бро́шена ещё на «Свести» (startBreeding → slot.plannedBreed):
+    // от её тира зависела длительность вязки, так что переигрывать бросок нельзя.
+    // Фолбэк на месте ради сейвов с вязкой, начатой до этого правила, и дев-слотов,
+    // выставленных руками, — там бросаем как раньше, при рождении.
     const ctx = buildBreedingContext(mother, father);
-    // Исследования «Селекции»: глобальный множитель шанса всех рецептов.
-    const childBreed = resolveBreeding(ctx, rng, E.activeBoosts(state), used, E.breedChanceMult(state));
-    E.consumeBoosts(state, used);
+    let childBreed = plannedBreed;
+    if (!childBreed) {
+      const used: BreedBoosts = {};
+      childBreed = resolveBreeding(ctx, rng, E.activeBoosts(state), used, E.breedChanceMult(state));
+      E.consumeBoosts(state, used);
+    }
     // «Новая порода» — проверяем ДО makeCatInstance: он сам добавит породу в Котодекс.
     const newBreed = !state.discoveredBreeds.includes(childBreed);
     const kitten = E.makeCatInstance(state, child, now, 'nursery', childBreed);
@@ -473,45 +497,6 @@ export function unsetChampion(state: GameState, catId: string): Result {
     if (idx >= 0) state.champions[idx] = null;
   }
   return { ok: true };
-}
-
-/** Мгновенно завершить вязку в слоте за 💎 (скип таймера). Стоимость ∝ остатку времени. */
-export function speedUpBreeding(state: GameState, slotIndex: number, now: number): Result<{ crystals: number }> {
-  const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
-  if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
-  const remaining = Math.max(0, slot.readyAt - now);
-  const cost = E.speedUpCost(remaining, C.BREED_SPEEDUP_CRYSTAL_PER_MIN);
-  if (cost > 0 && !spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
-  slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
-  return { ok: true, crystals: cost };
-}
-
-/** Реклама: сократить остаток вязки на AD_SKIP_MS (бесплатно, можно повторять). */
-export function adSkipBreeding(state: GameState, slotIndex: number, now: number): Result {
-  const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
-  if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
-  slot.readyAt = Math.max(now, slot.readyAt - C.AD_SKIP_MS);
-  return { ok: true };
-}
-
-/**
- * Подарочный ускоритель: мгновенно и бесплатно завершает вязку. Запас — первые
- * C.FREE_SKIP_COUNT вязок новой игры (счётчик `state.freeSkipLeft`): иначе новичок
- * первые пять минут игры смотрит на таймер, ничего не понимая, а за один подарок
- * цикл «вязка → котёнок → куда его» не успевает уложиться. Кончился запас —
- * ускорение только штатное: 📺 реклама или 💎.
- * Возвращает остаток подарков — UI показывает его на кнопке и в тосте.
- */
-export function freeSkipBreeding(state: GameState, slotIndex: number, now: number): Result<{ left: number }> {
-  const slot = state.slots[slotIndex];
-  if (!slot) return { ok: false, reason: t('нет такого слота', 'no such slot') };
-  if (slot.readyAt === 0) return { ok: false, reason: t('слот не занят вязкой', "the slot isn't breeding") };
-  if (state.freeSkipLeft <= 0) return { ok: false, reason: t('бесплатные ускорения закончились', 'no free speed-ups left') };
-  state.freeSkipLeft -= 1;
-  slot.readyAt = now; // готово немедленно — collectReady заберёт котёнка
-  return { ok: true, left: state.freeSkipLeft };
 }
 
 /** Мгновенно вырастить котёнка за 💎 (скип роста). Стоимость ∝ остатку роста. */

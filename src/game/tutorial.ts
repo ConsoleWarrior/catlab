@@ -1,7 +1,7 @@
 /**
  * Обучение новичка (FTUE) — ядро. Ведёт по всей базовой петле игры:
  * бесплатный генетический анализ → пара в слот вязки → прогноз пары → «Свести» →
- * первый котёнок → вырастить его (иначе не видно ни пола, ни облика) → освободить
+ * первый котёнок (вязка идёт секунды) → вырастить его (иначе не видно ни пола, ни облика) → освободить
  * слот, отправив в Питомник → отвести родителя в Приют → пристройство «в добрые
  * руки» → доска заказов (📋 в Питомнике) → кот на пьедестале выставки.
  *
@@ -14,13 +14,16 @@
  * пристройство: открытие панели состояние не меняет, а пристроенный кот из него
  * исчезает. Такие шаги отмечены флагами в `state.tutorial` (previewSeen /
  * ordersSeen / adoptDone) — их ставят `markTutorialSeen` и `adoptCat`.
+ * Пристройство засчитывается уже по ОТКРЫТИЮ диалога «в добрые руки» (кота
+ * донесли до станции 🤝): механику игрок увидел, а расставаться с котом ради
+ * подсказки его никто не заставляет — «Отмена» шаг не отматывает назад.
  */
 
 import type { Cat, GameState } from './types.js';
 import { isInSlot, isChampion, isInBasket, isAdult } from './economy.js';
 import {
   TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
-  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
+  FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
 } from './config.js';
 
 /**
@@ -30,17 +33,17 @@ import {
  * - `menu`     — в слоте один кот: второго отправляем кнопкой из меню кота;
  * - `preview`  — пара собрана, но 🔮 прогноз пары ещё не смотрели;
  * - `breed`    — пара готова: жмём «Свести»;
- * - `skip`     — вязка идёт, в запасе есть подарочные ускорения: ускоряем бесплатно;
- * - `wait`     — вязка идёт, запас ускорений пуст: просто ждём котёнка;
+ * - `wait`     — вязка идёт: ждём котёнка (секунды, ускорять нечем);
  * - `grow`     — малыш в окошке вязки ещё котёнок: тап по нему → «Вырастить сейчас» (подарок);
  * - `kitten`   — в окошке вязки сидит выросший кот: слот занят, отправляем его в Питомник;
  * - `toShelter`— слот освобождён: уводим родителя (отца помёта) в Приют;
- * - `adopt`    — в Приюте есть кот: отдаём «в добрые руки» (станция 🤝);
+ * - `adopt`    — в Приюте есть кот: доносим его до станции 🤝 «в добрые руки»
+ *                (шаг закрывается открытием диалога, соглашаться необязательно);
  * - `orders`   — открываем доску 📋 Заказы (кнопка слева в Питомнике);
  * - `champion` — ставим взрослого кота на пьедестал выставки в Питомнике.
  */
 export type TutorStep =
-  | 'analyze' | 'drag' | 'menu' | 'preview' | 'breed' | 'skip' | 'wait'
+  | 'analyze' | 'drag' | 'menu' | 'preview' | 'breed' | 'wait'
   | 'grow' | 'kitten' | 'toShelter' | 'adopt' | 'orders' | 'champion';
 
 /**
@@ -65,7 +68,7 @@ export function tutorialStep(state: GameState, now = Date.now()): TutorStep | nu
 
   const slot = state.slots[0];
   if (!slot) return null;
-  if (slot.readyAt > 0) return state.freeSkipLeft > 0 ? 'skip' : 'wait';
+  if (slot.readyAt > 0) return 'wait';
 
   const inSlot = (slot.motherId ? 1 : 0) + (slot.fatherId ? 1 : 0);
   if (inSlot === 0) return 'drag';
@@ -168,9 +171,9 @@ export function tutorialActive(state: GameState, now = Date.now()): boolean {
  * заказов ничего в игре не меняет, вычислить их из состояния нельзя. Вне
  * обучения — пустышка, лишний раз сейв не пачкаем.
  */
-export function markTutorialSeen(state: GameState, what: 'preview' | 'orders'): boolean {
+export function markTutorialSeen(state: GameState, what: 'preview' | 'orders' | 'adopt'): boolean {
   if (state.tutorial?.done !== false) return false;
-  const key = what === 'preview' ? 'previewSeen' : 'ordersSeen';
+  const key = what === 'preview' ? 'previewSeen' : what === 'orders' ? 'ordersSeen' : 'adoptDone';
   if (state.tutorial[key]) return false;
   state.tutorial[key] = true;
   return true;
@@ -184,7 +187,7 @@ export function finishTutorial(state: GameState): void {
 /**
  * Подарок за ПРОЙДЕННОЕ обучение (TUTORIAL_REWARD_COINS 💰 + TUTORIAL_REWARD_CRYSTALS 💎):
  * стартовый капитал новичка перенесён сюда — на старте у игрока 💎 нет вовсе, а внутри
- * обучения они и не нужны (анализ и ускорение первой вязки подарочные). Выдаётся один
+ * обучения они и не нужны (анализ подарочный, вязка идёт секунды, малыш растёт бесплатно). Выдаётся один
  * раз (флаг `rewardTaken`) и только за реальное прохождение всех шагов — крестик
  * «пропустить» подсказки просто выключает, подарка не даёт. Возвращает true, если
  * начислили (UI показывает тост).
@@ -209,6 +212,5 @@ export function restartTutorial(state: GameState): void {
     rewardTaken: false,
   };
   state.freeAnalyzeLeft = FREE_ANALYZE_COUNT;
-  state.freeSkipLeft = FREE_SKIP_COUNT;
   state.freeGrowthLeft = FREE_GROWTH_COUNT;
 }

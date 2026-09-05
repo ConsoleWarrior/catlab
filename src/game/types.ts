@@ -63,6 +63,10 @@ export interface BreedingSlot {
   fatherId: string | null;
   startedAt: number;
   readyAt: number;
+  // Порода будущего котёнка, бро́шенная в момент «Свести» (startBreeding): от её тира
+  // считается длительность вязки, а collectReady рождает именно её, не перебрасывая.
+  // undefined — вязки нет (или сейв/дев-слот, начатый до этого правила: бросок при рождении).
+  plannedBreed?: string;
   // id новорождённого, «оставленного с родителями»: сидит в центре слота, растёт
   // втрое медленнее и блокирует постановку новых котов, пока его не унесут в комнату.
   kittenId: string | null;
@@ -142,7 +146,6 @@ export interface GameState {
   lastHealAdAt: number;             // факт последнего 📺-лечения в клинике (кулдауна нет)
   lastAnalyzeAdAt: number;          // глобальный кулдаун 📺-варианта Генетического анализа
   freeAnalyzeLeft: number;          // осталось подарочных Генетических анализов (старт — FREE_ANALYZE_COUNT)
-  freeSkipLeft: number;             // осталось подарочных ускорений вязки (старт — FREE_SKIP_COUNT)
   freeGrowthLeft: number;           // осталось подарочных ускорений роста (старт — FREE_GROWTH_COUNT)
   lastFreezeAdAt: number;           // глобальный кулдаун 📺-варианта заморозки в крио-банке
   lastBoostAdAt: number;            // глобальный кулдаун 📺-зарядки усилителя вязки (один на все три)
@@ -164,9 +167,9 @@ export interface GameState {
  */
 export interface TutorialState {
   done: boolean;         // обучение пройдено или пропущено — подсказок больше нет
-  // Подарки новичка живут НЕ здесь, а в state.freeAnalyzeLeft / freeSkipLeft / freeGrowthLeft:
-  // их запасы переживают обучение (FREE_ANALYZE_COUNT / FREE_SKIP_COUNT / FREE_GROWTH_COUNT),
-  // а само обучение расходует лишь по одному — на первом анализе, вязке и котёнке.
+  // Подарки новичка живут НЕ здесь, а в state.freeAnalyzeLeft / freeGrowthLeft:
+  // их запасы переживают обучение (FREE_ANALYZE_COUNT / FREE_GROWTH_COUNT),
+  // а само обучение расходует лишь по одному — на первом анализе и первом котёнке.
   // Отметки шагов, которые НЕЛЬЗЯ вычислить из состояния: открытие панели ничего
   // в игре не меняет, а пристроенный/проданный кот из состояния исчезает вместе
   // со следом события. Остальные шаги по-прежнему чистые функции.

@@ -2,6 +2,11 @@
  * Звуковые эффекты. Библиотека — @pixi/sound (WebAudio): сама снимает блокировку
  * автоплея по первому тапу и ставит звук на паузу при сворачивании вкладки.
  *
+ * Весь звук игры — и эффекты, и музыка — идёт ТОЛЬКО через Web Audio, без единого
+ * <audio>: медиа-элемент браузер показывает в системном плеере (панель ОС, шторка
+ * уведомлений Android), а площадка это запрещает — пп. 1.6.1.6 и 1.6.2.5
+ * Требований. Если Web Audio в браузере нет, игра остаётся немой (см. audioCtx).
+ *
  * Записи с Pixabay сведены с очень разной громкостью, поэтому после декодирования
  * каждая нормализуется: считаем RMS «слышимой» части (без пауз и хвостов тишины)
  * и подбираем громкость так, чтобы все звучали примерно одинаково.
@@ -90,9 +95,24 @@ function normalize(s: Sound, base: number): void {
   s.volume = base * gain;
 }
 
+/**
+ * AudioContext, общий с эффектами: он же снимает блокировку автоплея по первому
+ * тапу и засыпает, когда игрок уходит со вкладки. Возвращает null, если браузер
+ * Web Audio не поддерживает и @pixi/sound откатился на <audio>: в этом случае
+ * звука не будет вовсе — системный плеер площадка запрещает (см. шапку файла).
+ */
+let ctxCache: AudioContext | null | undefined; // undefined — ещё не спрашивали
+function audioCtx(): AudioContext | null {
+  if (ctxCache === undefined) {
+    // у HTML-фолбэка геттер отдаёт null и пишет предупреждение — спрашиваем один раз
+    ctxCache = sound.context?.audioContext ?? null;
+  }
+  return ctxCache;
+}
+
 // --- общая громкость ----------------------------------------------------------
 // Один множитель на все звуки: эффекты (@pixi/sound) идут через sound.volumeAll,
-// музыка (HTMLAudioElement, мимо WebAudio) домножается на него в musicTick и здесь.
+// музыка идёт своим узлом громкости и домножается на него в applyMusicGain.
 // Хранится в localStorage — это настройка устройства, а не игровой прогресс, в
 // облачный сейв она не попадает.
 const VOL_KEY = 'catlab:volume';
@@ -116,8 +136,8 @@ export function getMasterVolume(): number { return masterVol; }
 /** Установить общую громкость (0..1): применяется к эффектам и музыке сразу. */
 export function setMasterVolume(v: number): void {
   masterVol = Math.min(1, Math.max(0, v));
-  sound.volumeAll = masterVol;                                    // мяуканье + мурлыканье (WebAudio)
-  if (musicEl) musicEl.volume = MUSIC_VOL * musicVol * masterVol; // музыка (HTMLAudio)
+  sound.volumeAll = masterVol; // мяуканье + мурлыканье
+  applyMusicGain();            // и фоновая музыка
   try { localStorage.setItem(VOL_KEY, String(masterVol)); } catch { /* квота/приватный режим */ }
 }
 
@@ -131,7 +151,7 @@ export function sfxPause(on: boolean): void {
   audioPaused = on;
   if (on) {
     sound.pauseAll();
-    musicEl?.pause();
+    musicStopNode(); // позиция запомнена — после рекламы трек продолжится с неё
   } else {
     sound.resumeAll();
     if (musicOn) tryPlayMusic();
@@ -141,6 +161,7 @@ export function sfxPause(on: boolean): void {
 /** Зарегистрировать и предзагрузить все звуки; вызвать один раз при старте игры. */
 export function initSfx(): void {
   if (meows.length) return; // повторный вызов (resize пересоздаёт комнаты, не игру)
+  if (!audioCtx()) return;  // нет Web Audio — играем молча, <audio> заводить нельзя
   sound.volumeAll = masterVol; // применить сохранённую громкость к эффектам
   const reg = (urls: Record<string, string>, prefix: string, into: string[], vol: number): void => {
     Object.entries(urls).forEach(([, url], i) => {
@@ -244,17 +265,30 @@ export function sfxPurrSync(ids: readonly string[]): void {
 }
 
 // --- фоновая музыка -----------------------------------------------------------
-// Тихий сай-фай эмбиент; треки играют по кругу по очереди. Через HTMLAudioElement
-// (стриминг), а не WebAudio: длинные треки не декодируются в память целиком —
-// важно для мобильных. Пауза не сбрасывает позицию: переключение между
-// «музыкальными» комнатами продолжает трек с того же места.
+// Тихий сай-фай эмбиент; треки играют по кругу по очереди.
+//
+// Только Web Audio. Раньше трек играл через HTMLAudioElement (стриминг экономил
+// память), но браузер сам заводит для любого <audio> длиннее ~5 секунд системный
+// медиа-плеер: панель проигрывателя в ОС на десктопе и карточка в шторке
+// уведомлений на Android. Площадка это запрещает (пп. 1.6.1.6 и 1.6.2.5
+// Требований), поэтому трек декодируется и играет через AudioBufferSourceNode
+// того же контекста, что и остальные звуки, — никакого медиа-элемента, а значит
+// и системного плеера, в игре нет вовсе.
+//
+// Память: в ней держится ровно один декодированный трек (PCM тяжелее mp3 раз в
+// двадцать), следующий декодируется на переходе — mp3 к тому моменту уже лежит в
+// кэше браузера, так что переключение почти бесплатно.
+//
+// Пауза не сбрасывает позицию: переключение между «музыкальными» комнатами
+// продолжает трек с того же места. Источник остановить и продолжить нельзя, но
+// позицию мы считаем сами (musicOffset + прошедшее время контекста) и запускаем
+// новый источник с неё.
 
 const MUSIC_VOL = 0.22;     // негромкий фон — не спорит с мяуканьем и мурчанием
 const MUSIC_FADE_IN = 1.8;  // с — мягкое появление при входе в комнату
 const MUSIC_FADE_OUT = 0.8; // с — уход при выходе (пауза после затухания)
 
 const musicList = Object.keys(musicUrls).sort().map((k) => musicUrls[k]!);
-let musicEl: HTMLAudioElement | null = null;
 let musicIdx = 0;
 let musicOn = false;
 let musicVol = 0; // огибающая фейда 0..1
@@ -267,24 +301,63 @@ let musicUnlockHooked = false;
 // вкладку во время рекламного ролика запускал бы трек поверх рекламы (п. 4.7).
 let audioPaused = false;
 
-/**
- * Системный медиа-плеер (шторка Android, кнопки на гарнитуре).
- *
- * Chrome заводит его сам для любого <audio> длиннее ~5 секунд — фоновому треку
- * этого хватает. Опасен там не сам значок, а кнопка «play»: по умолчанию она
- * запускает элемент напрямую, в обход игры, — и музыка заиграет поверх свёрнутой
- * вкладки или поверх рекламного ролика. Это нарушает п. 1.3 требований площадки
- * («при сворачивании страницы звук останавливается») и п. 4.7 (звук молчит на
- * время рекламы). Поэтому оба действия забираем себе: играть решает только игра —
- * когда снята последняя причина паузы (см. sfxPause).
- */
-function bindMediaSession(): void {
-  const ms = navigator.mediaSession;
-  if (!ms?.setActionHandler) return;
+let musicGain: GainNode | null = null;              // громкость музыки, отдельно от эффектов
+let musicNode: AudioBufferSourceNode | null = null; // играет прямо сейчас
+let musicBuf: AudioBuffer | null = null;            // декодированный текущий трек
+let musicBufIdx = -1;                               // какой трек лежит в musicBuf
+let musicOffset = 0;                                // позиция в треке, с (с неё продолжим)
+let musicStartedAt = 0;                             // ctx.currentTime старта musicNode
+let musicLoading = false;
+
+/** Остановить источник, запомнив позицию: продолжим ровно с этого места. */
+function musicStopNode(): void {
+  const node = musicNode;
+  const ctx = audioCtx();
+  if (!node || !ctx) return;
+  musicOffset += ctx.currentTime - musicStartedAt;
+  musicNode = null;
+  node.onended = null; // это наша остановка, а не конец трека — не листаем дальше
+  try { node.stop(); } catch { /* уже остановлен браузером */ }
+  node.disconnect();
+}
+
+/** Запустить текущий буфер с сохранённой позиции. */
+function musicStartNode(ctx: AudioContext, gain: GainNode): void {
+  if (!musicBuf || musicNode) return;
+  if (musicOffset >= musicBuf.duration) musicOffset = 0; // пауза пережила конец трека
+  const node = ctx.createBufferSource();
+  node.buffer = musicBuf;
+  node.connect(gain);
+  node.onended = (): void => { // трек доиграл — следующий по кругу
+    if (musicNode !== node) return;
+    musicNode = null;
+    musicOffset = 0;
+    musicIdx = (musicIdx + 1) % musicList.length;
+    if (musicOn) tryPlayMusic();
+  };
+  musicStartedAt = ctx.currentTime;
+  node.start(0, musicOffset);
+  musicNode = node;
+}
+
+/** Скачать и декодировать трек idx (в памяти остаётся только он). */
+async function musicLoad(ctx: AudioContext, idx: number): Promise<boolean> {
+  if (musicBufIdx === idx && musicBuf) return true;
+  const url = musicList[idx];
+  if (!url || musicLoading) return false;
+  musicLoading = true;
   try {
-    ms.setActionHandler('play', () => { if (!audioPaused && musicOn) tryPlayMusic(); });
-    ms.setActionHandler('pause', () => musicEl?.pause());
-  } catch { /* старый браузер без MediaSession — поведение по умолчанию */ }
+    const raw = await (await fetch(url)).arrayBuffer();
+    const buf = await ctx.decodeAudioData(raw);
+    musicBuf = buf;      // прежний буфер осиротел — его заберёт сборщик мусора
+    musicBufIdx = idx;
+    musicOffset = 0;
+    return true;
+  } catch {
+    return false; // сеть отвалилась или файл битый — просто играем без музыки
+  } finally {
+    musicLoading = false;
+  }
 }
 
 function musicTick(ts: number): void {
@@ -292,8 +365,8 @@ function musicTick(ts: number): void {
   musicPrev = ts;
   musicVol += dt / (musicOn ? MUSIC_FADE_IN : -MUSIC_FADE_OUT);
   musicVol = Math.min(1, Math.max(0, musicVol));
-  if (musicEl) musicEl.volume = MUSIC_VOL * musicVol * masterVol;
-  if (!musicOn && musicVol <= 0) { musicEl?.pause(); musicRaf = 0; return; }
+  applyMusicGain();
+  if (!musicOn && musicVol <= 0) { musicStopNode(); musicRaf = 0; return; }
   // фейд дошёл до 1 — можно не крутиться; выключение снова запустит цикл
   musicRaf = musicOn && musicVol >= 1 ? 0 : requestAnimationFrame(musicTick);
 }
@@ -305,47 +378,52 @@ function musicKick(): void {
   }
 }
 
+/** Применить громкость музыки (своя огибающая фейда × общий ползунок). */
+function applyMusicGain(): void {
+  if (musicGain) musicGain.gain.value = MUSIC_VOL * musicVol * masterVol;
+}
+
 function tryPlayMusic(): void {
-  if (audioPaused) return; // пока держится пауза, играть нечему — вернёт sfxPause(false)
-  musicEl?.play().catch(() => {
-    // автоплей заблокирован до первого жеста игрока — повторим по первому тапу
-    if (musicUnlockHooked) return;
-    musicUnlockHooked = true;
-    const unlock = (): void => {
-      window.removeEventListener('pointerdown', unlock);
-      musicUnlockHooked = false;
-      if (musicOn) tryPlayMusic();
-    };
-    window.addEventListener('pointerdown', unlock);
-  });
+  if (audioPaused || !musicOn) return; // пауза уйдёт — вернёт sfxPause(false)
+  const ctx = audioCtx();
+  if (!ctx) return;                    // без Web Audio музыки не будет (см. выше)
+
+  if (!musicGain) {
+    musicGain = ctx.createGain();
+    musicGain.gain.value = 0;
+    musicGain.connect(ctx.destination);
+    applyMusicGain();
+  }
+  // до первого жеста игрока контекст спит: будим его и на всякий случай
+  // повторяем попытку по первому тапу — обещание resume() может и не сбыться
+  if (ctx.state !== 'running') {
+    void ctx.resume().catch(() => { /* жеста ещё не было */ });
+    if (!musicUnlockHooked) {
+      musicUnlockHooked = true;
+      const unlock = (): void => {
+        window.removeEventListener('pointerdown', unlock);
+        musicUnlockHooked = false;
+        if (musicOn) tryPlayMusic();
+      };
+      window.addEventListener('pointerdown', unlock);
+    }
+  }
+
+  if (musicBufIdx !== musicIdx || !musicBuf) {
+    const want = musicIdx;
+    void musicLoad(ctx, want).then((ok) => {
+      // пока декодировали, комнату могли сменить или включить паузу
+      if (ok && musicOn && musicIdx === want) tryPlayMusic();
+    });
+    return;
+  }
+  musicStartNode(ctx, musicGain);
 }
 
 /** Включить/выключить фоновую музыку. Идемпотентно; вызывается при смене комнаты. */
 export function sfxMusic(on: boolean): void {
   if (!musicList.length || on === musicOn) return;
   musicOn = on;
-  if (on) {
-    if (!musicEl) {
-      const el = new Audio();
-      el.preload = 'auto';
-      el.volume = 0;
-      el.addEventListener('ended', () => { // следующий трек — по кругу
-        musicIdx = (musicIdx + 1) % musicList.length;
-        el.src = musicList[musicIdx]!;
-        if (musicOn) tryPlayMusic();
-      });
-      el.src = musicList[musicIdx]!;
-      musicEl = el;
-      bindMediaSession();
-      // Вкладку свернули — пауза (сами эффекты @pixi/sound делают это за себя).
-      // Возобновление отсюда НЕ делаем: вернуть звук вправе только sfxPause, когда
-      // ушла последняя причина паузы (см. Game.setPause). Иначе возврат на вкладку
-      // поверх открытого рекламного ролика включал бы музыку — нарушение п. 4.7.
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) musicEl?.pause();
-      });
-    }
-    tryPlayMusic();
-  }
+  if (on) tryPlayMusic();
   musicKick();
 }

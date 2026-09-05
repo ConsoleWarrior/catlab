@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { makeRng } from '../genetics/index.js';
 import {
-  createInitialState, assignBreeder, startBreeding, collectReady, incubationDuration,
-  freeSkipBreeding, freeAnalyzeCat, freeGrowKitten, adoptCat, moveCat, clearBreederSlot, setChampion,
+  createInitialState, assignBreeder, startBreeding, collectReady,
+  freeAnalyzeCat, freeGrowKitten, adoptCat, moveCat, clearBreederSlot, setChampion,
   tutorialStep, tutorialActive, finishTutorial, restartTutorial, markTutorialSeen, shelterTarget, growTarget,
   isAdult, effGrowthMs,
   grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
-  FREE_ANALYZE_COUNT, FREE_SKIP_COUNT, FREE_GROWTH_COUNT,
+  FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
   serialize, deserialize,
 } from './index.js';
 import type { GameState } from './index.js';
@@ -40,7 +40,6 @@ describe('обучение новичка (шаги)', () => {
   it('DEV-перезапуск возвращает обучение, подарки и отметки просмотров', () => {
     const s = createInitialState(makeRng(11), 0);
     finishTutorial(s);
-    s.freeSkipLeft = 0;
     s.freeAnalyzeLeft = 0;
     s.freeGrowthLeft = 0;
     s.tutorial.previewSeen = true;
@@ -48,7 +47,6 @@ describe('обучение новичка (шаги)', () => {
 
     restartTutorial(s);
     expect(tutorialStep(s)).toBe('analyze');
-    expect(s.freeSkipLeft).toBe(FREE_SKIP_COUNT);
     expect(s.freeAnalyzeLeft).toBe(FREE_ANALYZE_COUNT);
     expect(s.freeGrowthLeft).toBe(FREE_GROWTH_COUNT);
     expect(s.tutorial.previewSeen).toBe(false);
@@ -74,16 +72,12 @@ describe('обучение новичка (шаги)', () => {
     expect(tutorialStep(s)).toBe('menu');
   });
 
-  it('идёт вязка → «ускорь бесплатно», без подарков в запасе → «жди»', () => {
+  it('идёт вязка → «жди» (ускорять нечем: вязка длится секунды)', () => {
     const s = createInitialState(makeRng(4), 0);
     const { female, male } = pair(s);
     startBreeding(s, 0, female.id, male.id, 0);
-    expect(tutorialStep(s)).toBe('skip');
-    expect(freeSkipBreeding(s, 0, 1000).ok).toBe(true);
-    // запас ещё не пуст — подсказка по-прежнему предлагает ускорить бесплатно
-    s.slots[0]!.readyAt = 999_999;
-    expect(tutorialStep(s)).toBe('skip');
-    s.freeSkipLeft = 0;                        // подарки кончились — остаётся ждать
+    expect(tutorialStep(s)).toBe('wait');
+    s.slots[0]!.readyAt = 999_999;             // хоть долгая, хоть короткая — шаг тот же
     expect(tutorialStep(s)).toBe('wait');
   });
 
@@ -91,8 +85,8 @@ describe('обучение новичка (шаги)', () => {
     const rng = makeRng(5);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const now = incubationDuration(s);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const now = s.slots[0]!.readyAt;
     const kitten = collectReady(s, now, rng)[0]!.kitten!;
     expect(kitten.motherBreed).toBeTruthy();
 
@@ -129,8 +123,8 @@ describe('обучение новичка (шаги)', () => {
     const rng = makeRng(12);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const now = incubationDuration(s);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const now = s.slots[0]!.readyAt;
     const kitten = collectReady(s, now, rng)[0]!.kitten!;
     s.freeGrowthLeft = 0;
     expect(tutorialStep(s, now)).toBe('kitten'); // платить 📺/💎 обучение не заставляет
@@ -142,8 +136,8 @@ describe('обучение новичка (шаги)', () => {
     const rng = makeRng(12);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const now = incubationDuration(s);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const now = s.slots[0]!.readyAt;
     const kitten = collectReady(s, now, rng)[0]!.kitten!;
     expect(moveCat(s, kitten.id, 'shelter').ok).toBe(true); // карточка рождения → «в приют»
     expect(tutorialStep(s, now)).toBe('grow');
@@ -156,12 +150,29 @@ describe('обучение новичка (шаги)', () => {
     const rng = makeRng(13);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const kitten = collectReady(s, incubationDuration(s), rng)[0]!.kitten!;
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const kitten = collectReady(s, s.slots[0]!.readyAt, rng)[0]!.kitten!;
     moveCat(s, kitten.id, 'nursery');
     markTutorialSeen(s, 'orders');
     moveCat(s, kitten.id, 'shelter'); // кот снова в приюте, но шаг уже позади
     expect(tutorialStep(s)).toBe('champion');
+  });
+
+  it('донёс кота до станции 🤝 — шаг засчитан, даже если отдавать передумал', () => {
+    const rng = makeRng(14);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const kitten = collectReady(s, s.slots[0]!.readyAt, rng)[0]!.kitten!;
+    moveCat(s, kitten.id, 'shelter');
+    freeGrowKitten(s, kitten.id, s.slots[0]!.readyAt);
+    expect(tutorialStep(s)).toBe('adopt');
+
+    // открытие диалога «в добрые руки» = шаг пройден; кот остаётся у игрока
+    expect(markTutorialSeen(s, 'adopt')).toBe(true);
+    expect(s.cats.some((c) => c.id === kitten.id)).toBe(true);
+    expect(tutorialStep(s)).toBe('orders');
+    expect(markTutorialSeen(s, 'adopt')).toBe(false); // повторно сейв не пачкаем
   });
 
   it('игрок, обогнавший подсказку, проскакивает шаги (шаг = функция состояния)', () => {
@@ -170,7 +181,7 @@ describe('обучение новичка (шаги)', () => {
     const { female, male } = pair(s);
     // собрал пару и свёл, ни разу не дождавшись подсказки (и не изучив кота)
     startBreeding(s, 0, female.id, male.id, 0);
-    expect(tutorialStep(s)).toBe('skip'); // не 'analyze', не 'drag' и не 'menu'
+    expect(tutorialStep(s)).toBe('wait'); // не 'analyze', не 'drag' и не 'menu'
   });
 });
 
@@ -180,8 +191,8 @@ describe('подарочные ускорения роста', () => {
     const rng = makeRng(seed);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const now = incubationDuration(s);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const now = s.slots[0]!.readyAt;
     const kitten = collectReady(s, now, rng)[0]!.kitten!;
     return { s, kitten, now };
   }
@@ -211,45 +222,6 @@ describe('подарочные ускорения роста', () => {
     const grown = now + effGrowthMs(kitten);
     expect(freeGrowKitten(s, kitten.id, grown).ok).toBe(true); // уже вырос сам — no-op
     expect(s.freeGrowthLeft).toBe(FREE_GROWTH_COUNT);
-  });
-});
-
-describe('подарочные ускорения вязки', () => {
-  it('новая игра начинается с запаса FREE_SKIP_COUNT', () => {
-    const s = createInitialState(makeRng(6), 0);
-    expect(s.freeSkipLeft).toBe(FREE_SKIP_COUNT);
-  });
-
-  it('завершает вязку немедленно и списывает один подарок из запаса', () => {
-    const rng = makeRng(7);
-    const s = createInitialState(rng, 0);
-    const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    expect(freeSkipBreeding(s, 0, 1000)).toMatchObject({ ok: true, left: FREE_SKIP_COUNT - 1 });
-    expect(s.slots[0]!.readyAt).toBe(1000);           // готово прямо сейчас
-    expect(collectReady(s, 1000, rng)).toHaveLength(1);
-    // следующая вязка — запас ещё есть, подарок снова работает
-    s.slots[0]!.kittenId = null; // малыша из слота унесли, слот снова под пару
-    startBreeding(s, 0, female.id, male.id, 2000);
-    expect(freeSkipBreeding(s, 0, 2000)).toMatchObject({ ok: true, left: FREE_SKIP_COUNT - 2 });
-    expect(s.slots[0]!.readyAt).toBe(2000);
-  });
-
-  it('кончившийся запас больше не ускоряет — остаются 📺/💎', () => {
-    const s = createInitialState(makeRng(7), 0);
-    const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    s.freeSkipLeft = 0;
-    const readyAt = s.slots[0]!.readyAt;
-    expect(freeSkipBreeding(s, 0, 1000).ok).toBe(false);
-    expect(s.slots[0]!.readyAt).toBe(readyAt);        // таймер не тронут
-    expect(s.freeSkipLeft).toBe(0);                   // в минус не уходит
-  });
-
-  it('на пустом слоте не срабатывает и подарок не сгорает', () => {
-    const s = createInitialState(makeRng(8), 0);
-    expect(freeSkipBreeding(s, 0, 0).ok).toBe(false);
-    expect(s.freeSkipLeft).toBe(FREE_SKIP_COUNT);
   });
 });
 
@@ -312,7 +284,6 @@ describe('обучение в сейве', () => {
   it('прогресс переживает сохранение/загрузку', () => {
     const s = createInitialState(makeRng(9), 0);
     finishTutorial(s);
-    s.freeSkipLeft = 3;
     s.freeAnalyzeLeft = 2;
     s.freeGrowthLeft = 1;
     s.tutorial.previewSeen = true;
@@ -327,7 +298,6 @@ describe('обучение в сейве', () => {
       rewardTaken: true,
     });
     expect(back.freeAnalyzeLeft).toBe(2);        // запасы подарков переживают сейв
-    expect(back.freeSkipLeft).toBe(3);
     expect(back.freeGrowthLeft).toBe(1);
     expect(tutorialStep(back)).toBeNull();
   });
@@ -337,12 +307,10 @@ describe('обучение в сейве', () => {
     const raw = JSON.parse(serialize(s)) as Partial<GameState>;
     delete raw.tutorial;
     delete raw.freeAnalyzeLeft;
-    delete raw.freeSkipLeft;
     delete raw.freeGrowthLeft;
     const back = deserialize(JSON.stringify(raw));
     expect(back.tutorial.done).toBe(true);
     expect(back.freeAnalyzeLeft).toBe(0);          // подарки задним числом не выдаём
-    expect(back.freeSkipLeft).toBe(0);
     expect(back.freeGrowthLeft).toBe(0);
     expect(tutorialStep(back)).toBeNull();
   });
@@ -353,11 +321,9 @@ describe('обучение в сейве', () => {
     // сейв старой версии: полей второй половины обучения ещё не существовало
     raw.tutorial = { done: false, freeSkipUsed: false };
     delete raw.freeAnalyzeLeft;
-    delete raw.freeSkipLeft;
     delete raw.freeGrowthLeft;
     const back = deserialize(JSON.stringify(raw));
     expect(back.freeAnalyzeLeft).toBe(FREE_ANALYZE_COUNT);
-    expect(back.freeSkipLeft).toBe(FREE_SKIP_COUNT);
     expect(back.freeGrowthLeft).toBe(FREE_GROWTH_COUNT);
     expect(back.tutorial.ordersSeen).toBe(false);
     expect(tutorialStep(back)).toBe('analyze');
@@ -371,8 +337,8 @@ describe('обучение в сейве', () => {
     delete raw.freeSkipLeft;
     const back = deserialize(JSON.stringify(raw));
     expect(back.freeAnalyzeLeft).toBe(FREE_ANALYZE_COUNT - 1);
-    expect(back.freeSkipLeft).toBe(FREE_SKIP_COUNT - 1);
-    // legacy-флаги в состоянии не остаются — их место заняли счётчики
+    // ускорений вязки больше нет — счётчик вычищается из сейва вместе с легаси-флагами
+    expect((back as unknown as LegacySave).freeSkipLeft).toBeUndefined();
     const t = back.tutorial as unknown as Record<string, unknown>;
     expect(t.freeAnalyzeUsed).toBeUndefined();
     expect(t.freeSkipUsed).toBeUndefined();

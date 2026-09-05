@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { makeRng } from '../genetics/index.js';
+import { makeRng, tierOfBreed } from '../genetics/index.js';
 import {
   createInitialState, startBreeding, assignBreeder, clearBreederSlot, isInSlot,
   collectReady, adoptCat, moveCat, keepKittenWithParents,
-  buyUpgrade, unlockGene, collectIncome, offlineAdBonus, claimOfflineAdBonus, incubationDuration,
+  buyUpgrade, unlockGene, collectIncome, offlineAdBonus, claimOfflineAdBonus, breedingDuration,
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, isRescuePair, buyBoost, adChargeBoost, toggleBoost, activeBoostId, unlockResearch,
   isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
   revealPedigree, pedigreeHasFog, serialize, deserialize, BOOST_AD_COOLDOWN_MS,
@@ -23,10 +23,13 @@ describe('инкубатор', () => {
     const rng = makeRng(5);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    const r = startBreeding(s, 0, female.id, male.id, 0);
+    const r = startBreeding(s, 0, female.id, male.id, 0, rng);
     expect(r.ok).toBe(true);
-    const dur = incubationDuration(s);
-    expect(s.slots[0]!.readyAt).toBe(dur);
+    // порода котёнка бро́шена уже сейчас, и длительность вязки — по её тиру
+    const planned = s.slots[0]!.plannedBreed!;
+    expect(planned).toBeTruthy();
+    const dur = s.slots[0]!.readyAt;
+    expect(dur).toBe(breedingDuration(tierOfBreed(planned)));
     // рано — никого
     expect(collectReady(s, dur - 1, rng)).toHaveLength(0);
     // вовремя — котёнок
@@ -44,8 +47,8 @@ describe('инкубатор', () => {
     // стартовые коты уже со скрытой родословной — вскрываем обоих производителей
     revealPedigree(female);
     revealPedigree(male);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const kitten = collectReady(s, incubationDuration(s), rng)[0]!.kitten!;
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const kitten = collectReady(s, s.slots[0]!.readyAt, rng)[0]!.kitten!;
     expect(pedigreeHasFog(kitten)).toBe(false); // родословная досталась целиком вскрытой
     expect(kitten.analyzed).toBe(true);         // → рождён уже изученным
   });
@@ -54,8 +57,8 @@ describe('инкубатор', () => {
     const rng = makeRng(78);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const kitten = collectReady(s, incubationDuration(s), rng)[0]!.kitten!;
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const kitten = collectReady(s, s.slots[0]!.readyAt, rng)[0]!.kitten!;
     expect(pedigreeHasFog(kitten)).toBe(true);  // деды в тумане
     expect(kitten.analyzed).toBe(false);        // → предложим Генетический анализ
   });
@@ -155,13 +158,12 @@ describe('лимит вязок (статус «Старый»)', () => {
     const rng = makeRng(71);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    const dur = incubationDuration(s);
     let now = 0;
     for (let k = 0; k < MAX_HEARTS; k++) {
-      expect(startBreeding(s, 0, female.id, male.id, now).ok).toBe(true);
-      collectReady(s, now + dur, rng);
+      expect(startBreeding(s, 0, female.id, male.id, now, rng).ok).toBe(true);
+      now = s.slots[0]!.readyAt; // вязка длится по тиру будущего котёнка
+      collectReady(s, now, rng);
       s.slots[0]!.kittenId = null; // «пристроили» малыша → слот снова свободен под вязку
-      now += dur;
     }
     expect(female.breedCount).toBe(MAX_HEARTS);
     expect(breedsLeft(female)).toBe(0);
@@ -432,8 +434,8 @@ describe('генная инженерия', () => {
     const { female, male } = pair(s); // дворовые (common)
     s.dna = 200;
     buyBoost(s, 'tierUp');
-    startBreeding(s, 0, female.id, male.id, 0);
-    const ev = collectReady(s, incubationDuration(s), rng);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const ev = collectReady(s, s.slots[0]!.readyAt, rng);
     expect(ev[0]!.kitten!.rarityTier).not.toBe('common'); // поднялся минимум на 1 тир
     expect(s.boosts.tierUp).toBe(0); // заряд списан
     expect(s.activeBoost).toBe(null); // заряды кончились → активность снята автоматически
@@ -448,8 +450,8 @@ describe('генная инженерия', () => {
     male.breed = 'bengal'; male.rarityTier = 'legendary';
     s.dna = 200;
     buyBoost(s, 'tierUp');
-    startBreeding(s, 0, female.id, male.id, 0);
-    const ev = collectReady(s, incubationDuration(s), rng);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const ev = collectReady(s, s.slots[0]!.readyAt, rng);
     expect(ev[0]!.kitten).toBeDefined();
     expect(s.boosts.tierUp).toBe(1); // не сработал → заряд сохранён
   });
@@ -490,9 +492,8 @@ describe('малыш с родителями (рождение)', () => {
     const rng = makeRng(seed);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
-    const dur = incubationDuration(s);
-    startBreeding(s, 0, female.id, male.id, 0);
-    const ev = collectReady(s, dur, rng);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const ev = collectReady(s, s.slots[0]!.readyAt, rng);
     return { s, female, male, kitten: ev[0]!.kitten! };
   }
 
@@ -567,8 +568,8 @@ describe('малыш с родителями (рождение)', () => {
     s.coins = 1000;
     buyUpgrade(s, 'slots'); // нужен 2-й слот вязки
     const { female, male } = pair(s);
-    const dur = incubationDuration(s);
-    startBreeding(s, 0, female.id, male.id, 0);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const dur = s.slots[0]!.readyAt;
     const kitten = collectReady(s, dur, rng)[0]!.kitten!;
     expect(s.slots[0]!.kittenId).toBe(kitten.id);
 

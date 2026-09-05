@@ -17,16 +17,13 @@ import { Container, Graphics, Sprite, Text } from 'pixi.js';
 import type { FederatedPointerEvent } from 'pixi.js';
 import type { Cat, BoostDef } from '../../game/index.js';
 import {
-  startBreeding, assignBreeder, incubationDuration, BOOSTS, boostCharges, activeBoostId, growthScale,
+  startBreeding, assignBreeder, BOOSTS, boostCharges, activeBoostId, growthScale,
   moveCat, roomCount, nurseryCapacity, shelterCapacity,
   buyUpgrade, upgradeCost, upgradeMaxed,
   maxSlotsForLevel, nextSlotUnlockLevel, isUnlocked,
   kinshipLevel, kinshipName, buildBreedingContext,
-  speedUpBreeding, adSkipBreeding, speedUpCost, AD_SKIP_MS, BREED_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
-import { freeSkipBreeding } from '../../game/index.js';
 import { boostCanFire } from '../../genetics/index.js';
-import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel } from '../theme.js';
@@ -93,8 +90,7 @@ interface LiveSlot {
   index: number;
   card: Container;            // карточка слота — для попадания при перетаскивании
   cardW: number; cardH: number; // её габарит (окно + полоса кнопок) для хит-теста
-  total: number;
-  bar?: Graphics; barX: number; barY: number; barW: number; time?: Text;
+  status?: Text;              // подпись «Вязка идёт…» (полосы прогресса нет — выдала бы тир)
   busy: boolean;
   startedAt: number;
   partition: Graphics; partRaise: number;
@@ -111,11 +107,6 @@ interface LiveSlot {
   pendingFx: boolean; sparks: Spark[]; ring?: Graphics; ringLife: number; ringTtl: number;
   kittenPop: number;
   phase: number;
-}
-
-function mmss(ms: number): string {
-  const s = Math.max(0, Math.ceil(ms / 1000));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /** Ореол редкости повторяет позу своего кота (положение/сквош/наклон). */
@@ -554,10 +545,6 @@ export function createIncubator(ctx: UiContext): Room {
     card.addChild(fx);
 
     // --- контролы под окном (полоса ровно по ширине видимого стекла) ---
-    const barW = Math.round(w * 0.78);
-    const barX = Math.round((w - barW) / 2);
-    const barY = stripY + 18;
-
     // Фон полосы управления (только для ИИ-бокса — на panel он уже есть)
     if (hasBoxTex) {
       const GOLDEN_ROSE = 0xedc8b0; // золотисто-розовый, в тон краёв слота
@@ -576,69 +563,17 @@ export function createIncubator(ctx: UiContext): Room {
       card.addChild(ctrlBg);
     }
 
-    let bar: Graphics | undefined, time: Text | undefined;
+    let status: Text | undefined;
 
     if (busy) {
-      const barBg = new Graphics();
-      barBg.roundRect(barX, barY, barW, 12, 6).fill({ color: 0x000000, alpha: 0.08 });
-      card.addChild(barBg);
-      bar = new Graphics();
-      card.addChild(bar);
-      time = label('', 13, COLORS.ink, '700');
-      time.position.set(w / 2, barY + 22);
-      card.addChild(time);
-      // Кнопки «Забрать» нет: по окончании таймера малыш сам появится в центре слота
-      // (см. game.update → collectReady) с эффектом-салютом. Зато есть ускорение:
-      // реклама (−N мин, бесплатно, повторяемо) и кристаллы (мгновенно, цена ∝ остатку).
-      const remain0 = Math.max(0, slot.readyAt - now);
-      const cost = speedUpCost(remain0, BREED_SPEEDUP_CRYSTAL_PER_MIN);
-      const skipMin = Math.round(AD_SKIP_MS / 60_000);
-      const bw2 = Math.round(w * 0.45); // хватает на «📺 Реклама −5 мин» (см. п. 4.5.1)
-      const yy = barY + 50;
-
-      // Подарок новой игры: первые FREE_SKIP_COUNT вязок завершаются бесплатно, чтобы
-      // новичок не смотрел пять минут на таймер, не поняв ещё сути игры. Кнопка живёт,
-      // пока в запасе есть подарки (freeSkipBreeding), дальше остаются 📺 и 💎.
-      // Остаток — прямо на кнопке: игрок видит, сколько ускорений ещё бесплатны.
-      const freeLeft = ctx.state.freeSkipLeft;
-      if (freeLeft > 0) {
-        const freeBtn = new Button({
-          text: t(`⚡ Ускорить бесплатно · 🎁 ${freeLeft}`, `⚡ Speed up for free · 🎁 ${freeLeft}`),
-          w: Math.round(w * 0.86), h: 30,
-          color: COLORS.warn, fontSize: 12,
-        });
-        freeBtn.position.set(w / 2, yy);
-        freeBtn.onTap = () => {
-          const r = freeSkipBreeding(ctx.state, i, ctx.now());
-          if (!r.ok) { ctx.toast(r.reason); return; }
-          ctx.commit();
-          ctx.toast(r.left > 0
-            ? t(`Подарок лаборатории: готово! 🥚 бесплатных осталось ${r.left}`, `A gift from the lab: done! 🥚 ${r.left} free left`)
-            : t('Подарок лаборатории: готово! 🥚 подарки кончились — дальше 📺 или 💎', 'A gift from the lab: done! 🥚 no free ones left — next: 📺 or 💎'));
-        };
-        card.addChild(freeBtn);
-        // 📺/💎 пока не показываем: у новичка ровно одно очевидное действие
-        anchors.set('freeSkip', freeBtn);
-      } else {
-        // «Реклама» в тексте — требование п. 4.5.1: кнопка обязана говорить и что
-        // будет показан ролик, и что за него дадут (одного 📺 для этого мало).
-        const adBtn = new Button({ text: t(`📺 Реклама −${skipMin} мин`, `📺 Ad −${skipMin} min`), w: bw2, h: 30, color: COLORS.secondary, fontSize: 11 });
-        adBtn.position.set(w / 2 - bw2 / 2 - 4, yy);
-        adBtn.onTap = () => {
-          void showRewarded().then((watched) => {
-            if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
-            const r = adSkipBreeding(ctx.state, i, ctx.now());
-            if (r.ok) { ctx.commit(); ctx.toast(t(`Реклама: −${skipMin} мин ⏩`, `Ad: −${skipMin} min ⏩`)); } else ctx.toast(r.reason);
-          });
-        };
-        const crBtn = new Button({ text: t(`💎 ${cost} сразу`, `💎 ${cost} now`), w: bw2, h: 30, color: COLORS.primary, fontSize: 12 });
-        crBtn.position.set(w / 2 + bw2 / 2 + 4, yy);
-        crBtn.onTap = () => {
-          const r = speedUpBreeding(ctx.state, i, ctx.now());
-          if (r.ok) { ctx.commit(); ctx.toast(t('Готово! 🥚', 'Done! 🥚')); } else ctx.toast(r.reason);
-        };
-        card.addChild(adBtn, crBtn);
-      }
+      // Во время вязки в полосе только подпись — по центру, в две строки.
+      // Ни кнопок ускорения, ни «Забрать», ни таймера, ни полосы прогресса: длительность
+      // считается по тиру будущего котёнка (config.BREED_MS_BY_TIER), и любой индикатор
+      // хода выдал бы игроку тир задолго до рождения. По окончании малыш появится в
+      // центре слота сам (game.update → collectReady) — с эффектом-салютом.
+      status = label('', 13, COLORS.ink, '700');
+      status.position.set(w / 2, stripY + Math.round(CTRL_H / 2) - 4);
+      card.addChild(status);
     } else if (hasKitten) {
       // малыш с роднёй: подсказка + быстрые кнопки пристройства (слот блокирован под пару).
       // Перетаскивать малыша тоже можно — берётся за шкирку и несётся в любую комнату.
@@ -695,7 +630,7 @@ export function createIncubator(ctx: UiContext): Room {
         btn.position.set(w / 2 - (pvW + 8) / 2, stripY + 64);
         if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
-          const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now());
+          const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now(), ctx.rng);
           if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast(t('Вязка началась 🐾', 'Breeding has started 🐾')); }
           else ctx.toast(r.reason);
         };
@@ -717,8 +652,7 @@ export function createIncubator(ctx: UiContext): Room {
     live.push({
       index: i,
       card, cardW: w, cardH: h,
-      total: busy ? Math.max(1, slot.readyAt - slot.startedAt) : incubationDuration(ctx.state),
-      bar, barX, barY, barW, time,
+      status,
       busy, startedAt: slot.startedAt,
       partition, partRaise,
       mom, dad,
@@ -1099,14 +1033,16 @@ export function createIncubator(ctx: UiContext): Room {
       ls.phase += dt;
       const slot = ctx.state.slots[ls.index];
 
-      // прогресс-бар + таймер
-      if (ls.bar && ls.time && slot && slot.readyAt > 0) {
+      // подпись вязки: ни цифр, ни прогресса (выдали бы тир) — только «дышащее»
+      // многоточие, чтобы слот не выглядел зависшим
+      if (ls.status && slot && slot.readyAt > 0) {
         const remain = slot.readyAt - now;
-        const prog = clamp01(1 - remain / ls.total);
-        ls.bar.clear();
-        ls.bar.roundRect(ls.barX, ls.barY, Math.max(2, ls.barW * prog), 12, 6)
-          .fill(remain <= 0 ? COLORS.good : COLORS.primary);
-        ls.time.text = remain <= 0 ? t('Готово! 🥚', 'Done! 🥚') : mmss(remain);
+        const dots = '.'.repeat(1 + (Math.floor(now / 400) % 3));
+        ls.status.text = remain <= 0
+          ? t('Готово! 🥚', 'Done! 🥚')
+          : t(`Пара ждёт потомства.
+Вязка идёт${dots}`, `The pair is expecting.
+Breeding${dots}`);
       }
 
       if (ls.busy && ls.mom && ls.dad) {
@@ -1264,7 +1200,7 @@ export function createIncubator(ctx: UiContext): Room {
   return {
     id: 'incubator', title: t('🧬 Инкубатор', '🧬 Incubator'), container: shell.container, refresh, tick, tryDropCat,
     // Обучение новичка: 'slot' — карточка первого слота, 'breed' — «Свести»,
-    // 'preview' — 🔮 прогноз пары, 'freeSkip' — подарочный ускоритель,
+    // 'preview' — 🔮 прогноз пары,
     // 'toNursery'/'toShelter' — кнопки «куда унести» у родившегося малыша,
     // `cat:<id>` — сам кот в окошке вязки (малыш или родитель), см. ui/tutorial.ts.
     anchor: (key) => {

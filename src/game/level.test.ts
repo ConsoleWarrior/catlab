@@ -6,7 +6,7 @@ import {
   isUnlocked, unlockLevelOf, maxSlotsForLevel, maxChampionsForLevel,
   nextSlotUnlockLevel, nextPedestalUnlockLevel,
   buyUpgrade, sendToLab, buyBoost, unlockResearch, adoptCat,
-  startBreeding, collectReady, incubationDuration, makeCatInstance, catMarketValue,
+  startBreeding, collectReady, makeCatInstance, catMarketValue,
 } from './index.js';
 import {
   LEVEL_REP_THRESHOLDS, MAX_LEVEL, TIER_MARKET_VALUE, REP_BIRTH_RATE, REP_NEW_BREED_MULT,
@@ -198,8 +198,8 @@ describe('опыт за важные действия', () => {
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
     const repBefore = s.reputation;
-    startBreeding(s, 0, female.id, male.id, 0);
-    const ev = collectReady(s, incubationDuration(s), rng)[0]!;
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const ev = collectReady(s, s.slots[0]!.readyAt, rng)[0]!;
     expect(ev.kitten).toBeDefined();
     // база опыта — та же catMarketValue, что у пристройства/лаборатории (тир × порода
     // × родословная × здоровье), а не голый TIER_MARKET_VALUE тира.

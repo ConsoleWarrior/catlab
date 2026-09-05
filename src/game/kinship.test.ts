@@ -3,7 +3,7 @@ import { makeRng, randomCat } from '../genetics/index.js';
 import {
   createInitialState, makeCatInstance, buildPedigree, attachHiddenPedigree,
   relatedness, kinshipLevel, rollKittenHearts, softenKinship, buildBreedingContext,
-  startBreeding, collectReady, incubationDuration,
+  startBreeding, collectReady,
 } from './index.js';
 import type { Cat } from './index.js';
 import { PEDIGREE_DEPTH, MAX_HEARTS } from './config.js';
@@ -147,8 +147,8 @@ describe('интеграция: вязка родственников через
     let total = 0;
     for (let i = 0; i < 60; i++) {
       sis.breedCount = 0; bro.breedCount = 0; // не даём состариться в тесте
-      expect(startBreeding(st, 0, sis.id, bro.id, i * 100_000).ok).toBe(true);
-      const events = collectReady(st, i * 100_000 + incubationDuration(st), rng2);
+      expect(startBreeding(st, 0, sis.id, bro.id, i * 100_000, rng2).ok).toBe(true);
+      const events = collectReady(st, st.slots[0]!.readyAt, rng2);
       st.slots[0]!.kittenId = null;
       for (const e of events) {
         if (!e.kitten) continue;

@@ -17,8 +17,31 @@ import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane, cornerStation, stationBadge, shelfPlane, buildShelf } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
-import { createLivingFloor } from '../livingFloor.js';
+import { createLivingFloor, TOY_Z, type ToyOpts } from '../livingFloor.js';
+import { decorPoint, decorTexture } from '../decorArt.js';
+import { createHangingToy, type HangingToy } from '../hangingToy.js';
+import { sfxMeow } from '../sound.js';
 import { t } from '../../i18n.js';
+
+// Кошачий комплекс — единственный декор Приюта, к которому что-то подвешено.
+const TOWER = 'tower3_seed1002';
+
+/**
+ * Подвесные игрушки комплекса. Помпон на витой верёвке и шарик на нитке
+ * вырезаны из спрайта комплекса в свои текстуры (scripts/cut_toy.py) и качаются
+ * как маятники (ui/hangingToy.ts).
+ *
+ * mount — пиксель ТЕКСТУРЫ КОМПЛЕКСА, где игрушка привязана (по нему decorPoint
+ * находит точку подвеса в комнате при любой пропорции экрана); pivot/ball —
+ * пиксели уже СВОЕЙ текстуры игрушки. Числа те же, что в scripts/cut_toy.py.
+ *
+ * Коты играют только с помпоном (`paws`): он висит ровно на высоте поднятой
+ * лапы, а шарик на короткой нитке — под самой площадкой, до него не достать.
+ */
+const SHELTER_TOYS = [
+  { sprite: 'toy_pom', mount: [467, 352], pivot: [25, 2], ball: [30, 300], ballR: 24, period: 1.15, paws: true },
+  { sprite: 'toy_bead', mount: [485, 340], pivot: [14, 2], ball: [20, 107], ballR: 18, period: 0.72, paws: false },
+] as const;
 
 // Правая колонка шапки приюта: пара массовых кнопок и «Купить котика» под ними.
 // Ширина колонки нужна и раскладке кнопок, и подсказке обучения (Room.topReserve).
@@ -161,9 +184,38 @@ export function createShelter(ctx: UiContext): Room {
   const shelf = shelfPlane(ctx.roomW, ctx.roomH, plane);
   const shelfCatLayer = new Container();
   shell.decor.addChildAt(buildShelf(shelf), 0);
-  const tower = shell.decor.getChildByLabel('tower3_seed1002');
+  const tower = shell.decor.getChildByLabel(TOWER);
   shell.decor.addChildAt(shelfCatLayer,
     tower ? shell.decor.getChildIndex(tower) : shell.decor.children.length);
+
+  // Подвесные игрушки комплекса. Живут в слое пола (а не в декоре), глубина —
+  // чуть ближе зрителя, чем место играющего кота: мячик висит ровно на уровне
+  // кошачьей головы, и за спинами игроков его было бы не видно. Коты, идущие
+  // ещё ближе к зрителю, рисуются поверх — но до этой высоты они не достают.
+  const toyDepth = plane.yNear + (plane.yFar - plane.yNear) * (TOY_Z - 0.06);
+  const toys: HangingToy[] = [];
+  let toyOpts: ToyOpts | undefined;
+  for (const spec of SHELTER_TOYS) {
+    const tex = decorTexture(spec.sprite);
+    const at = decorPoint('shelter', TOWER, spec.mount[0], spec.mount[1], ctx.roomW, ctx.roomH);
+    if (!tex || !at) continue; // текстуру не подгрузили — игрушки просто нет
+    const toy = createHangingToy({
+      tex,
+      pivotX: spec.pivot[0], pivotY: spec.pivot[1],
+      ballX: spec.ball[0], ballY: spec.ball[1], ballR: spec.ballR,
+      period: spec.period,
+    }, at.x, at.y, at.scale);
+    toy.view.zIndex = Math.round(toyDepth);
+    floorLayer.addChild(toy.view);
+    toys.push(toy);
+    if (spec.paws) {
+      toyOpts = {
+        ox: toy.ballAt().x - plane.centerX, // мячик в покое — к нему коты и идут
+        ballOx: () => toy.ballAt().x - plane.centerX,
+        hit: (dir, power) => toy.push(dir, power),
+      };
+    }
+  }
 
   const floor = createLivingFloor(
     ctx, floorLayer,
@@ -173,7 +225,14 @@ export function createShelter(ctx: UiContext): Room {
     () => catsIn(ctx.state, 'shelter')
       .filter((c) => !isInSlot(ctx.state, c.id) && !isInBasket(ctx.state, c.id)),
     { plane: shelf, layer: shelfCatLayer },
+    toyOpts,
   );
+
+  // Тап по мячику: он улетает от пальца, а пара ближайших котов бросает свои
+  // дела и идёт играть — вокруг игрушки собирается компания.
+  for (const toy of toys) {
+    toy.onTap = () => { if (floor.callToToy(2) > 0) sfxMeow(); };
+  }
 
   /**
    * Поставить кота ВОЗЛЕ станции-короба (сбоку, у ближней кромки пола) и задержать
@@ -229,6 +288,7 @@ export function createShelter(ctx: UiContext): Room {
 
   function tick(dt: number): void {
     floor.tick(dt);
+    for (const toy of toys) toy.tick(dt);
   }
 
   return {

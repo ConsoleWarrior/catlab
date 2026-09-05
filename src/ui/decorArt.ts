@@ -104,3 +104,33 @@ export function buildDecor(roomId: string, roomW: number, roomH: number): Contai
   }
   return layer;
 }
+
+/**
+ * Точка ВНУТРИ декор-спрайта (в пикселях его текстуры) → координаты комнаты,
+ * плюс масштаб (px комнаты на 1 px текстуры). Нужна тем, кто вешает на декор
+ * свои живые объекты: Приют так находит место, где к кошачьему комплексу
+ * привязаны игрушки-маятники (см. rooms/shelter.ts, hangingToy.ts).
+ *
+ * Считается той же формулой, что и раскладка в `buildDecor` — иначе привязка
+ * разъезжалась бы с самим спрайтом при смене пропорций экрана. Нет такого
+ * предмета в комнате или не подгрузилась текстура → null.
+ */
+export function decorPoint(
+  roomId: string,
+  sprite: string,
+  tx: number,
+  ty: number,
+  roomW: number,
+  roomH: number,
+): { x: number; y: number; scale: number } | null {
+  const it = ROOM_DECOR[roomId]?.find((d) => d.sprite === sprite);
+  const tex = it && texs.get(it.sprite);
+  if (!it || !tex) return null;
+  const sc = it.scaleBy === 'w' ? (it.scale * roomW) / tex.width : (it.scale * roomH) / tex.height;
+  const sy = sc * (it.squashY ?? 1);
+  return {
+    x: it.xN * roomW + (tx - tex.width / 2) * sc * (it.flip ? -1 : 1),
+    y: it.yN * roomH - (tex.height - ty) * sy,
+    scale: sc,
+  };
+}

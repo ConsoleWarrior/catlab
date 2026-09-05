@@ -15,7 +15,7 @@ import type { Sex } from '../genetics/index.js';
 import { buildCat } from '../render/catSprite.js';
 import {
   createInitialState, serialize, deserialize, collectIncome, collectReady,
-  netIncomePerMin, SAVE_VERSION, makeCatInstance, startBreeding, incubationDuration,
+  netIncomePerMin, SAVE_VERSION, makeCatInstance, startBreeding,
   moveCat, clearBreederSlot, keepKittenWithParents,
   nextLevelRep, unlocksAtLevel, levelCrystalReward, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
@@ -505,9 +505,17 @@ export class Game implements UiContext {
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openHealConfirm(c);
         },
+        openAdopt: (id?: string) => { // окно «в добрые руки» (проверка шага обучения)
+          const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
+          if (c) this.openAdoptConfirm(c);
+        },
         openAnalyze: (id?: string) => { // окно Генетического анализа (💰+🧬 / 💎 / 📺)
           const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
           if (c) this.openAnalyzeConfirm(c);
+        },
+        openPedigree: (id?: string) => { // дерево родословной живого кота (с туманом)
+          const c = id ? this.state.cats.find((x) => x.id === id) : this.state.cats[0];
+          if (c) this.openPedigree(c);
         },
         pedigreeDemo: () => {
           const base = this.state.cats[0];
@@ -576,10 +584,10 @@ export class Game implements UiContext {
     const f = this.state.cats.find((c) => c.location === 'nursery' && c.genotype.sex === 'female');
     const m = this.state.cats.find((c) => c.location === 'nursery' && c.genotype.sex === 'male');
     if (f && m) {
-      const r = startBreeding(this.state, 0, f.id, m.id, now);
+      const r = startBreeding(this.state, 0, f.id, m.id, now, this.rng);
       if (r.ok) {
         const slot = this.state.slots[0]!;
-        const total = incubationDuration(this.state);
+        const total = Math.max(1, slot.readyAt - slot.startedAt);
         slot.startedAt = now - total * 0.5;
         slot.readyAt = now + total * 0.5; // показать прогресс ~50%
       }
@@ -875,6 +883,10 @@ export class Game implements UiContext {
 
   openAdoptConfirm(cat: Cat): void {
     const close = (): void => this.closeOverlay();
+    // Шаг обучения «в добрые руки» закрываем уже здесь: кота донесли до станции
+    // (или нашли пункт в его меню) — механика показана. Раньше флаг ставил только
+    // сам adoptCat, и подсказка не отпускала, пока кота реально не отдашь.
+    if (markTutorialSeen(this.state, 'adopt')) this.save();
     this.showOverlay(buildAdoptConfirm(this, cat, close));
   }
 
@@ -988,7 +1000,15 @@ export class Game implements UiContext {
    * следующем запуске уступило бы старому локальному сейву (см. resetSave).
    */
   private async resetProgress(): Promise<void> {
+    // Донат-остаток переживает сброс (так и обещано в окне подтверждения): 💎
+    // куплены за реальные деньги, сжигать их при «начать заново» нечестно. Флаг
+    // бонуса первой покупки переносим вместе с ними — иначе +50% можно было бы
+    // получать снова и снова, сбрасывая прогресс перед каждой покупкой.
+    const keptCrystals = this.state.crystals;
+    const keptFirstPurchase = this.state.firstPurchaseDone;
     this.state = createInitialState(this.rng, this.now());
+    this.state.crystals = keptCrystals;
+    this.state.firstPurchaseDone = keptFirstPurchase;
     this.freshGame = true;
     this.shownLevel = this.state.level;
     this.wasStarving = isStarving(this.state);

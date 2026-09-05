@@ -4,8 +4,7 @@ import {
   createInitialState, makeCatInstance, catMarketValue, healthValueMult,
   sendToLab, foodRatePerMin, isStarving, netIncomePerMin, passiveRatePerMin, championIncomePerMin,
   setChampion, unsetChampion, championIds, championAt, championSlots, isChampion, adoptCat,
-  startBreeding, collectReady, incubationDuration, speedUpBreeding, speedUpCost,
-  adSkipBreeding, speedUpGrowth, adSkipGrowth, growthRemainingMs, isAdult,
+  speedUpCost, speedUpGrowth, adSkipGrowth, growthRemainingMs, isAdult,
   assignBreeder, isInSlot, nurseryCapacity, shelterCapacity, moveCat,
   adoptAll, sendAllToLab, shelterTotals, catsIn,
 } from './index.js';
@@ -279,35 +278,7 @@ describe('лаборатория и ускорение', () => {
     expect(speedUpCost(10 * 60_000, g)).toBe(2);
     expect(speedUpCost(11 * 60_000, g)).toBe(3);
     expect(speedUpCost(C.KITTEN_GROWTH_MS, g)).toBe(3);      // полный рост (15 мин) → 3 💎
-    expect(speedUpCost(C.INCUBATION_BASE_MS, C.BREED_SPEEDUP_CRYSTAL_PER_MIN)).toBe(1); // вязка → 1 💎
-  });
-
-  it('speedUpBreeding завершает вязку за 💎', () => {
-    const rng = makeRng(9);
-    const s = createInitialState(rng, 0);
-    const female = s.cats.find((c) => c.genotype.sex === 'female')!;
-    const male = s.cats.find((c) => c.genotype.sex === 'male')!;
-    const now = 1000; // ненулевое время (readyAt=0 — это «пустой слот»)
-    startBreeding(s, 0, female.id, male.id, now);
-    const cost = speedUpCost(incubationDuration(s), C.BREED_SPEEDUP_CRYSTAL_PER_MIN);
-    s.crystals = cost;
-    expect(speedUpBreeding(s, 0, now).ok).toBe(true);
-    expect(s.crystals).toBe(0);
-    const ev = collectReady(s, now, rng); // готово немедленно
-    expect(ev[0]!.kitten).toBeDefined();
-  });
-
-  it('adSkipBreeding сокращает остаток вязки на AD_SKIP_MS (бесплатно)', () => {
-    const s = createInitialState(makeRng(10), 0);
-    const female = s.cats.find((c) => c.genotype.sex === 'female')!;
-    const male = s.cats.find((c) => c.genotype.sex === 'male')!;
-    const now = 1_000_000;
-    s.slots[0] = { motherId: female.id, fatherId: male.id, startedAt: now, readyAt: now + 60 * 60_000, kittenId: null };
-    const before = s.slots[0]!.readyAt;
-    const crystals = s.crystals;
-    expect(adSkipBreeding(s, 0, now).ok).toBe(true);
-    expect(before - s.slots[0]!.readyAt).toBe(C.AD_SKIP_MS);
-    expect(s.crystals).toBe(crystals); // реклама бесплатна
+    // Вязки в этом списке нет: её длительность — секунды, ускорять нечего (см. BREED_MS_BY_TIER).
   });
 
   it('speedUpGrowth растит котёнка сразу за 💎', () => {
