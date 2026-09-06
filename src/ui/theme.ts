@@ -35,6 +35,18 @@ export const COLORS = {
   overlay: 0x2a2320,
 } as const;
 
+// ─── Наряд интерфейса ────────────────────────────────────────────────────────
+// Один рубильник на весь «нарядный» вид (вкладки Генолаба, стойка заказов и
+// кормушка Питомника): цветные карточки, контрастные подписи, плашки под
+// цифрами. ЕСЛИ СЛИШКОМ ЯРКО — поставь VIVID = false, и все эти места вернутся
+// к прежнему спокойному виду (каждая правка идёт через V(яркое, прежнее)).
+export const VIVID: boolean = true;
+export function V<T>(vivid: T, plain: T): T { return VIVID ? vivid : plain; }
+
+/** Текст «нарядного» вида: контрастный (заголовки, цифры) и приглушённый (пояснения). */
+export const INK = V(0x3a2822, COLORS.ink);
+export const INK_SOFT = V(0x6b5348, COLORS.inkSoft);
+
 /** Акцент комнаты (фон-стена в разрезе). */
 export const ROOM_ACCENT: Record<string, number> = {
   incubator: 0xffe3ec,

@@ -42,8 +42,8 @@ const HELP: Record<string, RoomHelp> = {
     lines: [
       ['Перетащи кота на пьедестал — он будет приносить пассивный доход 💰/мин, тем больше, чем он ценнее. Центральное место — самое доходное.',
        'Drag a cat onto a pedestal — it brings passive income 💰/min, the more valuable the cat the more it pays. The central spot pays the most.'],
-      ['Кнопка 📋 Заказы: перетащи в 🧺 корзину под ней кота нужного заказчику — получишь 💰, 💎 и опыт ⭐. Клиенты просят ценных котов, это лучший способ заработать.',
-       'The 📋 Orders button: drag the cat a client asks for into the 🧺 basket below it and get 💰, 💎 and ⭐ XP. Clients ask for valuable cats — this is the best way to earn.'],
+      ['Кнопка 📋 Заказы клиентов: перетащи в 🧺 корзину под ней кота нужного заказчику — получишь 💰, 💎 и опыт ⭐. Клиенты просят ценных котов, это лучший способ заработать.',
+       'The 📋 Client orders button: drag the cat a client asks for into the 🧺 basket below it and get 💰, 💎 and ⭐ XP. Clients ask for valuable cats — this is the best way to earn.'],
       ['Пока есть корм, идёт доход и можно сводить пары. Кончился — всё замирает, но коты не голодают всерьёз и ничего не теряют.',
        'While there is food, income goes on and pairs can be bred. Once it runs out everything freezes, but the cats do not really starve and lose nothing.'],
     ],

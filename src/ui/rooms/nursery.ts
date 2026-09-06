@@ -11,8 +11,8 @@
  * Чемпион на тумбе моргает и «красуется» — см. ChampAnim/updateChampions ниже.
  * Ветеринар (💉) переехал в Инкубатор — там шприц перетаскивают на кота в слоте вязки.
  * В правом нижнем углу — криокапсула (🧊, drag кота → заморозка в крио-банк).
- * Слева под названием комнаты — стойка заказов (кнопка 📋 + корзина), переехавшая
- * из Приюта: заказы просят ЦЕННЫХ котов, а живут они как раз здесь.
+ * Справа сверху — стойка заказов (кнопка 📋 + корзина-переноска), слева под
+ * названием комнаты — кормушка: заказы просят ЦЕННЫХ котов, а живут они здесь.
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
  */
 
@@ -27,14 +27,14 @@ import {
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
   foodRatePerMin, feedingCatCount, foodBuyQuote,
   cryoUnlocked,
-  isInBasket, basketCat, putCatInBasket, clearOrderBasket, msUntilOrderExpiry, matchesOrder,
+  isInBasket, basketCat, putCatInBasket, clearOrderBasket, matchesOrder,
   FOOD_PACK_UNITS, CHAMPION_SLOTS_BASE, UPGRADES,
 } from '../../game/index.js';
 import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorPlane, cornerStation, stationBadge, TITLE_H } from './shell.js';
+import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
 import { decorTexture } from '../decorArt.js';
-import { Button, COLORS, label } from '../theme.js';
+import { Button, COLORS, INK, INK_SOFT, label, V, VIVID } from '../theme.js';
 import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
 import { catArtTexture, catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { attachBlink, type Blinker } from '../eyeBlink.js';
@@ -46,19 +46,69 @@ function pedCountFor(_ctx: UiContext): number {
   return CHAMPION_SLOTS_BASE + UPGRADES.championSlots!.max;
 }
 
-// Правая колонка шапки: кормушка (покупка котов переехала в Приют).
+// Левая колонка шапки: кормушка (покупка котов переехала в Приют). Стоит под
+// плашкой названия комнаты — там же, где раньше была стойка заказов.
 const COL_W = 256;
 
-// --- Стойка заказов (левая колонка под названием комнаты) ---
-// Левый край блока — как у титульной плашки (PAD в rooms/shell.ts).
-const ORDERS_X = 18;
+// --- Стойка заказов (правая колонка, в один ряд с плашкой названия) ---
 const ORDERS_BH = 44;
+// Отступ блока от правого края комнаты. Пока кота несут «за шкирку», палец у
+// самой кромки экрана листает комнаты (game.ts, carryEdgeScroll: полоса ≤ 72 px),
+// и корзина, стоявшая впритык к краю, уводила кота в соседнюю комнату вместо
+// того, чтобы его принять. Держим блок заведомо дальше этой полосы.
+const EDGE_SAFE = 90;
+// Палитра стойки: тёплый «клиентский» оранжевый у кнопки, плетёнка у корзины.
+const ORDERS_TINT = 0xf2952f;
+const CARRIER_BODY = 0xf1c890;  // плетёный бок корзины
+const CARRIER_EDGE = 0xb0723a;  // кант плетёнки и прутья дверцы
 
-/** Остаток до авто-смены ближайшего заказа «Ч:ММ» — подпись на кнопке доски (таймер ≤ 6 ч). */
-function fmtLeft(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 60_000));
-  const h = Math.floor(total / 60);
-  return `${h}:${String(total % 60).padStart(2, '0')}`;
+/**
+ * Корзина заказов — плетёная переноска с РАСПАХНУТОЙ дверцей: короб с крышкой и
+ * ручкой, спереди широкий проём (туда садится предъявляемый кот), слева дверца
+ * откинута наружу, за габарит короба — внутри она отняла бы место у кота.
+ * Рисуется одним Graphics, поэтому дверца не повёрнутый спрайт, а четырёхугольник
+ * с перспективой (дальний край короче). `fits` — кот подходит под заказ: зелёный кант.
+ */
+function drawCarrier(g: Graphics, x: number, y: number, w: number, h: number, fits: boolean): void {
+  const edge = fits ? COLORS.good : CARRIER_EDGE;
+  g.ellipse(x + w / 2, y + h - 2, w * 0.42, 6).fill({ color: 0x000000, alpha: 0.12 });
+
+  // распахнутая дверца слева (рисуем первой — петли уходят под короб)
+  const hx = x + 4, fx = x - w * 0.13;
+  g.poly([hx, y + h * 0.36, fx, y + h * 0.45, fx, y + h * 0.81, hx, y + h * 0.9])
+    .fill({ color: 0xfffaf0, alpha: 0.97 })
+    .stroke({ width: 3, color: darken(CARRIER_EDGE, 0.1), alpha: 0.95 });
+  for (const k of [0.4, 0.72]) { // прутья створки
+    g.moveTo(hx + (fx - hx) * k, y + h * (0.36 + 0.09 * k))
+      .lineTo(hx + (fx - hx) * k, y + h * (0.9 - 0.09 * k))
+      .stroke({ width: 1.8, color: CARRIER_EDGE, alpha: 0.55 });
+  }
+
+  // ручка над коробом
+  g.moveTo(x + w * 0.38, y + h * 0.18)
+    .quadraticCurveTo(x + w * 0.5, y + h * 0.005, x + w * 0.62, y + h * 0.18)
+    .stroke({ width: 6, color: darken(CARRIER_EDGE, 0.12), alpha: 0.95 });
+
+  // короб + крышка + «плетение»
+  g.roundRect(x + 2, y + h * 0.15, w - 4, h * 0.83, 16)
+    .fill({ color: CARRIER_BODY, alpha: 0.97 })
+    .stroke({ width: 3, color: edge, alpha: 0.95 });
+  g.roundRect(x + 2, y + h * 0.15, w - 4, h * 0.2, 14)
+    .fill({ color: lighten(CARRIER_BODY, 0.18), alpha: 1 });
+  g.rect(x + 8, y + h * 0.345, w - 16, 2).fill({ color: CARRIER_EDGE, alpha: 0.28 });
+  for (const k of [0.5, 0.66, 0.82]) { // прутья плетёнки — по боковинам, мимо проёма
+    g.rect(x + 8, y + h * k, w * 0.09, 2).fill({ color: CARRIER_EDGE, alpha: 0.35 });
+    g.rect(x + w * 0.91 - 8, y + h * k, w * 0.09, 2).fill({ color: CARRIER_EDGE, alpha: 0.35 });
+  }
+
+  // проём: сюда садится кот (глубина + кант, петли дверцы на левом косяке)
+  g.roundRect(x + w * 0.11, y + h * 0.33, w * 0.78, h * 0.57, 12)
+    .fill({ color: 0x6b4a2e, alpha: 0.22 })
+    .stroke({ width: 2.5, color: edge, alpha: 0.85 });
+  g.roundRect(x + w * 0.13, y + h * 0.35, w * 0.74, h * 0.1, 8).fill({ color: 0x4a3120, alpha: 0.13 });
+  for (const k of [0.44, 0.78]) {
+    g.roundRect(x + 1, y + h * k, 8, h * 0.06, 3).fill({ color: darken(CARRIER_EDGE, 0.15), alpha: 0.9 });
+  }
 }
 
 /**
@@ -175,51 +225,78 @@ export function createNursery(ctx: UiContext): Room {
     cryoLayer.addChild(box, snow, badge);
   }
 
-  // --- Стойка заказов: кнопка 📋 слева под названием комнаты + корзина под ней ---
+  // --- Стойка заказов: кнопка 📋 справа сверху + корзина-переноска под ней ---
   // Переехала из Приюта: заказы просят ЦЕННЫХ котов, а живут они здесь — таскать
-  // их через две комнаты ради корзины было незачем. Место выбрано под мобильный
-  // ландшафт: слева свободна полоса стены (декор начинается от 0.18·w), блок не
-  // спорит ни с кормушкой справа, ни с дугой пьедесталов, ни с полом.
+  // их через две комнаты ради корзины было незачем. С кормушкой они поменялись
+  // местами: стойка ушла в правую половину шапки (в один ряд с плашкой названия),
+  // кормушка встала слева под названием.
   // Корзина — drag-цель: положенный кот и есть «предъявленный клиенту», только им
   // можно закрыть заказ (см. actions.claimOrder). Слой пересобирается в refresh()
-  // (состав доски, кот в корзине), а таймер тикает отдельно в tick().
+  // (состав доски, кот в корзине), а счётчик заказов обновляется в tick().
   const ordersLayer = new Container();
   shell.container.addChildAt(ordersLayer, shell.container.getChildIndex(floorLayer));
-  // Ширина колонки — по свободной полосе стены слева, высота корзины — от высоты
-  // комнаты: на телефоне сцена низкая, и прежний приютский блок 168×140 занимал бы
-  // там треть экрана. Корзина ровно под кнопкой и во всю её ширину.
-  const ORDERS_BW = Math.round(Math.max(118, Math.min(152, ctx.roomW * 0.15 - ORDERS_X)));
+  // Блок стал шире прежнего: на кнопке теперь полное название, а в корзину лучше
+  // видно кота. Высота корзины — от высоты комнаты (на телефоне сцена низкая).
+  const ORDERS_BW = Math.round(Math.max(150, Math.min(226, ctx.roomW * 0.2)));
   const BASKET_W = ORDERS_BW;
-  const BASKET_H = Math.round(Math.max(84, Math.min(132, ctx.roomH * 0.19)));
+  const BASKET_H = Math.round(Math.max(104, Math.min(158, ctx.roomH * 0.23)));
   const BASKET_PILL_H = 19; // плашка «подходит/не подходит» — ВНУТРИ корзины, у нижней кромки
   let basketZone = new Rectangle(0, 0, 0, 0);
   let ordersBtn: Button | null = null;
+  let ordersCount: Text | null = null;      // число заказов в кружке на кнопке
+  let ordersCountBg: Graphics | null = null;
+  let ordersBadgeGeom = { x: 0, y: 0, r: 13 };
 
   function refreshOrdersDesk(): void {
     ordersLayer.removeChildren();
-    const cx = ORDERS_X + ORDERS_BW / 2;
-    const cy = ctx.topInset + 8 + TITLE_H + 12 + ORDERS_BH / 2; // сразу под плашкой названия
+    ordersCount = null;
+    ordersCountBg = null;
+    // правый край блока — не ближе EDGE_SAFE к кромке экрана (см. константу)
+    const cx = ctx.roomW - EDGE_SAFE - ORDERS_BW / 2;
+    const cy = ctx.topInset + 8 + ORDERS_BH / 2; // в один ряд с плашкой названия комнаты
 
-    const btn = new Button({ text: t('📋 Заказы', '📋 Orders'), w: ORDERS_BW, h: ORDERS_BH, color: COLORS.warn, textColor: COLORS.ink, fontSize: 13 });
+    if (VIVID) { // тёплый ореол под кнопкой — стойку видно на любом фоне комнаты
+      const glow = new Graphics();
+      glow.roundRect(cx - ORDERS_BW / 2 - 4, cy - ORDERS_BH / 2 - 4, ORDERS_BW + 8, ORDERS_BH + 8, 15)
+        .stroke({ width: 4, color: ORDERS_TINT, alpha: 0.35 });
+      ordersLayer.addChild(glow);
+    }
+    const btn = new Button({
+      text: t('📋 Заказы клиентов', '📋 Client orders'), w: ORDERS_BW, h: ORDERS_BH,
+      color: V(ORDERS_TINT, COLORS.warn), textColor: V(0xffffff, COLORS.ink), fontSize: 13.5,
+    });
     btn.position.set(cx, cy);
     btn.onTap = () => ctx.openOrders();
     ordersBtn = btn;
     ordersLayer.addChild(btn);
+
+    // счётчик заказов — кружком у правого верхнего угла кнопки (вместо таймера
+    // ближайшей смены: он показывал один случайный слот и ни на что не влиял)
+    const badgeR = 13;
+    const bgx = cx + ORDERS_BW / 2 - badgeR + 2, bgy = cy - ORDERS_BH / 2 + 2;
+    ordersCountBg = new Graphics();
+    ordersCount = label('', 12.5, 0xffffff, '800');
+    ordersCount.position.set(bgx, bgy);
+    ordersLayer.addChild(ordersCountBg, ordersCount);
+    ordersBadgeGeom = { x: bgx, y: bgy, r: badgeR };
     updateOrdersBtn();
 
     // Корзина — зона во всю ширину кнопки ровно под ней. Кот в ней рисуется прямо
     // тут, поэтому видно, кого именно предъявим клиенту.
     const bx = cx - BASKET_W / 2;
-    const by = cy + ORDERS_BH / 2 + 8;
+    const by = cy + ORDERS_BH / 2 + V(14, 8); // зазор под ручку переноски
     basketZone = new Rectangle(bx, by, BASKET_W, BASKET_H);
     const cat = basketCat(ctx.state);
     // подсветка, когда кот в корзине подходит хоть под один заказ на доске
     const fits = !!cat && ctx.state.orders.some((o) => matchesOrder(o, cat));
 
     const box = new Graphics();
-    box.roundRect(bx, by, BASKET_W, BASKET_H, 14)
-      .fill({ color: cat ? 0xfff3d9 : 0xffffff, alpha: cat ? 0.95 : 0.7 })
-      .stroke({ width: fits ? 3 : 2, color: fits ? COLORS.good : COLORS.cardEdge });
+    if (VIVID) drawCarrier(box, bx, by, BASKET_W, BASKET_H, fits);
+    else {
+      box.roundRect(bx, by, BASKET_W, BASKET_H, 14)
+        .fill({ color: cat ? 0xfff3d9 : 0xffffff, alpha: cat ? 0.95 : 0.7 })
+        .stroke({ width: fits ? 3 : 2, color: fits ? COLORS.good : COLORS.cardEdge });
+    }
     ordersLayer.addChild(box);
 
     // вынуть кота из корзины обратно на пол (тап по корзине/коту)
@@ -234,7 +311,9 @@ export function createNursery(ctx: UiContext): Room {
       // арт-спрайт коллекции (тот же вариант, что кот показывает на полу), фолбэк — процедурный
       const sp = new Sprite(catArtTexture(cat) ?? ctx.catTexture(cat));
       const feet = by + BASKET_H - BASKET_PILL_H - 6; // лапы кота — над плашкой статуса
-      const k = Math.min((BASKET_W - 20) / sp.texture.width, (feet - by - 8) / sp.texture.height);
+      // в «нарядном» виде кот сидит внутри проёма переноски, а не во всю коробку
+      const top = by + BASKET_H * V(0.36, 0.08);
+      const k = Math.min((BASKET_W - V(40, 20)) / sp.texture.width, (feet - top) / sp.texture.height);
       sp.scale.set(k);
       sp.anchor.set(0.5, 1);
       sp.position.set(bx + BASKET_W / 2, feet);
@@ -263,9 +342,12 @@ export function createNursery(ctx: UiContext): Room {
         onDrop: () => { /* никуда не пристроили — кот остаётся в корзине (show вернул) */ },
       }, e));
     } else {
-      const hint = label(t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket'), 12.5, COLORS.inkSoft, '700');
+      const hint = label(
+        V(t('корзина заказов\nперетащи кота сюда', 'order basket\ndrag a cat in here'), t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket')),
+        V(11, 12.5), V(INK_SOFT, COLORS.inkSoft), '700',
+      );
       hint.anchor.set(0.5);
-      hint.position.set(bx + BASKET_W / 2, by + BASKET_H / 2);
+      hint.position.set(bx + BASKET_W / 2, by + BASKET_H * V(0.58, 0.5));
       ordersLayer.addChild(hint);
     }
 
@@ -275,13 +357,16 @@ export function createNursery(ctx: UiContext): Room {
     box.on('pointertap', takeOut);
   }
 
-  /** Подпись кнопки: число заказов + остаток до авто-смены ближайшего (все слоты активны). */
+  /** Счётчик на кнопке: сколько заказов сейчас на доске (кружок у её угла). */
   function updateOrdersBtn(): void {
-    const orders = ctx.state.orders;
-    const total = orders.length;
-    if (total === 0) { ordersBtn?.setText(t('📋 Заказы 0', '📋 Orders 0')); return; }
-    const soonest = Math.min(...orders.map((o) => msUntilOrderExpiry(o, ctx.now())));
-    ordersBtn?.setText(t(`📋 Заказы ${total}\n⏳ ${fmtLeft(soonest)}`, `📋 Orders ${total}\n⏳ ${fmtLeft(soonest)}`));
+    const total = ctx.state.orders.length;
+    if (!ordersCount || !ordersCountBg) return;
+    ordersCount.text = String(total);
+    const { x, y, r } = ordersBadgeGeom;
+    ordersCountBg.clear();
+    ordersCountBg.circle(x, y, r)
+      .fill({ color: total > 0 ? COLORS.good : COLORS.cardEdge, alpha: 1 })
+      .stroke({ width: 2, color: 0xffffff, alpha: 0.95 });
   }
 
   const plane = floorPlane(ctx.roomW, ctx.roomH, ctx.topInset);
@@ -721,11 +806,14 @@ export function createNursery(ctx: UiContext): Room {
     const c = new Container();
     const fh = foodEnabled(ctx.state) ? 110 : 38;
     const bg = new Graphics();
-    bg.roundRect(0, 0, fw, fh, 12).fill({ color: COLORS.card, alpha: 0.92 }).stroke({ width: 2, color: COLORS.cardEdge });
+    bg.roundRect(0, 0, fw, fh, 12)
+      .fill({ color: V(lighten(COLORS.good, 0.86), COLORS.card), alpha: V(0.95, 0.92) })
+      .stroke({ width: V(3, 2), color: V(COLORS.good, COLORS.cardEdge), alpha: V(0.6, 1) });
+    if (VIVID) bg.roundRect(4, 4, fw - 8, fh * 0.3, 9).fill({ color: 0xffffff, alpha: 0.4 });
     c.addChild(bg);
 
     if (!foodEnabled(ctx.state)) {
-      const lock = label(t(`🍽 Запас корма — с ур. ${unlockLevelOf('food')} 🔒`, `🍽 Food supply — from lv. ${unlockLevelOf('food')} 🔒`), 12.5, COLORS.inkSoft, '700');
+      const lock = label(t(`🍽 Запас корма — с ур. ${unlockLevelOf('food')} 🔒`, `🍽 Food supply — from lv. ${unlockLevelOf('food')} 🔒`), 12.5, V(INK_SOFT, COLORS.inkSoft), '700');
       lock.anchor.set(0, 0.5);
       lock.position.set(12, fh / 2);
       c.addChild(lock);
@@ -734,7 +822,7 @@ export function createNursery(ctx: UiContext): Room {
 
     const PAD_X = 12;
     // ряд 1: заголовок карточки — по центру блока
-    const title = label(t('🍽 Запас корма', '🍽 Food supply'), 13, COLORS.ink, '800');
+    const title = label(t('🍽 Запас корма', '🍽 Food supply'), V(13.5, 13), V(darken(COLORS.good, 0.5), COLORS.ink), '800');
     title.anchor.set(0.5);
     title.position.set(fw / 2, 17);
     c.addChild(title);
@@ -742,17 +830,23 @@ export function createNursery(ctx: UiContext): Room {
     // ряд 2: полоса запаса с числом «корм/ёмкость» — во всю ширину карточки
     const barX = PAD_X, barW = fw - PAD_X * 2, barY = 30, barH = 15;
     const barBg = new Graphics();
-    barBg.roundRect(barX, barY, barW, barH, 7).fill({ color: 0x000000, alpha: 0.15 });
+    if (VIVID) { // светлый жёлоб в канте — полоса корма читается и почти пустой
+      barBg.roundRect(barX, barY, barW, barH, 7)
+        .fill({ color: 0xfff6e6, alpha: 1 })
+        .stroke({ width: 2, color: COLORS.good, alpha: 0.5 });
+    } else {
+      barBg.roundRect(barX, barY, barW, barH, 7).fill({ color: 0x000000, alpha: 0.15 });
+    }
     const barFill = new Graphics();
     c.addChild(barBg, barFill);
 
-    const amt = label('', 11, COLORS.ink, '700');
+    const amt = label('', V(11.5, 11), V(INK, COLORS.ink), '800');
     amt.anchor.set(0.5);
     amt.position.set(barX + barW / 2, barY + barH / 2);
     c.addChild(amt);
 
     // ряд 3: сколько ртов, сколько едят в минуту и на сколько хватит запаса
-    const info = label('', 10.5, COLORS.inkSoft, '700');
+    const info = label('', V(11, 10.5), V(INK_SOFT, COLORS.inkSoft), '700');
     info.anchor.set(0, 0.5);
     info.position.set(PAD_X, 59);
     c.addChild(info);
@@ -761,7 +855,7 @@ export function createNursery(ctx: UiContext): Room {
     const btnGap = 8;
     const btnW = (fw - PAD_X * 2 - btnGap) / 2;
     const mkBuy = (mode: 'pack' | 'full', text: string, x: number): (() => void) => {
-      const btn = new Button({ text: '', w: btnW, h: 28, color: COLORS.good, fontSize: 11.5 });
+      const btn = new Button({ text: '', w: btnW, h: 28, color: V(darken(COLORS.good, 0.14), COLORS.good), fontSize: 11.5 });
       btn.position.set(x + btnW / 2, 86);
       btn.onTap = () => {
         const r = buyFood(ctx.state, mode);
@@ -789,13 +883,17 @@ export function createNursery(ctx: UiContext): Room {
       const frac = Math.max(0, Math.min(1, food / cap));
       const starving = isStarving(ctx.state);
       const col = starving ? 0xd9534f : frac < 0.25 ? 0xe0a13a : 0x6cc07a;
-      barFill.clear().roundRect(barX, barY, Math.max(3, barW * frac), barH, 7).fill({ color: col });
+      const fw2 = Math.max(3, barW * frac);
+      barFill.clear().roundRect(barX, barY, fw2, barH, 7).fill({ color: col });
+      if (VIVID) { // блик по налитому корму
+        barFill.roundRect(barX + 2, barY + 2, Math.max(1, fw2 - 4), barH * 0.34, 4).fill({ color: 0xffffff, alpha: 0.35 });
+      }
       amt.text = `${Math.round(food)}/${cap}`;
 
       const mins = foodMinutesLeft(ctx.state);
       const left = starving ? t('голод!', 'starving!') : mins === Infinity ? t('расхода нет', 'nothing eaten') : t(`хватит на ~${Math.round(mins)} мин`, `lasts ~${Math.round(mins)} min`);
       info.text = t(`🐱 ${feedingCatCount(ctx.state)} · ${foodRatePerMin(ctx.state).toFixed(1)} 🍽/мин · ${left}`, `🐱 ${feedingCatCount(ctx.state)} · ${foodRatePerMin(ctx.state).toFixed(1)} 🍽/min · ${left}`);
-      info.style.fill = starving ? 0xd9534f : COLORS.inkSoft;
+      info.style.fill = starving ? 0xd9534f : V(INK_SOFT, COLORS.inkSoft);
       for (const u of buyUpdates) u();
     };
     update();
@@ -810,13 +908,11 @@ export function createNursery(ctx: UiContext): Room {
     // вместимость комнаты — счётчиком справа в плашке названия
     shell.setTitleBadge(`🐱 ${count}/${cap}`);
 
-    // Правая колонка в правом верхнем углу: только кормушка (покупка котов теперь
-    // в Приюте). Прижата правым краем к contentW, ширина COL_W. Верх поднят на
-    // уровень плашки названия комнаты: body начинается ПОД плашкой, поэтому
-    // отсчитываем вверх на её высоту с зазором (отрицательный y) — так занимается
-    // пустое место под топ-баром, а не поле над пьедесталами.
-    const colX = shell.contentW - COL_W;
-    const colY = -(shell.titleH + 12);
+    // Кормушка — ЛЕВАЯ колонка, сразу под плашкой названия комнаты (поменялась
+    // местами со стойкой заказов: та ушла направо, в один ряд с плашкой). Левее
+    // ставить некуда — body уже начинается с отступа PAD, а выше стоит название.
+    const colX = 0;
+    const colY = 0;
 
     const feeder = buildFeeder(COL_W);
     feeder.view.position.set(colX, colY);
@@ -825,7 +921,7 @@ export function createNursery(ctx: UiContext): Room {
 
     refreshChampions();
     refreshCryo();   // станция-криокапсула появляется, когда открыт крио-банк
-    refreshOrdersDesk(); // стойка заказов: кнопка с таймером + корзина
+    refreshOrdersDesk(); // стойка заказов: кнопка со счётчиком + корзина-переноска
     floor.refresh();
   }
 
@@ -853,9 +949,9 @@ export function createNursery(ctx: UiContext): Room {
       if (key === 'orders') return ordersBtn && !ordersBtn.destroyed ? ordersBtn : null;
       return null;
     },
-    // Верхний ряд занят с обеих сторон: слева стойка заказов, справа кормушка.
+    // Верхний ряд занят с обеих сторон: слева кормушка, справа стойка заказов.
     // Плашка подсказки обучения встаёт между ними и ничего не перекрывает
     // (п. 1.10.3 требований площадки); PAD титульной плашки — 18, см. shell.ts.
-    topReserve: { left: ORDERS_X + ORDERS_BW, right: COL_W + 18 },
+    topReserve: { left: COL_W + 18, right: ORDERS_BW + EDGE_SAFE },
   };
 }

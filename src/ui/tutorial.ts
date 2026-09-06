@@ -438,10 +438,10 @@ export class Tutorial {
         return {
           room: 'nursery', key: 'orders', gesture: 'tap',
           text: t(
-            '📋 Заказы — главный заработок игры, доска висит в Питомнике слева. Клиент просит кота '
+            '📋 Заказы — главный заработок игры, доска висит в Питомнике справа. Клиент просит кота '
               + 'определённой породы или не ниже нужной редкости, ты кладёшь подходящего в 🧺 корзину '
               + 'под кнопкой и жмёшь «Выполнить»: платят 💰, 💎 и опытом ⭐. Заказ живёт 6 часов и сменится сам. Открой доску',
-            '📋 Orders are the main earner of the game, and the board hangs on the left in the Cattery. '
+            '📋 Orders are the main earner of the game, and the board hangs on the right in the Cattery. '
               + 'A client asks for a cat of a certain breed or of at least a certain rarity, you put a matching cat '
               + 'into the 🧺 basket under the button and hit "Complete": it pays 💰, 💎 and ⭐ XP. '
               + 'An order lives 6 hours and then changes by itself. Open the board',

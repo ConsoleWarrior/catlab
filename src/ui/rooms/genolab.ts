@@ -30,7 +30,7 @@ import type { ResearchDef } from '../../game/index.js';
 import { showRewarded } from '../../platform/ads.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
-import { Button, COLORS, FONT, label, panel, tierName, TIER_COLOR, TIERS } from '../theme.js';
+import { Button, COLORS, FONT, INK, INK_SOFT, label, panel, tierName, TIER_COLOR, TIERS, V, VIVID } from '../theme.js';
 import { breedThumbTexture } from '../catTextures.js';
 import { t, tx, type LocStr } from '../../i18n.js';
 
@@ -75,12 +75,31 @@ function lighten(color: number, t: number): number {
   return (ch((color >> 16) & 0xff) << 16) | (ch((color >> 8) & 0xff) << 8) | ch(color & 0xff);
 }
 
+// Наряд вкладок «Улучшения» и «Исследования»: карточки узлов красятся в цвет
+// своей ветки, подписи контрастнее, у ценников — «монетка», у стола — рамка и
+// блик. Общий рубильник V/VIVID и чернила INK/INK_SOFT живут в theme.ts.
+
+/** Акцент ветки дерева улучшений: row → цвет (ряды см. в BRANCHES). */
+const BRANCH_TINT: Record<number, number> = {
+  4: 0x58c6ef, // 🔬 Лаборатория — приборный голубой
+  3: 0xffa04d, // 🏠 Хозяйство — тёплый оранжевый
+  0: 0xb88cff, // 🧪 Селекция — фиолетовый, как 🧬
+  1: 0x6bcb8f, // 🎓 Обучение — зелёный
+  2: 0xff90b2, // 🤝 Пристройство — розовый
+};
+
+/** Высота полосы прогресса стола исследований (рисуется и в render, и в tick). */
+const BAR_H = V(14, 12);
+
 /**
  * Подпись на полупрозрачной «таблетке» (фон под текстом) — чтобы читалась поверх
  * ИИ-фона комнаты. Сегменты выкладываются в строку, фон обтекает их по ширине.
  * Контейнер крепится за левый край; его вертикальный центр ставится на нужный y.
  */
-function pillRow(segs: { text: string; size: number; color: number; weight: '400' | '600' | '700' | '800' }[]): Container {
+function pillRow(
+  segs: { text: string; size: number; color: number; weight: '400' | '600' | '700' | '800' }[],
+  opts: { bg?: number; edge?: number } = {},
+): Container {
   const c = new Container();
   const padX = 9, gap = 7;
   const parts: Text[] = [];
@@ -96,7 +115,10 @@ function pillRow(segs: { text: string; size: number; color: number; weight: '400
   const w = x - gap + padX;
   const h = maxSize + 11;
   const bg = new Graphics();
-  bg.roundRect(0, -h / 2, w, h, h / 2).fill({ color: COLORS.card, alpha: 0.9 });
+  bg.roundRect(0, -h / 2, w, h, h / 2).fill({ color: opts.bg ?? COLORS.card, alpha: V(0.97, 0.9) });
+  if (VIVID && opts.edge !== undefined) {
+    bg.roundRect(0, -h / 2, w, h, h / 2).stroke({ width: 2, color: opts.edge, alpha: 0.85 });
+  }
   c.addChild(bg, ...parts);
   return c;
 }
@@ -122,8 +144,8 @@ export function createGenolab(ctx: UiContext): Room {
       const active = d.id === section;
       const b = new Button({
         text: d.text, w: bw, h: 42,
-        color: active ? COLORS.primary : COLORS.card,
-        textColor: active ? 0xffffff : COLORS.ink, fontSize: 15.5,
+        color: active ? COLORS.primary : V(0xffffff, COLORS.card),
+        textColor: active ? 0xffffff : V(INK, COLORS.ink), fontSize: 15.5,
       });
       b.position.set(bw / 2 + i * (bw + gap), 21);
       b.onTap = () => { section = d.id; remembered.section = d.id; refresh(); };
@@ -276,12 +298,22 @@ export function createGenolab(ctx: UiContext): Room {
   /** Ряд пипсов уровня узла: ● куплено (цветом валюты) / ○ осталось. */
   function levelPips(owned: number, total: number, curColor: number, dot: number): Container {
     const c = new Container();
-    const gap = dot * 2.4;
+    const gap = dot * V(2.7, 2.4);
     const w = (total - 1) * gap;
     for (let i = 0; i < total; i++) {
       const g = new Graphics();
-      g.circle(i * gap - w / 2, 0, dot)
-        .fill({ color: i < owned ? curColor : COLORS.cardEdge, alpha: i < owned ? 1 : 0.7 });
+      const cx = i * gap - w / 2;
+      const on = i < owned;
+      if (VIVID) {
+        // белая подложка + тёмная обводка: точки уровней видно и на цветной
+        // карточке, и поверх фона комнаты (раньше они сливались с краем панели)
+        g.circle(cx, 0, dot + 1.2).fill({ color: 0xffffff, alpha: 0.95 });
+        g.circle(cx, 0, dot)
+          .fill({ color: on ? curColor : 0xf1e5da, alpha: 1 })
+          .stroke({ width: 1.3, color: on ? shade(curColor, 0.65) : 0xbfa896, alpha: 0.95 });
+      } else {
+        g.circle(cx, 0, dot).fill({ color: on ? curColor : COLORS.cardEdge, alpha: on ? 1 : 0.7 });
+      }
       c.addChild(g);
     }
     return c;
@@ -308,17 +340,30 @@ export function createGenolab(ctx: UiContext): Room {
     const hardLocked = !maxed && (!reqMet || levelLocked);
 
     const c = new Container();
-    const fill = maxed ? lighten(COLORS.good, 0.5)
-      : buyable ? COLORS.card
-        : shade(COLORS.card, hardLocked ? 0.72 : 0.9);
+    const tint = BRANCH_TINT[def.row] ?? COLORS.primary; // карточка носит цвет своей ветки
+    const fill = VIVID
+      ? (maxed ? lighten(COLORS.good, 0.4)
+        : buyable ? lighten(tint, 0.8)
+          : shade(lighten(tint, 0.87), hardLocked ? 0.95 : 1))
+      : (maxed ? lighten(COLORS.good, 0.5)
+        : buyable ? COLORS.card
+          : shade(COLORS.card, hardLocked ? 0.72 : 0.9));
     const bg = new Graphics();
+    // ореол вокруг доступного узла — «купи меня» видно с одного взгляда
+    if (VIVID && buyable) {
+      bg.roundRect(-nw / 2 - 3, -nh / 2 - 3, nw + 6, nh + 6, 15)
+        .stroke({ width: 4, color: curColor, alpha: 0.3 });
+    }
     bg.roundRect(-nw / 2, -nh / 2, nw, nh, 12)
       .fill({ color: fill, alpha: 1 })
       .stroke({
-        width: buyable ? 3 : 2,
-        color: maxed ? COLORS.good : buyable ? curColor : COLORS.cardEdge,
+        width: buyable ? V(3.5, 3) : V(2.5, 2),
+        color: maxed ? COLORS.good : buyable ? curColor : V(lighten(tint, 0.35), COLORS.cardEdge),
         alpha: 0.95,
       });
+    if (VIVID) { // глянцевый блик по верху — карточка как стекло колбы
+      bg.roundRect(-nw / 2 + 3, -nh / 2 + 3, nw - 6, nh * 0.4, 10).fill({ color: 0xffffff, alpha: 0.34 });
+    }
     c.addChild(bg);
 
     // Раскладка карточки — снизу вверх по ФАКТИЧЕСКИМ высотам строк, а не по
@@ -328,22 +373,32 @@ export function createGenolab(ctx: UiContext): Room {
     // Теперь цена стоит у нижнего края, над ней пипсы, заголовок — у верхнего, а
     // описанию достаётся ровно то, что осталось между ними (и оно ужимается).
     const status = maxed
-      ? label(t('✓ макс', '✓ max'), Math.min(14, nh * 0.14), COLORS.good, '800')
+      ? label(t('✓ макс', '✓ max'), Math.min(14, nh * 0.14), V(shade(COLORS.good, 0.62), COLORS.good), '800')
       : !reqMet
         ? label('🔒', Math.min(16, nh * 0.16), COLORS.inkSoft, '800')
         : levelLocked
-          ? label(t(`🔒 ур. ${next!.minLevel}`, `🔒 lv. ${next!.minLevel}`), Math.min(13.5, nh * 0.135), COLORS.inkSoft, '800')
+          ? label(t(`🔒 ур. ${next!.minLevel}`, `🔒 lv. ${next!.minLevel}`), Math.min(13.5, nh * 0.135), V(INK_SOFT, COLORS.inkSoft), '800')
           : label(
             extraCoins > 0 ? `${curGlyph}${next!.cost}+💰${extraCoins}` : `${curGlyph} ${next!.cost}`,
-            Math.min(extraCoins > 0 ? 12.5 : 15, nh * 0.15), affordable ? curColor : COLORS.inkSoft, '800',
+            Math.min(extraCoins > 0 ? 12.5 : 15, nh * 0.15),
+            affordable ? V(shade(curColor, 0.62), curColor) : V(INK_SOFT, COLORS.inkSoft), '800',
           );
     status.position.set(0, nh / 2 - PAD_Y - status.height / 2);
+    // ценник на «монетке» цвета валюты: цифры не теряются на фоне карточки
+    if (VIVID && !maxed && reqMet && !levelLocked) {
+      const pw = status.width + 16, ph = status.height + 6;
+      const coin = new Graphics();
+      coin.roundRect(-pw / 2, status.y - ph / 2, pw, ph, ph / 2)
+        .fill({ color: lighten(curColor, affordable ? 0.7 : 0.88), alpha: 1 })
+        .stroke({ width: 1.5, color: affordable ? curColor : COLORS.cardEdge, alpha: 0.9 });
+      c.addChild(coin);
+    }
     c.addChild(status);
     let bottom = nh / 2 - PAD_Y - status.height - GAP_Y; // куда нельзя заходить сверху
 
     // пипсы уровней (только у многоуровневых узлов)
     if (total > 1) {
-      const dot = Math.max(2.5, Math.min(3.4, nh * 0.03));
+      const dot = Math.max(V(3.6, 2.5), Math.min(V(5, 3.4), nh * V(0.042, 0.03)));
       const pips = levelPips(owned, total, curColor, dot);
       pips.position.set(0, bottom - dot);
       c.addChild(pips);
@@ -351,10 +406,21 @@ export function createGenolab(ctx: UiContext): Room {
     }
 
     const title = fitted(
-      `${def.glyph} ${tx(def.title)}`, Math.min(15.5, nh * 0.155), COLORS.ink, '800',
+      `${def.glyph} ${tx(def.title)}`, Math.min(V(16, 15.5), nh * 0.155),
+      V(hardLocked ? INK_SOFT : 0xffffff, COLORS.ink), '800',
       nw - 12, nh * 0.42, // заголовку — не больше двух с небольшим строк
     );
     title.position.set(0, -nh / 2 + PAD_Y + title.height / 2);
+    // «ярлык» цвета ветки под названием: узел сразу читается как часть своей
+    // цепочки, а белая надпись на нём заметна даже поверх пёстрого фона комнаты.
+    // У запертых ярлыка нет (текст серый) — так видно, докуда дерево открыто.
+    if (VIVID && !hardLocked) {
+      const hw = nw - 8, hh = title.height + 6;
+      const tag = new Graphics();
+      tag.roundRect(-hw / 2, title.y - hh / 2, hw, hh, 9)
+        .fill({ color: shade(maxed ? COLORS.good : tint, maxed ? 0.72 : 0.85), alpha: 0.95 });
+      c.addChild(tag);
+    }
     c.addChild(title);
     const top = -nh / 2 + PAD_Y + title.height + GAP_Y;
 
@@ -363,7 +429,7 @@ export function createGenolab(ctx: UiContext): Room {
     const descIdx = Math.min(owned, total - 1);
     const descText = tx(def.levels[descIdx]?.desc ?? def.desc);
     const desc = fitted(
-      descText, Math.min(11.5, nh * 0.115), COLORS.inkSoft, '600',
+      descText, Math.min(V(12, 11.5), nh * 0.115), V(INK_SOFT, COLORS.inkSoft), V('700', '600'),
       nw - 14, Math.max(MIN_FONT * 2, bottom - top),
     );
     desc.position.set(0, (top + bottom) / 2);
@@ -460,11 +526,11 @@ export function createGenolab(ctx: UiContext): Room {
       p.position.set(0, viewTop);
       shell.body.addChild(p);
       const cy = viewTop + viewH / 2;
-      const head = label(t('🔬 Улучшения', '🔬 Upgrades'), 18, COLORS.ink, '800');
+      const head = label(t('🔬 Улучшения', '🔬 Upgrades'), V(19, 18), V(INK, COLORS.ink), '800');
       head.position.set(viewW / 2, cy - 28);
-      const lock = label(t(`Откроются на уровне ${need} 🔒`, `Unlocks at level ${need} 🔒`), 15, COLORS.warn, '800');
+      const lock = label(t(`Откроются на уровне ${need} 🔒`, `Unlocks at level ${need} 🔒`), V(16, 15), V(shade(COLORS.warn, 0.72), COLORS.warn), '800');
       lock.position.set(viewW / 2, cy + 2);
-      const hint = label(t('Копи опыт ⭐ за рождения, заказы и пристройство', 'Earn ⭐ XP from births, orders and rehoming'), 12, COLORS.inkSoft, '600');
+      const hint = label(t('Копи опыт ⭐ за рождения, заказы и пристройство', 'Earn ⭐ XP from births, orders and rehoming'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
       hint.position.set(viewW / 2, cy + 28);
       shell.body.addChild(head, lock, hint);
       return;
@@ -494,7 +560,11 @@ export function createGenolab(ctx: UiContext): Room {
     let y = 4;
     for (const br of BRANCHES) {
       const nodes = RESEARCH.filter((r) => r.row === br.row).sort((a, b) => a.col - b.col);
-      const head = pillRow([{ text: tx(br.label), size: 13, color: COLORS.ink, weight: '800' }]);
+      const brTint = BRANCH_TINT[br.row] ?? COLORS.primary;
+      const head = pillRow(
+        [{ text: tx(br.label), size: V(13.5, 13), color: V(shade(brTint, 0.45), COLORS.ink), weight: '800' }],
+        { bg: V(lighten(brTint, 0.8), COLORS.card), edge: brTint },
+      );
       head.position.set(2, y + labelH / 2);
       content.addChild(head);
       const nodeCy = y + labelH + nodeH / 2;
@@ -507,7 +577,11 @@ export function createGenolab(ctx: UiContext): Room {
         const x2 = cxOf(b.col) - nodeW / 2;
         const owned = researchOwned(ctx.state, b.id);
         lines.moveTo(x1, nodeCy).lineTo(x2, nodeCy)
-          .stroke({ width: 3, color: owned ? COLORS.good : COLORS.cardEdge, alpha: 0.8 });
+          .stroke({
+            width: V(4, 3),
+            color: owned ? COLORS.good : V(lighten(brTint, 0.35), COLORS.cardEdge),
+            alpha: V(0.9, 0.8),
+          });
       }
       content.addChild(lines);
 
@@ -553,11 +627,11 @@ export function createGenolab(ctx: UiContext): Room {
       p.position.set(0, viewTop);
       shell.body.addChild(p);
       const cy = viewTop + viewH / 2;
-      const head = label(t('🧪 Исследования', '🧪 Research'), 18, COLORS.ink, '800');
+      const head = label(t('🧪 Исследования', '🧪 Research'), V(19, 18), V(INK, COLORS.ink), '800');
       head.position.set(viewW / 2, cy - 28);
-      const lock = label(t(`Откроются на уровне ${need} 🔒`, `Unlocks at level ${need} 🔒`), 15, COLORS.warn, '800');
+      const lock = label(t(`Откроются на уровне ${need} 🔒`, `Unlocks at level ${need} 🔒`), V(16, 15), V(shade(COLORS.warn, 0.72), COLORS.warn), '800');
       lock.position.set(viewW / 2, cy + 2);
-      const hint = label(t('Стол исследований открывает рецепты новых пород', 'The research bench unlocks recipes for new breeds'), 12, COLORS.inkSoft, '600');
+      const hint = label(t('Стол исследований открывает рецепты новых пород', 'The research bench unlocks recipes for new breeds'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
       hint.position.set(viewW / 2, cy + 28);
       shell.body.addChild(head, lock, hint);
       return;
@@ -569,15 +643,19 @@ export function createGenolab(ctx: UiContext): Room {
 
     // --- карточка стола ---
     const deskH = 158;
-    const desk = panel(viewW, deskH, COLORS.card, 16);
+    const desk = panel(viewW, deskH, V(lighten(COLORS.dna, 0.87), COLORS.card), 16);
+    if (VIVID) { // рамка цвета 🧬 и блик поверху: стол выглядит прибором, а не листом бумаги
+      desk.roundRect(0, 0, viewW, deskH, 16).stroke({ width: 3, color: COLORS.dna, alpha: 0.5 });
+      desk.roundRect(4, 4, viewW - 8, deskH * 0.34, 12).fill({ color: 0xffffff, alpha: 0.4 });
+    }
     desk.position.set(0, viewTop);
     shell.body.addChild(desk);
 
-    const title = label(t('🧪 Стол исследований', '🧪 Research bench'), 16, COLORS.ink, '800');
+    const title = label(t('🧪 Стол исследований', '🧪 Research bench'), V(17, 16), V(shade(COLORS.dna, 0.52), COLORS.ink), '800');
     title.anchor.set(0, 0.5);
     title.position.set(18, viewTop + 24);
     shell.body.addChild(title);
-    const sub = label(t('открывает случайный рецепт из достижимых (обе породы пары уже выведены)', 'unlocks a random recipe you can reach (both parent breeds already bred)'), 11.5, COLORS.inkSoft, '600');
+    const sub = label(t('открывает случайный рецепт из достижимых (обе породы пары уже выведены)', 'unlocks a random recipe you can reach (both parent breeds already bred)'), V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
     sub.anchor.set(0, 0.5);
     sub.position.set(18, viewTop + 44);
     shell.body.addChild(sub);
@@ -588,9 +666,15 @@ export function createGenolab(ctx: UiContext): Room {
       const barX = Math.round((viewW - barW) / 2);
       const barY = viewTop + 66;
       const barBg = new Graphics();
-      barBg.roundRect(barX, barY, barW, 12, 6).fill({ color: 0x000000, alpha: 0.08 });
+      if (VIVID) { // колба с «реактивом»: светлый фиолетовый жёлоб в рамке
+        barBg.roundRect(barX, barY, barW, BAR_H, BAR_H / 2)
+          .fill({ color: lighten(COLORS.dna, 0.84), alpha: 1 })
+          .stroke({ width: 2, color: COLORS.dna, alpha: 0.55 });
+      } else {
+        barBg.roundRect(barX, barY, barW, BAR_H, BAR_H / 2).fill({ color: 0x000000, alpha: 0.08 });
+      }
       recipeBar = new Graphics();
-      recipeTime = label('', 13, COLORS.ink, '700');
+      recipeTime = label('', V(14, 13), V(shade(COLORS.dna, 0.5), COLORS.ink), V('800', '700'));
       recipeTime.position.set(viewW / 2, barY + 24);
       recipeBarGeom = { x: barX, y: barY, w: barW };
       shell.body.addChild(barBg, recipeBar, recipeTime);
@@ -619,9 +703,9 @@ export function createGenolab(ctx: UiContext): Room {
       shell.body.addChild(adBtn, crBtn);
     } else if (pool.length === 0) {
       // пул пуст: исследовать нечего — кнопку прячем (грейс), подсказываем путь
-      const done = label(t('Все достижимые рецепты изучены ✅', 'Every reachable recipe is researched ✅'), 14, COLORS.good, '800');
+      const done = label(t('Все достижимые рецепты изучены ✅', 'Every reachable recipe is researched ✅'), V(15, 14), V(shade(COLORS.good, 0.62), COLORS.good), '800');
       done.position.set(viewW / 2, viewTop + 84);
-      const hint = label(t('выведи новые породы — пул исследований пополнится', 'breed new cats — the research pool will grow'), 12, COLORS.inkSoft, '600');
+      const hint = label(t('выведи новые породы — пул исследований пополнится', 'breed new cats — the research pool will grow'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
       hint.position.set(viewW / 2, viewTop + 108);
       shell.body.addChild(done, hint);
     } else {
@@ -633,15 +717,23 @@ export function createGenolab(ctx: UiContext): Room {
       const afford = ctx.state.coins >= price.coins && ctx.state.dna >= price.dna;
       const info = label(
         t(`в пуле: ${pool.length} · цена 💰 ${price.coins} + 🧬 ${price.dna} · ⏱ ${durText}`, `in the pool: ${pool.length} · price 💰 ${price.coins} + 🧬 ${price.dna} · ⏱ ${durText}`),
-        12.5, COLORS.ink, '700',
+        V(13.5, 12.5), V(INK, COLORS.ink), V('800', '700'),
       );
       info.position.set(viewW / 2, viewTop + 76);
+      if (VIVID) { // цена — на светлой плашке, а не «висит» на панели стола
+        const pw = info.width + 26, ph = info.height + 9;
+        const plate = new Graphics();
+        plate.roundRect(info.x - pw / 2, info.y - ph / 2, pw, ph, ph / 2)
+          .fill({ color: 0xffffff, alpha: 0.92 })
+          .stroke({ width: 1.5, color: COLORS.dna, alpha: 0.5 });
+        shell.body.addChild(plate);
+      }
       shell.body.addChild(info);
 
       const start = new Button({
         text: t('Исследовать рецепт 🧪', 'Research a recipe 🧪'), w: Math.min(320, viewW - 48), h: 42,
-        color: afford ? COLORS.dna : COLORS.cardEdge,
-        textColor: afford ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+        color: afford ? V(shade(COLORS.dna, 0.86), COLORS.dna) : COLORS.cardEdge,
+        textColor: afford ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 15,
       });
       start.enabled = afford;
       start.position.set(viewW / 2, viewTop + 118);
@@ -672,7 +764,10 @@ export function createGenolab(ctx: UiContext): Room {
     });
     leftCol.reverse();
     rightCol.reverse();
-    const head = pillRow([{ text: t(`Открытые рецепты · ${totalOpened}`, `Known recipes · ${totalOpened}`), size: 13, color: COLORS.ink, weight: '800' }]);
+    const head = pillRow(
+      [{ text: t(`Открытые рецепты · ${totalOpened}`, `Known recipes · ${totalOpened}`), size: V(13.5, 13), color: V(shade(COLORS.dna, 0.5), COLORS.ink), weight: '800' }],
+      { bg: V(lighten(COLORS.dna, 0.8), COLORS.card), edge: COLORS.dna },
+    );
     head.position.set((viewW - head.width) / 2, listTop + 10);
     shell.body.addChild(head);
 
@@ -688,7 +783,7 @@ export function createGenolab(ctx: UiContext): Room {
 
     let y = 4;
     if (totalOpened === 0) {
-      const empty = label(t('пока пусто — исследуй первый рецепт', 'empty so far — research your first recipe'), 12, COLORS.inkSoft, '600');
+      const empty = label(t('пока пусто — исследуй первый рецепт', 'empty so far — research your first recipe'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
       empty.anchor.set(0, 0.5);
       empty.position.set(6, y + 14);
       content.addChild(empty);
@@ -700,14 +795,18 @@ export function createGenolab(ctx: UiContext): Room {
     const rowH = 48;
     const placeCard = (r: Recipe, x: number, cardY: number): void => {
       const card = new Container();
-      card.addChild(panel(colW, rowH - 6, COLORS.card, 10));
+      const tc = TIER_COLOR[tierOfBreed(r.result)];
+      const cardBg = panel(colW, rowH - 6, V(lighten(tc, 0.86), COLORS.card), 10);
+      if (VIVID) cardBg.roundRect(0, 0, colW, rowH - 6, 10).stroke({ width: 2, color: tc, alpha: 0.75 });
+      card.addChild(cardBg);
       // имя породы слева (цвет её тира), статус «выведена/силуэт» — справа, на краю блока
-      const name = label(`📜 ${breedName(r.result)}`, 14, TIER_COLOR[tierOfBreed(r.result)], '800');
+      const name = label(`📜 ${breedName(r.result)}`, V(14.5, 14), V(shade(tc, 0.62), tc), '800');
       name.anchor.set(0, 0.5);
       name.position.set(12, (rowH - 6) / 2);
       card.addChild(name);
-      const st = ctx.state.discoveredBreeds.includes(r.result) ? t('✅ выведена', '✅ bred') : t('силуэт в Котодексе', 'silhouette in the Catdex');
-      const stT = label(st, 10.5, COLORS.inkSoft, '600');
+      const bred = ctx.state.discoveredBreeds.includes(r.result);
+      const st = bred ? t('✅ выведена', '✅ bred') : t('силуэт в Котодексе', 'silhouette in the Catdex');
+      const stT = label(st, V(11, 10.5), V(bred ? shade(COLORS.good, 0.6) : INK_SOFT, COLORS.inkSoft), V('700', '600'));
       stT.anchor.set(1, 0.5);
       stT.position.set(colW - 12, (rowH - 6) / 2);
       card.addChild(stT);
@@ -749,8 +848,13 @@ export function createGenolab(ctx: UiContext): Room {
     const remain = Math.max(0, rr.readyAt - now);
     const prog = Math.max(0, Math.min(1, 1 - remain / total));
     recipeBar.clear();
-    recipeBar.roundRect(recipeBarGeom.x, recipeBarGeom.y, Math.max(2, recipeBarGeom.w * prog), 12, 6)
-      .fill(remain <= 0 ? COLORS.good : COLORS.dna);
+    const fillW = Math.max(2, recipeBarGeom.w * prog);
+    recipeBar.roundRect(recipeBarGeom.x, recipeBarGeom.y, fillW, BAR_H, BAR_H / 2)
+      .fill(remain <= 0 ? COLORS.good : V(shade(COLORS.dna, 0.85), COLORS.dna));
+    if (VIVID) { // блик по налитой части — реактив «блестит»
+      recipeBar.roundRect(recipeBarGeom.x + 2, recipeBarGeom.y + 2, Math.max(1, fillW - 4), BAR_H * 0.34, BAR_H * 0.17)
+        .fill({ color: 0xffffff, alpha: 0.4 });
+    }
     recipeTime.text = remain <= 0 ? t('Готово! 📜', 'Done! 📜') : mmss(remain);
   }
 

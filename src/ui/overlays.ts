@@ -32,9 +32,14 @@ import {
 import { shopItems, buyPack } from '../platform/payments.js';
 import { showRewarded } from '../platform/ads.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, tierUpTarget, dormantTraits, traitTag } from '../genetics/index.js';
+import type { RarityTier } from '../genetics/index.js';
 import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
 import type { UiContext } from './context.js';
-import { Button, centerRow, COLORS, FONT, fmt, label, panel, stackWords, stars, TIERS, tierName, TIER_COLOR, UI_SCALE } from './theme.js';
+import {
+  Button, centerRow, COLORS, FONT, fmt, INK, INK_SOFT, label, panel, stackWords, stars,
+  TIERS, tierName, TIER_COLOR, UI_SCALE, V, VIVID,
+} from './theme.js';
+import { darken, lighten } from '../render/palette.js';
 import { describeCat, catTraits, describeReq, describeRecipe, pct } from './describe.js';
 import { catSprite, breedThumbTexture } from './catTextures.js';
 import { breedFaceTexture } from './breedFace.js';
@@ -147,6 +152,33 @@ function askBreedSpawn(spawn: (breedKey: string) => string): void {
   window.addEventListener('keydown', function esc(e) {
     if (e.key === 'Escape') { finish(); window.removeEventListener('keydown', esc); }
   });
+}
+
+/**
+ * Награда цветными сегментами (💰/💎/🧬/⭐) — каждая валюта своим цветом, чтобы
+ * строка читалась одним взглядом. Крепится за ЛЕВЫЙ край, центр по вертикали.
+ */
+function rewardRow(r: { coins: number; crystals: number; dna: number; reputation: number }, size = 14): Container {
+  const c = new Container();
+  const segs: [string, number][] = [];
+  if (r.coins) segs.push([`💰${r.coins}`, V(darken(COLORS.coins, 0.32), COLORS.inkSoft)]);
+  if (r.crystals) segs.push([`💎${r.crystals}`, V(darken(COLORS.crystals, 0.3), COLORS.inkSoft)]);
+  if (r.dna) segs.push([`🧬${r.dna}`, V(darken(COLORS.dna, 0.3), COLORS.inkSoft)]);
+  if (r.reputation) segs.push([`⭐${r.reputation}`, V(darken(COLORS.warn, 0.38), COLORS.inkSoft)]);
+  let x = 0;
+  for (const [text, color] of segs) {
+    const seg = label(text, size, color, '800');
+    seg.anchor.set(0, 0.5);
+    seg.position.set(x, 0);
+    c.addChild(seg);
+    x += seg.width + 10;
+  }
+  return c;
+}
+
+/** Тир, которым «пахнет» заказ: порода → её тир, «не ниже X» → сам X. */
+function orderTier(req: { breed?: string; minRarity?: RarityTier }): RarityTier {
+  return req.breed ? tierOfBreed(req.breed) : req.minRarity ?? 'common';
 }
 
 function rewardText(r: { coins: number; crystals: number; dna: number; reputation: number }): string {
@@ -1273,7 +1305,7 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   const root = new Container();
   const tierCol = TIER_COLOR[cat.rarityTier];
 
-  const title = label(stackWords(breedName(cat.breed)), 19, tierCol, '800');
+  const title = label(stackWords(breedName(cat.breed)), V(20, 19), tierCol, '800');
   title.anchor.set(0.5, 0);
   title.position.set(W / 2, 16);
 
@@ -1282,15 +1314,21 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   st.position.set(W / 2, y); y += 22;
   const tierT = label(t(`🍼 котёнок · ${tierName(cat.rarityTier)}`, `🍼 kitten · ${tierName(cat.rarityTier)}`), 13, tierCol, '800');
   tierT.position.set(W / 2, y); y += 22;
-  const hint = label(t('пол и имя проявятся, когда подрастёт 🌱', 'sex and name appear once it grows up 🌱'), 12, COLORS.inkSoft, '600');
+  const hint = label(t('пол и имя проявятся, когда подрастёт 🌱', 'sex and name appear once it grows up 🌱'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
   hint.position.set(W / 2, y); y += 24;
 
   // шкала взросления (заполняется в реальном времени)
   const barW = W - 60, barH = 14, barX = (W - barW) / 2, barY = y;
   const barBg = new Graphics();
-  barBg.roundRect(barX, barY, barW, barH, 7).fill({ color: 0x000000, alpha: 0.08 });
+  if (VIVID) { // светлый жёлоб в рамке: видно и пустую шкалу роста
+    barBg.roundRect(barX, barY, barW, barH, 7)
+      .fill({ color: 0xffffff, alpha: 0.95 })
+      .stroke({ width: 2, color: COLORS.primary, alpha: 0.5 });
+  } else {
+    barBg.roundRect(barX, barY, barW, barH, 7).fill({ color: 0x000000, alpha: 0.08 });
+  }
   const bar = new Graphics();
-  const timeT = label('', 13, COLORS.ink, '700');
+  const timeT = label('', V(13.5, 13), V(INK, COLORS.ink), V('800', '700'));
   timeT.position.set(W / 2, barY + barH + 16);
   y = barY + barH + 34;
 
@@ -1326,7 +1364,9 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   closeBtn.onTap = close;
   y += 50;
 
-  root.addChild(panel(W, y, COLORS.hud, 18), title, st, tierT, hint, barBg, bar, timeT, ...controls, closeBtn);
+  const kitBg = panel(W, y, V(lighten(tierCol, 0.92), COLORS.hud), 18);
+  if (VIVID) kitBg.roundRect(0, 0, W, y, 18).stroke({ width: 3, color: tierCol, alpha: 0.5 });
+  root.addChild(kitBg, title, st, tierT, hint, barBg, bar, timeT, ...controls, closeBtn);
 
   const mmss = (ms: number): string => {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -1335,7 +1375,9 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   const redraw = (): void => {
     const p = growthProgress(cat, ctx.now());
     bar.clear();
-    bar.roundRect(barX, barY, Math.max(2, barW * p), barH, 7).fill(COLORS.primary);
+    const bw = Math.max(2, barW * p);
+    bar.roundRect(barX, barY, bw, barH, 7).fill(COLORS.primary);
+    if (VIVID) bar.roundRect(barX + 2, barY + 2, Math.max(1, bw - 4), barH * 0.34, 4).fill({ color: 0xffffff, alpha: 0.38 });
     timeT.text = t(`до взросления: ${mmss(growthRemainingMs(cat, ctx.now()))}`, `grows up in: ${mmss(growthRemainingMs(cat, ctx.now()))}`);
   };
   redraw();
@@ -2107,7 +2149,15 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   const traits = catTraits(cat);
   // +22 — запас на перенос длинной строки «признаки: …» (визитка породы)
   const H = 150 + traits.length * 20 + 22 + (busy ? 28 : 0) + 4 * 54;
-  root.addChild(panel(W, H, COLORS.hud, 18));
+  // Подложка карточки: в «нарядном» виде — лёгкий тон тира кота и рамка его
+  // цветом, так редкость видна раньше, чем прочитано название породы.
+  const tierCol = TIER_COLOR[cat.rarityTier];
+  const cardBg = (h: number): Graphics => {
+    const g = panel(W, h, V(lighten(tierCol, 0.92), COLORS.hud), 18);
+    if (VIVID) g.roundRect(0, 0, W, h, 18).stroke({ width: 3, color: tierCol, alpha: 0.5 });
+    return g;
+  };
+  root.addChild(cardBg(H));
 
   const named = cat.name?.trim();
   // Заголовок переносится по словам и не вылезает за карточку (длинные названия
@@ -2115,8 +2165,8 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   const title = new Text({
     text: named ? stackWords(named) : describeCat(cat),
     style: {
-      fontFamily: FONT, fontSize: 17, fontWeight: '800',
-      fill: named ? TIER_COLOR[cat.rarityTier] : COLORS.ink,
+      fontFamily: FONT, fontSize: V(18, 17), fontWeight: '800',
+      fill: named ? tierCol : V(darken(tierCol, 0.45), COLORS.ink),
       align: 'center', wordWrap: true, wordWrapWidth: W - 48, lineHeight: 21,
     },
   });
@@ -2126,7 +2176,7 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
 
   let y = 18 + title.height + 10;
   if (named) {
-    const sub = label(describeCat(cat), 12, COLORS.inkSoft, '700');
+    const sub = label(describeCat(cat), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), '700');
     sub.position.set(W / 2, y);
     root.addChild(sub);
     y += 18;
@@ -2144,11 +2194,19 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   const left = breedsLeft(cat);
   const used = Math.max(0, total - left);
   const heartsStr = total > 0 ? '🖤'.repeat(used) + '❤️'.repeat(left) : '∅';
-  const ageLabel = label(t('Здоровье ', 'Health ') + heartsStr, 14, COLORS.inkSoft, '700');
+  const ageLabel = label(t('Здоровье ', 'Health ') + heartsStr, V(14.5, 14), V(INK, COLORS.inkSoft), '700');
   ageLabel.position.set(W / 2, y);
+  if (VIVID) { // сердца на светлой плашке — запас вязок не теряется среди строк облика
+    const pw = ageLabel.width + 22, ph = ageLabel.height + 8;
+    const plate = new Graphics();
+    plate.roundRect(W / 2 - pw / 2, y - ph / 2, pw, ph, ph / 2)
+      .fill({ color: 0xffffff, alpha: 0.9 })
+      .stroke({ width: 1.5, color: tierCol, alpha: 0.45 });
+    root.addChild(plate);
+  }
   root.addChild(ageLabel);
   if (isOld(cat)) {
-    const oldT = label(isSterile(cat) ? t('Бесплодный', 'Sterile') : t('Старый', 'Old'), 12, COLORS.warn, '800');
+    const oldT = label(isSterile(cat) ? t('Бесплодный', 'Sterile') : t('Старый', 'Old'), 12, V(darken(COLORS.warn, 0.35), COLORS.warn), '800');
     oldT.anchor.set(0, 0.5);
     oldT.position.set(W / 2 + ageLabel.width / 2 + 8, y);
     root.addChild(oldT);
@@ -2156,11 +2214,12 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   y += 26;
 
   // строки облика: перенос по словам, чтобы текст не вылезал за край меню
+  const traitsTop = y;
   for (const line of traits) {
     const t = new Text({
       text: line,
       style: {
-        fontFamily: FONT, fontSize: 13, fontWeight: '600', fill: COLORS.inkSoft,
+        fontFamily: FONT, fontSize: V(13.5, 13), fontWeight: V('700', '600'), fill: V(INK_SOFT, COLORS.inkSoft),
         wordWrap: true, wordWrapWidth: W - 56, lineHeight: 18, align: 'left',
       },
     });
@@ -2169,10 +2228,15 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
     root.addChild(t);
     y += t.height + 4;
   }
+  if (VIVID && traits.length > 0) { // облик — отдельным светлым блоком (подложка под текст)
+    const bg = new Graphics();
+    bg.roundRect(20, traitsTop - 8, W - 40, y - traitsTop + 10, 12).fill({ color: 0xffffff, alpha: 0.6 });
+    root.addChildAt(bg, 1);
+  }
   y += 10;
 
   if (busy) {
-    const note = label(t('💤 кот занят в вязке', '💤 the cat is busy breeding'), 14, COLORS.warn, '700');
+    const note = label(t('💤 кот занят в вязке', '💤 the cat is busy breeding'), 14, V(darken(COLORS.warn, 0.35), COLORS.warn), '700');
     note.position.set(W / 2, y);
     root.addChild(note);
     y += 26;
@@ -2249,7 +2313,7 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
 
   // фактическая высота могла отличаться — подгоним подложку (перерисуем)
   root.removeChildAt(0);
-  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  root.addChildAt(cardBg(y), 0);
   return root;
 }
 
@@ -2766,13 +2830,13 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 620;
   const root = new Container();
 
-  const title = label(t('📋 Заказы клиентов', '📋 Client orders'), 20, COLORS.ink, '800');
+  const title = label(t('📋 Заказы клиентов', '📋 Client orders'), V(21, 20), V(INK, COLORS.ink), '800');
   title.position.set(W / 2, 26);
 
   const cat = basketCat(ctx.state);
   const basket = label(
     cat ? t(`🧺 В корзине: ${cat.name?.trim() || describeCat(cat)}`, `🧺 In the basket: ${cat.name?.trim() || describeCat(cat)}`) : t('🧺 Корзина пуста — перетащи кота в корзину под кнопкой 📋 в Питомнике', '🧺 The basket is empty — drag a cat into the basket under the 📋 button in the Cattery'),
-    13, cat ? COLORS.ink : COLORS.inkSoft, '800',
+    V(13.5, 13), cat ? V(INK, COLORS.ink) : V(INK_SOFT, COLORS.inkSoft), '800',
   );
   // Английские строки шапки длиннее русских, а на мобильном масштабе (UI_SCALE)
   // ещё и крупнее — в панель фиксированной ширины они не влезали и вылезали
@@ -2792,14 +2856,18 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const fmtMin = (ms: number): string => t(`${Math.max(1, Math.ceil(ms / 60_000))} мин`, `${Math.max(1, Math.ceil(ms / 60_000))} min`);
   const adHelp = label(
     t('Не выполнил за 6 ч — заказ сменится сам. Просмотр рекламы обновляет заказ досрочно (раз в час на заказ).', 'Not done within 6 h and the order changes by itself. Watching an ad refreshes an order early (once per hour per order).'),
-    11.5, COLORS.inkSoft, '600');
+    V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
   adHelp.style.wordWrap = true;
   adHelp.style.wordWrapWidth = W - 48;
   adHelp.anchor.set(0.5, 0);
   adHelp.position.set(W / 2, basket.y + basket.height + 6);
 
-  const rowH = 100;
+  // Карточка заказа поделена на две колонки: СЛЕВА — кто нужен и что за это дают,
+  // СПРАВА — таймер жизни, кнопка «Выполнить» и 📺-обновление. Раньше эти четыре
+  // элемента стояли крест-накрест по углам, и взгляд метался по карточке.
+  const rowH = V(108, 100);
   const cardW = W - 32;
+  const COL_W = V(196, 178);              // правая колонка (обе кнопки во всю её ширину)
   const orders = ctx.state.orders;
   let y = adHelp.y + adHelp.height + 10;
   const rows = new Container();
@@ -2808,33 +2876,58 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     const row = new Container();
     const fits = !!cat && matchesOrder(order, cat);
     const busy = !!cat && isBusy(ctx.state, cat.id);
-    row.addChild(panel(cardW, rowH - 10, COLORS.card, 12));
+    const ch = rowH - 10;
+    const tc = TIER_COLOR[orderTier(order.req)]; // карточка носит цвет тира заказа
+    const ready = fits && !busy;
+    const card = panel(cardW, ch, V(lighten(tc, 0.88), COLORS.card), 12);
+    if (VIVID) {
+      card.roundRect(0, 0, cardW, ch, 12)
+        .stroke({ width: ready ? 3.5 : 2.5, color: ready ? COLORS.good : tc, alpha: 0.8 });
+      card.roundRect(4, 4, cardW - 8, ch * 0.32, 9).fill({ color: 0xffffff, alpha: 0.35 });
+    }
+    row.addChild(card);
 
-    const req = label(`"${describeReq(order.req)}"`, 16, COLORS.ink, '800');
-    req.anchor.set(0, 0.5);
-    req.position.set(16, 22);
+    const colCx = cardW - 16 - COL_W / 2;   // центр правой колонки
+    const leftW = colCx - COL_W / 2 - 28;   // сколько остаётся тексту слева
+
+    const req = new Text({
+      text: `"${describeReq(order.req)}"`,
+      style: {
+        fontFamily: FONT, fontSize: V(16.5, 16), fontWeight: '800',
+        fill: V(darken(tc, 0.55), COLORS.ink),
+        wordWrap: true, wordWrapWidth: leftW, lineHeight: V(21, 20),
+      },
+    });
+    req.anchor.set(0, 0);
+    req.position.set(16, V(14, 12));
     row.addChild(req);
 
-    const rew = label(t('Награда: ', 'Reward: ') + rewardText(order.reward), 13, COLORS.inkSoft, '700');
-    rew.anchor.set(0, 0.5);
-    rew.position.set(16, 46);
-    row.addChild(rew);
+    if (VIVID) {
+      const rew = rewardRow(order.reward, 14.5);
+      rew.position.set(16, Math.max(req.y + req.height + 14, ch - 26));
+      row.addChild(rew);
+    } else {
+      const rew = label(t('Награда: ', 'Reward: ') + rewardText(order.reward), 13, COLORS.inkSoft, '700');
+      rew.anchor.set(0, 0.5);
+      rew.position.set(16, 46);
+      row.addChild(rew);
+    }
 
-    // таймер жизни — текстом в правом нижнем углу (под кнопкой «Выполнить»)
-    const timer = label(t(`⏳ сменится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), 11.5, COLORS.inkSoft, '600');
+    // таймер жизни — над кнопками, в правой колонке
+    const timer = label(t(`⏳ сменится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
     timer.anchor.set(1, 0.5);
-    timer.position.set(cardW - 16, 70);
+    timer.position.set(cardW - 16, V(17, 70));
     row.addChild(timer);
 
-    // главная кнопка «Выполнить» — правый верхний угол карточки
+    // главная кнопка «Выполнить» — в правой колонке, под таймером
     const btnText = !cat ? t('нужен кот', 'need a cat') : busy ? t('кот занят', 'cat is busy') : fits ? t('Выполнить', 'Complete') : t('не подходит', 'does not match');
     const btn = new Button({
-      text: btnText, w: 150, h: 40,
-      color: fits && !busy ? COLORS.primary : COLORS.cardEdge,
-      textColor: fits && !busy ? 0xffffff : COLORS.inkSoft, fontSize: 15,
+      text: btnText, w: V(COL_W, 150), h: V(36, 40),
+      color: ready ? V(COLORS.good, COLORS.primary) : COLORS.cardEdge,
+      textColor: ready ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 15,
     });
-    btn.enabled = fits && !busy;
-    btn.position.set(cardW - 16 - 75, 26);
+    btn.enabled = ready;
+    btn.position.set(V(colCx, cardW - 16 - 75), V(48, 26));
     btn.onTap = () => {
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) {
@@ -2844,16 +2937,17 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     };
     row.addChild(btn);
 
-    // 📺-обновление — левый нижний угол, по диагонали от «Выполнить»: промахнуться нельзя.
+    // 📺-обновление — под «Выполнить», в той же колонке.
     // Кулдаун свой у каждого заказа, поэтому состояние кнопки считается по строке.
     const adAvail = canAdRefreshOrder(order, ctx.now());
     const refBtn = new Button({
-      text: adAvail ? t('📺 Реклама · обновить', '📺 Ad · refresh') : `⏳ ${fmtMin(msUntilAdRefresh(order, ctx.now()))}`, w: 178, h: 28,
-      color: adAvail ? COLORS.secondary : COLORS.cardEdge,
-      textColor: adAvail ? 0xffffff : COLORS.inkSoft, fontSize: 11,
+      text: adAvail ? t('📺 Реклама · обновить', '📺 Ad · refresh') : `⏳ ${fmtMin(msUntilAdRefresh(order, ctx.now()))}`,
+      w: V(COL_W, 178), h: V(27, 28),
+      color: adAvail ? V(darken(COLORS.secondary, 0.1), COLORS.secondary) : COLORS.cardEdge,
+      textColor: adAvail ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 11,
     });
     refBtn.enabled = adAvail;
-    refBtn.position.set(16 + 89, 70); // левый край вровень с текстом заказа (отступ 16)
+    refBtn.position.set(V(colCx, 16 + 89), V(80, 70));
     refBtn.onTap = () => {
       void showRewarded().then((watched) => {
         if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
