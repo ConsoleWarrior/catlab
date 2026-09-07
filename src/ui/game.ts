@@ -59,7 +59,7 @@ import {
 import { canOfferReview, requestReview } from '../platform/ysdk.js';
 import { loadSaveCandidates, writeSave, writeSaveAwait, adoptLatePlayer, resetSave } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
-import { setAdPauseHandler, adRecently } from '../platform/ads.js';
+import { setAdPauseHandler, adRecently, interstitialReady, showInterstitial } from '../platform/ads.js';
 import { initLang, t, onLangChange, setLang } from '../i18n.js';
 
 // --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
@@ -206,6 +206,9 @@ export class Game implements UiContext {
   // «Пик радости» случился — можно предложить оценить игру. Показывается в update,
   // когда экран свободен от всех окон и рядом нет рекламы (см. wantReview/askReview).
   private pendingReview = false;
+  // Текущий оверлей — крупная панель, закрытие которой считается неигровым
+  // действием: после него площадка разрешает межстраничную (см. closeOverlay).
+  private overlayAdOnClose = false;
   private toastT: Text | null = null;
   private toastUntil = 0;
 
@@ -577,6 +580,8 @@ export class Game implements UiContext {
         },
         openCryoMenu: (i = 0) => { const c = this.state.cryo[i]; if (c) this.openCryoMenu(c); },
         tutor: () => this.devToggleTutorial(), // ⚠️ ВРЕМЕННОЕ DEV: прогон обучения из консоли
+        ad: () => showInterstitial(),          // DEV: межстраничная в обход замка (проверка показа)
+        adReady: () => interstitialReady(),    // DEV: снят ли замок 15 минут прямо сейчас
         save: () => this.save(),
       };
     }
@@ -951,7 +956,7 @@ export class Game implements UiContext {
 
   openBreedCard(breedKey: string): void {
     const close = (): void => this.closeOverlay();
-    this.showOverlay(buildBreedCard(this, breedKey, close));
+    this.showOverlay(buildBreedCard(this, breedKey, close), { adOnClose: true });
   }
 
   openRecipeReveal(recipe: Recipe): void {
@@ -986,7 +991,7 @@ export class Game implements UiContext {
     // шаг обучения «загляни на доску заказов» — открытие панели состояние не меняет
     if (markTutorialSeen(this.state, 'orders')) this.save();
     const close = (): void => this.closeOverlay();
-    this.showOverlay(buildOrdersPanel(this, close));
+    this.showOverlay(buildOrdersPanel(this, close), { adOnClose: true });
   }
 
   /** Подтверждение 📺-обновления заказа: и отмена, и итог возвращают на доску. */
@@ -1618,6 +1623,36 @@ export class Game implements UiContext {
     this.showOverlay(buildLevelUpPanel(this, info, () => this.closeOverlay()));
   }
 
+  /**
+   * Межстраничная реклама на неигровом действии игрока (п. 4.4): кнопки
+   * навигации, вкладки Генолаба, закрытие панели заказов и карточки породы.
+   * Вызывать СРАЗУ в обработчике действия — между действием и роликом не должно
+   * быть заметной паузы. Показывать или нет, решает замок в platform/ads.ts
+   * (интервал 15 минут, разгон сессии, тишина после rewarded).
+   */
+  tryInterstitial(): void {
+    if (tutorialActive(this.state)) return;    // новичка на обучении не трогаем
+    if (this.overlayOpen) return;              // поверх открытого окна — никогда
+    // и не вместо наших же панелей, которые ждут своей очереди (уровень, финалы)
+    if (this.pendingOffline || this.pendingLevelUp || this.pendingTutorDone
+      || this.pendingAllBreeds || this.pendingReview) return;
+    if (!interstitialReady()) return;
+    void showInterstitial();
+  }
+
+  /**
+   * Переход в комнату по кнопке навигации (точка/стрелка внизу). Отдельно от
+   * goRoom: свайп по игровому полю и программные переходы рекламы не дают —
+   * площадка считает случайные клики по ролику фродом, а осознанный тап по
+   * кнопке интерфейса это ровно тот «неигровой» момент, который она разрешает.
+   */
+  private navRoom(index: number): void {
+    const to = Math.max(0, Math.min(this.rooms.length - 1, index));
+    const moved = to !== this.currentRoom;
+    this.goRoom(to);                 // комната меняется сразу, ролик приходит поверх неё
+    if (moved) this.tryInterstitial();
+  }
+
   private buildNav(): void {
     this.clearNode(this.nav);
     this.dots = [];
@@ -1637,7 +1672,7 @@ export class Game implements UiContext {
       // вверх не вылезает за низ контента (верх зоны = -14, как раньше), рост зоны
       // идёт вширь и вниз в леттербокс — чтобы не перехватывать тапы по контенту.
       d.hitArea = new Rectangle(-24, -14, 48, 30);
-      d.on('pointertap', () => this.goRoom(i));
+      d.on('pointertap', () => this.navRoom(i));
       this.nav.addChild(d);
       this.dots.push(d);
     }
@@ -1652,10 +1687,10 @@ export class Game implements UiContext {
     const rightX = Math.min(this.roomW - aw / 2 - 4, startX + totalW + gap + aw / 2);
     const left = new Button({ text: '‹', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     left.position.set(leftX, y);
-    left.onTap = () => this.goRoom(this.currentRoom - 1);
+    left.onTap = () => this.navRoom(this.currentRoom - 1);
     const right = new Button({ text: '›', w: aw, h: ah, color: COLORS.hud, textColor: COLORS.ink, fontSize: 25 });
     right.position.set(rightX, y);
-    right.onTap = () => this.goRoom(this.currentRoom + 1);
+    right.onTap = () => this.navRoom(this.currentRoom + 1);
     this.nav.addChild(left, right);
   }
 
@@ -1696,8 +1731,9 @@ export class Game implements UiContext {
 
   // --- оверлеи ---
 
-  private showOverlay(content: Container): void {
+  private showOverlay(content: Container, opts?: { adOnClose?: boolean }): void {
     this.closeOverlay();
+    this.overlayAdOnClose = opts?.adOnClose ?? false;
     const dim = new Graphics();
     dim.eventMode = 'static';
     dim.on('pointertap', () => this.closeOverlay());
@@ -1729,6 +1765,8 @@ export class Game implements UiContext {
   }
 
   private closeOverlay(): void {
+    const adOnClose = this.overlayAdOnClose;
+    this.overlayAdOnClose = false;
     this.clearNode(this.overlayLayer);
     this.overlayDim = null;
     this.overlayContent = null;
@@ -1739,6 +1777,11 @@ export class Game implements UiContext {
       this.catInfoFocus.frozen = false;
       this.catInfoFocus.iconUntil = this.now() + 3000;
     }
+    // Панель закрылась — момент для межстраничной, но только если игрок реально
+    // вышел в комнату. Панель часто закрывают, чтобы тут же открыть другую
+    // (📺-обновление заказа, перерисовка доски после выполнения) — там ролик
+    // был бы прямо посреди действия, поэтому решаем на следующем тике.
+    if (adOnClose) setTimeout(() => { if (!this.overlayOpen) this.tryInterstitial(); }, 0);
   }
 
   private get overlayOpen(): boolean { return this.overlayLayer.children.length > 0; }

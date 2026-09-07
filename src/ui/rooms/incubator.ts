@@ -631,7 +631,7 @@ export function createIncubator(ctx: UiContext): Room {
         if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now(), ctx.rng);
-          if (r.ok) { ctx.clearSelection(); ctx.commit(); ctx.toast(t('Вязка началась 🐾', 'Breeding has started 🐾')); }
+          if (r.ok) { ctx.clearSelection(); ctx.commit(); sfxEvent('breed'); ctx.toast(t('Вязка началась 🐾', 'Breeding has started 🐾')); }
           else ctx.toast(r.reason);
         };
         const pv = new Button({ text: '🔮', w: pvW, h: 38, color: COLORS.secondary, fontSize: 17 });

@@ -149,7 +149,13 @@ export function createGenolab(ctx: UiContext): Room {
         textColor: active ? 0xffffff : V(INK, COLORS.ink), fontSize: 15.5,
       });
       b.position.set(bw / 2 + i * (bw + gap), 21);
-      b.onTap = () => { section = d.id; remembered.section = d.id; refresh(); };
+      b.onTap = () => {
+        const moved = d.id !== section;
+        section = d.id; remembered.section = d.id; refresh();
+        // тап по вкладке — неигровое действие (аналог кнопки «Магазин» в примерах
+        // площадки): ролик приходит поверх уже переключённой вкладки
+        if (moved) ctx.tryInterstitial();
+      };
       c.addChild(b);
       // колба с результатом ждёт вскрытия — красная точка на вкладке, чтобы её
       // не пришлось искать (какой это рецепт, метка, разумеется, не выдаёт)

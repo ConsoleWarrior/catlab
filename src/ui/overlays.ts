@@ -34,6 +34,7 @@ import { showRewarded } from '../platform/ads.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, tierUpTarget, dormantTraits, traitTag } from '../genetics/index.js';
 import type { RarityTier, Recipe } from '../genetics/index.js';
 import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
+import { DEVTOOLS } from './devTools.js';
 import type { UiContext } from './context.js';
 import {
   Button, centerRow, COLORS, FONT, fmt, INK, INK_SOFT, label, panel, stackWords, stars,
@@ -194,6 +195,19 @@ function rewardText(r: { coins: number; crystals: number; dna: number; reputatio
 // пошаговое обучение (src/ui/tutorial.ts) и справки по комнатам (src/ui/roomHelp.ts).
 
 /**
+ * Чем ещё, кроме «отпустил палец», заканчивается перетаскивание ползунка.
+ *
+ * Касание забирает себе система: жест «назад» от края экрана (а тянуть громкость
+ * в ноль — это как раз к левому краю), второй палец, шторка уведомлений. Тогда
+ * браузер шлёт pointercancel/touchcancel, а Pixi таких событий не слушает вовсе
+ * (EventSystem подписан только на pointerdown/move/up и touchstart/move/end) —
+ * значит «отпускания» не придёт никогда. Без этой страховки перетаскивание не
+ * заканчивалось, и следующий тап — хоть по «Готово» — ставил громкость по своему
+ * x. Отсюда и был баг «убавил до нуля, а звук остался».
+ */
+const DRAG_END = ['pointercancel', 'touchcancel', 'pointerup', 'touchend', 'blur'] as const;
+
+/**
  * Горизонтальный ползунок 0..1 на Pixi. Перетаскивание отслеживается на stage,
  * поэтому не срывается, если палец/курсор уходит за пределы кнопки. onChange —
  * в реальном времени во время перетаскивания; onCommit — по отпусканию.
@@ -232,6 +246,7 @@ function slider(
   c.hitArea = new Rectangle(0, 0, trackW, H);
 
   const applyAt = (global: Point): void => {
+    if (c.destroyed) return; // панель уже закрыли — двигать нечего
     const local = c.toLocal(global);
     value = Math.min(1, Math.max(0, (local.x - x0) / span));
     draw();
@@ -241,15 +256,20 @@ function slider(
   c.on('pointerdown', (e: FederatedPointerEvent) => {
     applyAt(e.global);
     const move = (ev: FederatedPointerEvent): void => applyAt(ev.global);
+    let ended = false;
     const up = (): void => {
+      if (ended) return; // концов у перетаскивания много, конец — один
+      ended = true;
       app.stage.off('pointermove', move);
       app.stage.off('pointerup', up);
       app.stage.off('pointerupoutside', up);
+      DRAG_END.forEach((n) => window.removeEventListener(n, up, true));
       onCommit?.(value);
     };
     app.stage.on('pointermove', move);
     app.stage.on('pointerup', up);
     app.stage.on('pointerupoutside', up);
+    DRAG_END.forEach((n) => window.addEventListener(n, up, true));
   });
 
   return c;
@@ -431,19 +451,22 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   extra.push(privacyBtn);
   y += 52;
 
-  // Сброс прогресса. Кнопка нарочно неприметная (цвет карточки, не акцент) и
-  // ведёт в отдельное подтверждение — случайный тап в настройках не должен
-  // стирать партию. Само действие обещано игроку в политике (п. 3.5): «прогресс
-  // можно удалить», и это самый честный способ его сдержать, не заставляя
-  // человека чистить браузер.
-  const resetBtn = new Button({
-    text: t('🗑 Сбросить прогресс', '🗑 Reset progress'),
-    w: W - pad * 2, h: 42, color: COLORS.card, textColor: COLORS.inkSoft, fontSize: 14,
-  });
-  resetBtn.position.set(W / 2, y + 21);
-  resetBtn.onTap = () => ctx.openResetConfirm();
-  extra.push(resetBtn);
-  y += 52;
+  // Сброс прогресса — ТОЛЬКО в dev-сборке (DEVTOOLS): нужен для прогона обучения
+  // и проверок с нуля. В релизе кнопки нет — слишком дорогая ошибка в один тап,
+  // а политика (п. 3.5) обещает удаление прогресса через очистку данных сайта и
+  // настройки аккаунта платформы, а не через кнопку в игре.
+  // Кнопка нарочно неприметная (цвет карточки, не акцент) и ведёт в отдельное
+  // подтверждение.
+  if (DEVTOOLS) {
+    const resetBtn = new Button({
+      text: t('🗑 Сбросить прогресс', '🗑 Reset progress'),
+      w: W - pad * 2, h: 42, color: COLORS.card, textColor: COLORS.inkSoft, fontSize: 14,
+    });
+    resetBtn.position.set(W / 2, y + 21);
+    resetBtn.onTap = () => ctx.openResetConfirm();
+    extra.push(resetBtn);
+    y += 52;
+  }
 
   const closeBtn = new Button({ text: t('Готово', 'Done'), w: W - pad * 2, h: 46, color: COLORS.primary, fontSize: 16 });
   closeBtn.position.set(W / 2, y + 23);
@@ -1970,7 +1993,9 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
   root.addChild(title, sub, sp, who, note);
 
   const btnW = W - 48;
-  const done = (): void => { ctx.commit(); ctx.toast(t('Анализ готов 🧬 родословная вскрыта', 'Analysis done 🧬 pedigree revealed')); close(); ctx.openPedigree(cat); };
+  // Звук — ровно в момент готового анализа, вместе с открытием дерева: просто
+  // «🌳 Родословная» из меню кота открывает то же окно молча (sfxEvent там нет).
+  const done = (): void => { ctx.commit(); sfxEvent('analyze'); ctx.toast(t('Анализ готов 🧬 родословная вскрыта', 'Analysis done 🧬 pedigree revealed')); close(); ctx.openPedigree(cat); };
 
   // Подарок новой игры: первые FREE_ANALYZE_COUNT анализов бесплатны (см. freeAnalyzeCat) —
   // новичок должен успеть сравнить несколько родословных, прежде чем платить 💰 или 📺.
@@ -1994,6 +2019,7 @@ export function buildAnalyzeConfirm(ctx: UiContext, cat: Cat, close: () => void)
       const r = freeAnalyzeCat(ctx.state, cat.id);
       if (!r.ok) { ctx.toast(r.reason); return; }
       ctx.commit();
+      sfxEvent('analyze'); // подарочный анализ звучит так же, как платный
       // Тост вместо стандартного: после подарка сразу называем остаток запаса.
       ctx.toast(r.left > 0
         ? t(`Анализ готов 🧬 бесплатных осталось ${r.left}`, `Analysis done 🧬 ${r.left} free left`)
