@@ -3,7 +3,7 @@
  * Время передаётся параметром `now` (тестируемо), RNG — параметром. См. GAME.md §10.
  */
 
-import { breed, isLethal, simpleCat, resolveBreeding, recipeKey, tierOfBreed } from '../genetics/index.js';
+import { breed, isLethal, simpleCat, resolveBreeding, recipeKey, RECIPES, tierOfBreed } from '../genetics/index.js';
 import { t } from '../i18n.js';
 import type { Rng, BreedBoosts, KinshipLevel, Recipe, Sex } from '../genetics/index.js';
 import type { Cat, Currency, GameState, LiveRoom } from './types.js';
@@ -229,8 +229,9 @@ export function assignBreeder(state: GameState, slotIndex: number, catId: string
   }
   if (cat.genotype.sex === 'female') slot.motherId = catId;
   else slot.fatherId = catId;
-  // в слоте вязки коту не место на пьедестале выставки — снимаем чемпионство
+  // в слоте вязки коту не место ни на пьедестале выставки, ни в корзине заказов
   unsetChampion(state, catId);
+  if (state.orderBasket === catId) state.orderBasket = null;
   return { ok: true };
 }
 
@@ -306,6 +307,10 @@ export function collectReady(state: GameState, now: number, rng: Rng): BirthEven
     const newBreed = !state.discoveredBreeds.includes(childBreed);
     const kitten = E.makeCatInstance(state, child, now, 'nursery', childBreed);
     kitten.bornAt = now; // настоящий новорождённый — появляется маленьким и растёт
+    // В слоте тесно: пока малыша не унесли в комнату, срок взросления удвоен
+    // (KITTEN_SLOW_FACTOR) — таймер в его карточке сразу показывает 30 мин.
+    // moveCat снимет замедление и вернёт обычный темп, сохранив долю роста.
+    kitten.growthMs = C.KITTEN_GROWTH_MS * C.KITTEN_SLOW_FACTOR;
     kitten.motherBreed = mother.breed; // родословная — покажем в карточке кота
     kitten.fatherBreed = father.breed;
     kitten.pedigree = buildPedigree(mother, father, C.PEDIGREE_DEPTH); // дерево до прадедов
@@ -472,14 +477,16 @@ export function setChampion(state: GameState, catId: string, slotIndex: number, 
   if (ownIdx >= 0) {
     // сам уже чемпион на другом пьедестале — прямой обмен слотами
     state.champions[ownIdx] = displacedId ?? null;
-  } else if (E.isInSlot(state, catId)) {
-    // источник — слот вязки: обмена нет, снятому чемпиону ищем физический дом
+  } else if (E.isInSlot(state, catId) || E.isInBasket(state, catId)) {
+    // источник — спецместо (слот вязки или корзина заказов): места на полу кот там не
+    // занимал, меняться нечем — снятому чемпиону ищем физический дом
     if (displaced) {
-      if (E.roomCount(state, 'nursery') < E.nurseryCapacity(state)) displaced.location = 'nursery';
-      else if (E.roomCount(state, 'shelter') < E.shelterCapacity(state)) displaced.location = 'shelter';
-      else return { ok: false, reason: t('нет места в лаборатории', 'no room in the lab') };
+      const home = homeFloorFor(state, displaced.location);
+      if (!home) return { ok: false, reason: t('нет места в лаборатории', 'no room in the lab') };
+      displaced.location = home;
     }
     clearBreederSlot(state, catId);
+    if (state.orderBasket === catId) state.orderBasket = null; // с корзины на пьедестал — без дубля
   } else if (displaced) {
     // источник — кот с пола: меняются местами (снятый чемпион — на освободившееся место)
     displaced.location = cat.location;
@@ -499,11 +506,14 @@ export function unsetChampion(state: GameState, catId: string): Result {
   return { ok: true };
 }
 
-/** Мгновенно вырастить котёнка за 💎 (скип роста). Стоимость ∝ остатку роста. */
+/**
+ * Мгновенно вырастить котёнка за 💎 (скип роста). Стоимость ∝ остатку роста, но в
+ * обычном масштабе (`growthBillableMs`): растянутый срок в слоте цену не удваивает.
+ */
 export function speedUpGrowth(state: GameState, catId: string, now: number): Result<{ crystals: number }> {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
-  const remaining = E.growthRemainingMs(cat, now);
+  const remaining = E.growthBillableMs(cat, now);
   if (remaining <= 0) return { ok: true, crystals: 0 };
   const cost = E.speedUpCost(remaining, C.GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
   if (!spend(state, 'crystals', cost)) return { ok: false, reason: t('не хватает кристаллов', 'not enough crystals') };
@@ -564,46 +574,65 @@ export function healCat(
   return { ok: true, healed: spent, crystals: cost };
 }
 
-/** Реклама: сократить остаток роста котёнка на KITTEN_GROWTH_AD_MS (−15 мин → сразу взрослый). */
+/**
+ * Реклама: вырастить котёнка целиком (кнопка так и обещает — «вырастить бесплатно»).
+ * Не фиксированные минуты, а весь остаток: у малыша в слоте срок удвоен, и срез на
+ * четверть часа оставлял бы его котёнком после просмотра ролика.
+ */
 export function adSkipGrowth(state: GameState, catId: string, now: number): Result {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (E.growthRemainingMs(cat, now) <= 0) return { ok: true };
-  cat.bornAt -= C.KITTEN_GROWTH_AD_MS; // сдвигаем рождение назад → остаток роста уменьшается
+  cat.bornAt = now - E.effGrowthMs(cat); // возраст ≥ срок → сразу взрослый
   return { ok: true };
 }
 
-/** Перемещение кота между питомником и приютом (с учётом вместимости). */
-export function moveCat(state: GameState, catId: string, room: LiveRoom): Result {
+/**
+ * Перемещение кота между питомником и приютом (с учётом вместимости).
+ * `now` нужен малышу, «оставленному с роднёй»: в комнате он снова растёт в обычном
+ * темпе, поэтому замедление снимается с сохранением накопленной доли роста.
+ */
+export function moveCat(state: GameState, catId: string, room: LiveRoom, now = 0): Result {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   // Кот физически «не на полу», хотя location может формально совпадать с целевой
   // комнатой: либо в слоте инкубатора (родитель вязки / малыш с роднёй), либо на
   // пьедестале выставки (чемпион). В обоих случаях ранний выход по location — ложный,
   // иначе пристройство проскакивает проверку вместимости.
-  const grounded = !E.isInSlot(state, catId) && !E.isChampion(state, catId);
+  const grounded = !E.isInSlot(state, catId) && !E.isChampion(state, catId) && !E.isInBasket(state, catId);
   if (grounded && cat.location === room) return { ok: true };
   if (E.roomCount(state, room) >= E.capacityOf(state, room)) {
     return { ok: false, reason: t('нет места', 'no room') };
   }
   cat.location = room;
   const heldSlot = state.slots.find((s) => s.kittenId === catId);
-  if (heldSlot) heldSlot.kittenId = null; // унесли малыша → слот свободен под новую пару
+  if (heldSlot) {
+    heldSlot.kittenId = null; // унесли малыша → слот свободен под новую пару
+    if (cat.growthMs) {
+      // В комнате места хватает — дальше обычный темп. Долю роста, накопленную в
+      // слоте, переносим как есть: перенос ускоряет, но не обнуляет прогресс.
+      const p = E.growthProgress(cat, now);
+      delete cat.growthMs;
+      cat.bornAt = now - Math.round(p * C.KITTEN_GROWTH_MS);
+    }
+  }
   unsetChampion(state, catId); // переехал на пол — с пьедестала снят (no-op, если не был чемпионом)
+  if (state.orderBasket === catId) state.orderBasket = null; // и из корзины вынут — он теперь на полу
   return { ok: true };
 }
 
 /**
  * Оставить новорождённого в слоте с родителями (на крайний случай, когда мест нигде
- * нет): малыш сидит в центре слота, растёт втрое медленнее (KITTEN_SLOW_FACTOR) и
- * блокирует постановку новых котов, пока его не унесут в комнату. kittenId уже стоит
- * на слоте (его поставил collectReady) — здесь только включаем медленный рост.
+ * нет): малыш сидит в центре слота, растёт вдвое медленнее (KITTEN_SLOW_FACTOR) и
+ * блокирует постановку новых котов, пока его не унесут в комнату. Медленный рост
+ * малышу включил ещё collectReady при рождении — здесь только подтверждаем его на
+ * случай, если кота уже успели пронести через комнату (moveCat снимает замедление).
+ * Отсчёт НЕ перезапускаем: прожитое в слоте время малышу засчитано.
  */
-export function keepKittenWithParents(state: GameState, catId: string, now: number): Result {
+export function keepKittenWithParents(state: GameState, catId: string, _now = 0): Result {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   cat.growthMs = C.KITTEN_GROWTH_MS * C.KITTEN_SLOW_FACTOR;
-  cat.bornAt = now; // отсчёт взросления — заново, в медленном темпе
   return { ok: true };
 }
 
@@ -817,6 +846,7 @@ export function freeAnalyzeCat(state: GameState, catId: string): Result<{ left: 
 export function startRecipeResearch(state: GameState, now: number): Result {
   if (!E.isUnlocked(state, 'recipeLab')) return { ok: false, reason: 'locked' };
   if (state.recipeResearch.readyAt > 0) return { ok: false, reason: t('стол занят исследованием', 'the bench is busy researching') };
+  if (state.recipeResearch.pending) return { ok: false, reason: t('на столе ждёт невскрытая колба', 'a sealed flask is waiting on the bench') };
   if (researchableRecipes(state).length === 0) return { ok: false, reason: t('нет доступных рецептов', 'no recipes available') };
   const price = C.recipeResearchCost(state.level);
   if (state.coins < price.coins || state.dna < price.dna) {
@@ -829,32 +859,49 @@ export function startRecipeResearch(state: GameState, now: number): Result {
     readyAt: now + C.recipeResearchMs(state.level),
     paidCoins: price.coins,
     paidDna: price.dna,
+    pending: null,
   };
   return { ok: true };
 }
 
 /**
- * Забрать результат ГОТОВОГО исследования: случайный ещё не открытый рецепт из
- * достижимого пула → в state.knownRecipes (в Котодексе появится чёрный силуэт).
- * Таймер не готов → null. Грейс: если пул опустел, пока шло исследование
+ * Дождаться конца ГОТОВОГО исследования: случайный ещё не открытый рецепт из
+ * достижимого пула запечатывается в колбу (rr.pending) — в Котодекс он попадёт
+ * только после того, как игрок вскроет её сам (revealRecipeResearch). Название
+ * рецепта наружу не отдаём вовсе: уведомление о готовности не должно его выдать.
+ * Таймер не готов → sealed: false. Грейс: если пул опустел, пока шло исследование
  * (например, породу успели вывести), — возвращаем стоимость (refunded: true).
  */
 export function finishRecipeResearch(
   state: GameState, now: number, rng: Rng,
-): { recipe: Recipe | null; refunded: boolean } {
+): { sealed: boolean; refunded: boolean } {
   const rr = state.recipeResearch;
-  if (rr.readyAt === 0 || now < rr.readyAt) return { recipe: null, refunded: false };
+  if (rr.readyAt === 0 || now < rr.readyAt) return { sealed: false, refunded: false };
   const pool = researchableRecipes(state);
   if (pool.length === 0) {
     state.coins += rr.paidCoins;   // возврат ровно уплаченного (цена зависит от уровня)
     state.dna += rr.paidDna;
     rr.startedAt = 0; rr.readyAt = 0; rr.paidCoins = 0; rr.paidDna = 0;
-    return { recipe: null, refunded: true };
+    return { sealed: false, refunded: true };
   }
   rr.startedAt = 0; rr.readyAt = 0; rr.paidCoins = 0; rr.paidDna = 0;
-  const recipe = pool[Math.floor(rng() * pool.length)]!;
-  state.knownRecipes.push(recipeKey(recipe));
-  return { recipe, refunded: false };
+  rr.pending = recipeKey(pool[Math.floor(rng() * pool.length)]!);
+  return { sealed: true, refunded: false };
+}
+
+/**
+ * Вскрыть колбу с готовым результатом: рецепт из pending уходит в knownRecipes
+ * (в Котодексе появляется чёрный силуэт) и возвращается сюда — UI играет по нему
+ * анимацию раскрытия. Колбы нет → null. Пул на этот момент уже не важен: рецепт
+ * выбран в момент готовности и оплачен.
+ */
+export function revealRecipeResearch(state: GameState): Recipe | null {
+  const rr = state.recipeResearch;
+  if (!rr.pending) return null;
+  const recipe = RECIPES.find((r) => recipeKey(r) === rr.pending) ?? null;
+  if (recipe && !state.knownRecipes.includes(rr.pending)) state.knownRecipes.push(rr.pending);
+  rr.pending = null; // даже если рецепт из сейва не опознан — колбу со стола убираем
+  return recipe;
 }
 
 /** Мгновенно завершить исследование рецепта за 💎 (цена ∝ остатку: 1 💎 за 5 мин). */
@@ -1007,21 +1054,44 @@ export function claimOrder(
 // --- Корзина заказов (зона в Питомнике) ---
 
 /**
- * Положить кота в корзину заказов: только им можно закрыть заказ. Кот остаётся
- * в своей комнате и занимает место, но на полу не гуляет — он «в переноске» у стойки.
- * Прежний обитатель корзины просто вытесняется обратно на пол.
+ * Положить кота в корзину заказов: только им можно закрыть заказ. Корзина — такое же
+ * отдельное место, как слот вязки и пьедестал: кот в ней НЕ занимает места на полу
+ * (см. `roomCount`) и не стоит одновременно нигде ещё — поэтому забираем его хоть с
+ * пола, хоть из слота вязки (неактивного), хоть с пьедестала. Нельзя только того, у
+ * кого вязка идёт прямо сейчас. Прежнего жильца корзины возвращаем на пол — и если
+ * его комната успела заполниться, ищем ему свободную (некуда — отказ, корзина цела).
  */
 export function putCatInBasket(state: GameState, catId: string): Result {
   const cat = findCat(state, catId);
   if (!cat) return { ok: false, reason: t('кот не найден', 'cat not found') };
   if (E.isBusy(state, catId)) return { ok: false, reason: t('кот занят в вязке', 'the cat is busy breeding') };
-  if (E.isInSlot(state, catId)) return { ok: false, reason: t('кот в слоте вязки', 'the cat is in a breeding slot') };
-  if (E.isChampion(state, catId)) return { ok: false, reason: t('кот выставлен чемпионом', 'the cat is on a pedestal') };
-  state.orderBasket = catId;
+  if (state.orderBasket === catId) return { ok: true }; // уже в корзине
+
+  const prevId = state.orderBasket;
+  state.orderBasket = catId;      // новый жилец занял корзину — его место на полу свободно
+  clearBreederSlot(state, catId); // пришёл из слота вязки — слот освобождается
+  unsetChampion(state, catId);    // пришёл с пьедестала — снят с выставки
+  const prev = prevId ? findCat(state, prevId) : undefined;
+  if (prev) {
+    const home = homeFloorFor(state, prev.location);
+    if (!home) {
+      state.orderBasket = prevId; // откат: вытесненному коту негде стоять
+      return { ok: false, reason: t('некуда вернуть кота из корзины', 'nowhere to put the cat from the basket') };
+    }
+    prev.location = home;
+  }
   return { ok: true };
 }
 
-/** Вынуть кота из корзины (вернуть на пол его комнаты). */
+/** Комната с местом на полу для кота, покидающего спецместо: своя → питомник → приют. */
+function homeFloorFor(state: GameState, preferred: LiveRoom): LiveRoom | null {
+  if (E.roomCount(state, preferred) < E.capacityOf(state, preferred)) return preferred;
+  if (E.roomCount(state, 'nursery') < E.nurseryCapacity(state)) return 'nursery';
+  if (E.roomCount(state, 'shelter') < E.shelterCapacity(state)) return 'shelter';
+  return null;
+}
+
+/** Вынуть кота из корзины (сама корзина пустеет; место на полу проверяет moveCat). */
 export function clearOrderBasket(state: GameState): void {
   state.orderBasket = null;
 }

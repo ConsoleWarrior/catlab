@@ -4,7 +4,7 @@ import {
   createInitialState, makeCatInstance, catMarketValue, healthValueMult,
   sendToLab, foodRatePerMin, isStarving, netIncomePerMin, passiveRatePerMin, championIncomePerMin,
   setChampion, unsetChampion, championIds, championAt, championSlots, isChampion, adoptCat,
-  speedUpCost, speedUpGrowth, adSkipGrowth, growthRemainingMs, isAdult,
+  speedUpCost, speedUpGrowth, adSkipGrowth, growthRemainingMs, growthBillableMs, isAdult,
   assignBreeder, isInSlot, nurseryCapacity, shelterCapacity, moveCat,
   adoptAll, sendAllToLab, shelterTotals, catsIn,
 } from './index.js';
@@ -294,16 +294,32 @@ describe('лаборатория и ускорение', () => {
     expect(s.crystals).toBe(0);
   });
 
-  it('adSkipGrowth сокращает остаток роста на KITTEN_GROWTH_AD_MS (бесплатно)', () => {
+  it('малыш в слоте не дороже: растянутый срок цену в 💎 не удваивает', () => {
+    const s = createInitialState(makeRng(11), 0);
+    const now = 1000;
+    const kitten = makeCatInstance(s, makeCat('female'), now, 'nursery', 'moggie');
+    kitten.bornAt = now;
+    kitten.growthMs = C.KITTEN_GROWTH_MS * C.KITTEN_SLOW_FACTOR; // как в слоте: 30 мин
+    s.cats.push(kitten);
+    // таймер показывает удвоенный остаток, а платим как за обычные 15 мин
+    expect(growthRemainingMs(kitten, now)).toBe(C.KITTEN_GROWTH_MS * C.KITTEN_SLOW_FACTOR);
+    expect(speedUpCost(growthBillableMs(kitten, now), C.GROWTH_SPEEDUP_CRYSTAL_PER_MIN)).toBe(3);
+    s.crystals = 3;
+    expect(speedUpGrowth(s, kitten.id, now).ok).toBe(true);
+    expect(isAdult(kitten, now)).toBe(true);
+    expect(s.crystals).toBe(0);
+  });
+
+  it('adSkipGrowth выращивает котёнка целиком, даже с растянутым сроком (бесплатно)', () => {
     const s = createInitialState(makeRng(12), 0);
     const now = 1000;
     const kitten = makeCatInstance(s, makeCat('female'), now, 'nursery', 'moggie');
     kitten.bornAt = now;
-    kitten.growthMs = 60 * 60_000; // длинный рост, чтобы скип был частичным
+    kitten.growthMs = 60 * 60_000; // длинный рост — ролик всё равно закрывает его весь
     s.cats.push(kitten);
-    const before = growthRemainingMs(kitten, now);
     expect(adSkipGrowth(s, kitten.id, now).ok).toBe(true);
-    expect(before - growthRemainingMs(kitten, now)).toBe(C.KITTEN_GROWTH_AD_MS);
+    expect(growthRemainingMs(kitten, now)).toBe(0);
+    expect(isAdult(kitten, now)).toBe(true);
   });
 
   it('championIncomePerMin растёт с исследованиями дохода', () => {

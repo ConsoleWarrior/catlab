@@ -29,11 +29,12 @@ export function createInitialState(rng: Rng, now: number): GameState {
     upgrades: {},
     unlockedGenes: [...BASE_GENES],
     discoveredBreeds: [],
+    allBreedsCongratsSeen: false,
     boosts: {},
     activeBoost: null,
     research: {},
     knownRecipes: [],
-    recipeResearch: { startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0 },
+    recipeResearch: { startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0, pending: null },
     cryo: [],
     unlockedRooms: ['incubator', 'nursery', 'shelter', 'genolab'],
     orders: [],
@@ -49,6 +50,8 @@ export function createInitialState(rng: Rng, now: number): GameState {
     lastBoostAdAt: 0,    // 📺-зарядка усилителя сразу доступна
     processedPurchases: [],
     firstPurchaseDone: false,
+    reviewAsks: 0,
+    reviewLastAskAt: 0,
     // новая игра — обучение с нуля (подарки целы, ничего ещё не показано)
     tutorial: {
       done: false,
@@ -80,6 +83,10 @@ export function deserialize(json: string): GameState {
   const data = JSON.parse(json) as GameState;
   // мягкие дефолты для полей, добавленных в новых версиях
   if (!Array.isArray(data.discoveredBreeds)) data.discoveredBreeds = [];
+  // Финальное поздравление за полный Котодекс — поле добавлено позже. Старым
+  // сейвам ставим false: если коллекция там уже собрана, панель покажется один
+  // раз при ближайшем действии — она заслужена и без флага в сейве.
+  if (typeof data.allBreedsCongratsSeen !== 'boolean') data.allBreedsCongratsSeen = false;
   if (!data.boosts || typeof data.boosts !== 'object') data.boosts = {};
   // Активный усилитель — поле добавлено позже (склад зарядов отделён от активности).
   // У старых сейвов его нет → активируем первый усилитель, у которого есть заряды,
@@ -115,11 +122,13 @@ export function deserialize(json: string): GameState {
   // --- Система знаний (поля добавлены позже; мягкие дефолты без бампа версии) ---
   if (!Array.isArray(data.knownRecipes)) data.knownRecipes = [];
   if (!data.recipeResearch || typeof data.recipeResearch !== 'object') {
-    data.recipeResearch = { startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0 };
+    data.recipeResearch = { startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0, pending: null };
   } else {
     // paidCoins/paidDna добавлены позже — мягкий дефолт для старых сейвов.
     if (typeof data.recipeResearch.paidCoins !== 'number') data.recipeResearch.paidCoins = 0;
     if (typeof data.recipeResearch.paidDna !== 'number') data.recipeResearch.paidDna = 0;
+    // pending (невскрытая колба) — поле добавлено позже: у старых сейвов колбы нет.
+    if (typeof data.recipeResearch.pending !== 'string') data.recipeResearch.pending = null;
   }
   if (typeof data.lastAnalyzeAdAt !== 'number') data.lastAnalyzeAdAt = 0;
   if (typeof data.lastFreezeAdAt !== 'number') data.lastFreezeAdAt = 0;
@@ -137,6 +146,11 @@ export function deserialize(json: string): GameState {
   // сбрасывать прогресс из-за чисто аддитивных полей нельзя (тем более у платящих).
   if (!Array.isArray(data.processedPurchases)) data.processedPurchases = [];
   if (typeof data.firstPurchaseDone !== 'boolean') data.firstPurchaseDone = false;
+  // Просьба об оценке — поля добавлены позже: старому сейву даём чистый счётчик
+  // (окно у него ещё не всплывало, платформа сама не даст показать его повторно
+  // тому, кто уже оценил игру — GAME_RATED).
+  if (typeof data.reviewAsks !== 'number') data.reviewAsks = 0;
+  if (typeof data.reviewLastAskAt !== 'number') data.reviewLastAskAt = 0;
   // Обучение новичка: поля нет только у сейвов, сделанных ДО его появления —
   // а там игра уже началась, и водить игрока за руку по первой вязке поздно.
   // Такому сейву обучение сразу закрыто (и подарочный ускоритель не положен).

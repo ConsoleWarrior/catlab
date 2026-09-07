@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { makeRng, makeCat, RECIPES, recipeKey, recipesFor, breedingOutcomes } from '../genetics/index.js';
+import { makeRng, makeCat, BREEDS, RECIPES, recipeKey, recipesFor, breedingOutcomes } from '../genetics/index.js';
 import type { Recipe } from '../genetics/index.js';
 import {
   createInitialState, serialize, deserialize, makeCatInstance,
   attachHiddenPedigree, buildPedigree, revealPedigree, pedigreeHasFog, knownAncestorBreeds,
   catAncestors, buildBreedingContext,
-  analyzeCat, startRecipeResearch, finishRecipeResearch,
+  analyzeCat, startRecipeResearch, finishRecipeResearch, revealRecipeResearch,
   speedUpRecipeResearch, adSkipRecipeResearch,
-  recipeIsKnown, breedStudied, knownRecipesFor, researchableRecipes, outcomeRevealed,
+  recipeIsKnown, breedStudied, allBreedsBred, knownRecipesFor, researchableRecipes, outcomeRevealed,
 } from './index.js';
 import * as C from './config.js';
 import type { Ancestor, Cat, GameState } from './index.js';
@@ -196,6 +196,16 @@ describe('Котодекс-рецептурник (этап C)', () => {
     s.discoveredBreeds.push('british_shorthair');
     expect(knownRecipesFor(s, 'british_shorthair')).toEqual(recipesFor('british_shorthair'));
   });
+
+  it('коллекция собрана: все породы ВЫВЕДЕНЫ (изученного рецепта мало)', () => {
+    const { s } = setup(32);
+    s.discoveredBreeds = BREEDS.map((b) => b.key).filter((k) => k !== 'savannah');
+    // рецепт последней породы открыт исследованием — это ещё не «выведена»
+    s.knownRecipes = recipesFor('savannah').map(recipeKey);
+    expect(allBreedsBred(s)).toBe(false);
+    s.discoveredBreeds.push('savannah');
+    expect(allBreedsBred(s)).toBe(true);
+  });
 });
 
 describe('исследование рецептов (этап D)', () => {
@@ -250,19 +260,36 @@ describe('исследование рецептов (этап D)', () => {
     expect(startRecipeResearch(s, 0)).toMatchObject({ ok: false, reason: 'нет доступных рецептов' });
   });
 
-  it('финиш: выдаёт случайный рецепт из пула → knownRecipes; до готовности — null', () => {
+  it('финиш: запечатывает рецепт в колбу (в Котодекс он ещё не попал)', () => {
     const { s } = setup(43);
     expect(startRecipeResearch(s, 0).ok).toBe(true);
     const early = finishRecipeResearch(s, C.recipeResearchMs(s.level) - 1, makeRng(1));
-    expect(early.recipe).toBeNull();
+    expect(early.sealed).toBe(false);
     expect(s.recipeResearch.readyAt).toBeGreaterThan(0);
     const poolKeys = researchableRecipes(s).map((r) => recipeKey(r));
+    const known0 = s.knownRecipes.length;
     const done = finishRecipeResearch(s, C.recipeResearchMs(s.level), makeRng(1));
-    expect(done.recipe).not.toBeNull();
-    expect(s.knownRecipes).toContain(recipeKey(done.recipe as Recipe));
-    expect(s.recipeResearch.readyAt).toBe(0); // стол свободен
-    // выданный рецепт был из достижимого пула
-    expect(poolKeys).toContain(recipeKey(done.recipe as Recipe));
+    expect(done).toMatchObject({ sealed: true, refunded: false });
+    expect(s.recipeResearch.readyAt).toBe(0);           // таймер отработал
+    expect(s.recipeResearch.pending).not.toBeNull();    // ...но колба ещё запечатана
+    expect(poolKeys).toContain(s.recipeResearch.pending); // рецепт — из достижимого пула
+    expect(s.knownRecipes).toHaveLength(known0);        // в Котодексе пока ничего
+    // пока колба не вскрыта, стол занят ею — новое исследование не начать
+    expect(startRecipeResearch(s, C.recipeResearchMs(s.level))).toMatchObject({ ok: false });
+  });
+
+  it('вскрытие колбы: рецепт уходит в knownRecipes, стол освобождается', () => {
+    const { s } = setup(43);
+    expect(startRecipeResearch(s, 0).ok).toBe(true);
+    finishRecipeResearch(s, C.recipeResearchMs(s.level), makeRng(1));
+    const sealed = s.recipeResearch.pending;
+    const recipe = revealRecipeResearch(s);
+    expect(recipe).not.toBeNull();
+    expect(recipeKey(recipe as Recipe)).toBe(sealed);
+    expect(s.knownRecipes).toContain(sealed);
+    expect(s.recipeResearch.pending).toBeNull();
+    expect(revealRecipeResearch(s)).toBeNull();  // колбы больше нет — вскрывать нечего
+    expect(startRecipeResearch(s, C.recipeResearchMs(s.level)).ok).toBe(true); // стол свободен
   });
 
   it('грейс: пул опустел за время исследования → возврат стоимости', () => {
@@ -273,7 +300,7 @@ describe('исследование рецептов (этап D)', () => {
     const dna = s.dna;
     s.knownRecipes = RECIPES.map((r) => recipeKey(r)); // всё открыли, пока шёл таймер
     const done = finishRecipeResearch(s, C.recipeResearchMs(s.level), makeRng(1));
-    expect(done).toMatchObject({ recipe: null, refunded: true });
+    expect(done).toMatchObject({ sealed: false, refunded: true });
     expect(s.coins).toBe(coins + price.coins);
     expect(s.dna).toBe(dna + price.dna);
   });
@@ -357,11 +384,11 @@ describe('сейв: поля системы знаний', () => {
   it('новые поля переживают round-trip; у старого сейва — мягкие дефолты', () => {
     const { s } = setup(60);
     s.knownRecipes = ['x|y|z'];
-    s.recipeResearch = { startedAt: 5, readyAt: 9, paidCoins: 450, paidDna: 15 };
+    s.recipeResearch = { startedAt: 5, readyAt: 9, paidCoins: 450, paidDna: 15, pending: 'a|b|c' };
     s.lastAnalyzeAdAt = 7;
     const back = deserialize(serialize(s));
     expect(back.knownRecipes).toEqual(['x|y|z']);
-    expect(back.recipeResearch).toEqual({ startedAt: 5, readyAt: 9, paidCoins: 450, paidDna: 15 });
+    expect(back.recipeResearch).toEqual({ startedAt: 5, readyAt: 9, paidCoins: 450, paidDna: 15, pending: 'a|b|c' });
     expect(back.lastAnalyzeAdAt).toBe(7);
     // «старый» сейв без полей
     const legacy = JSON.parse(serialize(s)) as Record<string, unknown>;
@@ -370,7 +397,7 @@ describe('сейв: поля системы знаний', () => {
     delete legacy.lastAnalyzeAdAt;
     const migrated = deserialize(JSON.stringify(legacy));
     expect(migrated.knownRecipes).toEqual([]);
-    expect(migrated.recipeResearch).toEqual({ startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0 });
+    expect(migrated.recipeResearch).toEqual({ startedAt: 0, readyAt: 0, paidCoins: 0, paidDna: 0, pending: null });
     expect(migrated.lastAnalyzeAdAt).toBe(0);
   });
 

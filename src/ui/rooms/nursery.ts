@@ -10,7 +10,8 @@
  * золотой аурой, пока кот «в руках» над ней) → на выставку; стащил на пол → снял.
  * Чемпион на тумбе моргает и «красуется» — см. ChampAnim/updateChampions ниже.
  * Ветеринар (💉) переехал в Инкубатор — там шприц перетаскивают на кота в слоте вязки.
- * В правом нижнем углу — криокапсула (🧊, drag кота → заморозка в крио-банк).
+ * В правом нижнем углу — криокапсула (🧊, drag кота → заморозка в крио-банк);
+ * до покупки узла «❄️ Криогенетика» стоит запертой (🔒), но место видно сразу.
  * Справа сверху — стойка заказов (кнопка 📋 + корзина-переноска), слева под
  * названием комнаты — кормушка: заказы просят ЦЕННЫХ котов, а живут они здесь.
  * Улучшения — в оверлее ⚙️, чтобы не занимать пол.
@@ -27,18 +28,19 @@ import {
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
   foodRatePerMin, feedingCatCount, foodBuyQuote,
   cryoUnlocked,
-  isInBasket, basketCat, putCatInBasket, clearOrderBasket, matchesOrder,
+  isInBasket, basketCat, putCatInBasket, matchesOrder,
   FOOD_PACK_UNITS, CHAMPION_SLOTS_BASE, UPGRADES,
 } from '../../game/index.js';
-import type { Cat } from '../../game/index.js';
+import type { Cat, LiveRoom } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
-import { roomShell, floorPlane, cornerStation, stationBadge } from './shell.js';
+import { roomShell, floorPlane, cornerStation, stationBadge, PAD } from './shell.js';
 import { decorTexture } from '../decorArt.js';
 import { Button, COLORS, INK, INK_SOFT, label, V, VIVID } from '../theme.js';
 import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
 import { catArtTexture, catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { attachBlink, type Blinker } from '../eyeBlink.js';
 import { darken, lighten } from '../../render/palette.js';
+import { sfxEvent } from '../sound.js';
 import { t } from '../../i18n.js';
 
 // Всегда показываем все 5 пьедесталов (база 1 + до 4 апгрейдов); запертые — с замком.
@@ -52,11 +54,13 @@ const COL_W = 256;
 
 // --- Стойка заказов (правая колонка, в один ряд с плашкой названия) ---
 const ORDERS_BH = 44;
-// Отступ блока от правого края комнаты. Пока кота несут «за шкирку», палец у
-// самой кромки экрана листает комнаты (game.ts, carryEdgeScroll: полоса ≤ 72 px),
-// и корзина, стоявшая впритык к краю, уводила кота в соседнюю комнату вместо
-// того, чтобы его принять. Держим блок заведомо дальше этой полосы.
-const EDGE_SAFE = 90;
+// Отступ блока от правого края комнаты — общий PAD (18), как у кормушки слева и
+// кнопок Приюта справа: все панели комнат стоят на одном расстоянии от кромки.
+// Раньше здесь был свой отступ 90 px: пока кота несут «за шкирку», палец у самой
+// кромки листает комнаты (game.ts, carryEdgeScroll: полоса ≤ 72 px), и корзина
+// впритык к краю уводила кота в соседнюю комнату вместо того, чтобы его принять.
+// Теперь от этого спасает не отступ, а blocksEdgeScroll: над стойкой листание
+// выключено (см. ordersStandZone).
 // Палитра стойки: тёплый «клиентский» оранжевый у кнопки, плетёнка у корзины.
 const ORDERS_TINT = 0xf2952f;
 const CARRIER_BODY = 0xf1c890;  // плетёный бок корзины
@@ -201,27 +205,31 @@ export function createNursery(ctx: UiContext): Room {
   // Слой под «живым полом» (коты проходят ПЕРЕД ним); пересобирается в refresh.
   const ICE_EDGE = 0x8ecae6; // морозный акцент криокапсулы
 
-  // криокапсула — правый НИЖНИЙ угол; появляется только когда открыт крио-банк (узел «Криогенетика»)
+  // криокапсула — правый НИЖНИЙ угол; место видно ВСЕГДА, но до покупки узла
+  // «❄️ Криогенетика» станция стоит с замком (образец — биобанк в Приюте): игрок
+  // должен видеть, куда денутся лишние коты, ещё до того, как откроет капсулу
   const cryoZone = cornerStation(ctx.roomW, ctx.roomH, 'right');
   const cryoCx = cryoZone.x + cryoZone.width / 2;
   const cryoLayer = new Container();
   shell.container.addChildAt(cryoLayer, shell.container.getChildIndex(floorLayer));
 
-  /** Станция-криокапсула (правый угол): только когда крио-банк открыт узлом «Криогенетика». */
+  /** Станция-криокапсула (правый угол); заперта, пока не куплена «Криогенетика». */
   function refreshCryo(): void {
     cryoLayer.removeChildren();
-    if (!cryoUnlocked(ctx.state)) return; // до открытия крио-банка станции нет
+    const unlocked = cryoUnlocked(ctx.state);
     const { x, y, width: sw, height: sh } = cryoZone;
     const box = new Graphics();
-    // морозный короб + внутренняя «колба» криокапсулы
+    // морозный короб + внутренняя «колба» криокапсулы (запертая — серая и тусклая)
     box.roundRect(x, y, sw, sh, 14)
-      .fill({ color: 0xe8f6fb, alpha: 0.92 })
-      .stroke({ width: 3, color: ICE_EDGE });
+      .fill({ color: unlocked ? 0xe8f6fb : 0x9aa5a8, alpha: unlocked ? 0.92 : 0.62 })
+      .stroke({ width: 3, color: unlocked ? ICE_EDGE : 0x69777c });
     box.roundRect(x + sw * 0.24, y + sh * 0.14, sw * 0.52, sh * 0.62, 12)
-      .fill({ color: 0xbfe6f2, alpha: 0.6 });
-    const snow = label('🧊', sw * 0.42, COLORS.ink, '700');
+      .fill({ color: 0xbfe6f2, alpha: unlocked ? 0.6 : 0.28 });
+    const snow = label(unlocked ? '🧊' : '🔒', sw * 0.42, COLORS.ink, '700');
     snow.position.set(cryoCx, y + sh * 0.5);
-    const badge = stationBadge(cryoCx, y, t('❄️ криокапсула', '❄️ cryo capsule'));
+    const badge = stationBadge(cryoCx, y, unlocked
+      ? t('❄️ криокапсула', '❄️ cryo capsule')
+      : t('🔒 открой в Генолабе', '🔒 unlock in the Genolab'));
     cryoLayer.addChild(box, snow, badge);
   }
 
@@ -242,6 +250,7 @@ export function createNursery(ctx: UiContext): Room {
   const BASKET_H = Math.round(Math.max(104, Math.min(158, ctx.roomH * 0.23)));
   const BASKET_PILL_H = 19; // плашка «подходит/не подходит» — ВНУТРИ корзины, у нижней кромки
   let basketZone = new Rectangle(0, 0, 0, 0);
+  let ordersStandZone = new Rectangle(0, 0, 0, 0);
   let ordersBtn: Button | null = null;
   let ordersCount: Text | null = null;      // число заказов в кружке на кнопке
   let ordersCountBg: Graphics | null = null;
@@ -251,8 +260,8 @@ export function createNursery(ctx: UiContext): Room {
     ordersLayer.removeChildren();
     ordersCount = null;
     ordersCountBg = null;
-    // правый край блока — не ближе EDGE_SAFE к кромке экрана (см. константу)
-    const cx = ctx.roomW - EDGE_SAFE - ORDERS_BW / 2;
+    // правый край блока — на общем отступе PAD от кромки, как везде в комнатах
+    const cx = ctx.roomW - PAD - ORDERS_BW / 2;
     const cy = ctx.topInset + 8 + ORDERS_BH / 2; // в один ряд с плашкой названия комнаты
 
     if (VIVID) { // тёплый ореол под кнопкой — стойку видно на любом фоне комнаты
@@ -286,6 +295,15 @@ export function createNursery(ctx: UiContext): Room {
     const bx = cx - BASKET_W / 2;
     const by = cy + ORDERS_BH / 2 + V(14, 8); // зазор под ручку переноски
     basketZone = new Rectangle(bx, by, BASKET_W, BASKET_H);
+    // Вся стойка (кнопка + корзина) гасит авто-листание комнат при переносе кота:
+    // блок стоит у самой кромки, и без этого палец с котом уезжал бы в Приют.
+    // Ниже стойки полоса листания работает как прежде — уйти в соседнюю комнату
+    // с котом в руках по-прежнему можно, просто ведя палец пониже.
+    const standTop = cy - ORDERS_BH / 2 - 6;
+    ordersStandZone = new Rectangle(
+      cx - ORDERS_BW / 2 - 6, standTop,
+      ctx.roomW - cx + ORDERS_BW / 2 + 6, by + BASKET_H + 8 - standTop,
+    );
     const cat = basketCat(ctx.state);
     // подсветка, когда кот в корзине подходит хоть под один заказ на доске
     const fits = !!cat && ctx.state.orders.some((o) => matchesOrder(o, cat));
@@ -299,10 +317,16 @@ export function createNursery(ctx: UiContext): Room {
     }
     ordersLayer.addChild(box);
 
-    // вынуть кота из корзины обратно на пол (тап по корзине/коту)
+    // Вынуть кота из корзины обратно на пол (тап по корзине/коту). В корзине кот места
+    // не занимал, так что возвращаем через moveCat — он проверит вместимость: сначала
+    // родная комната, потом соседняя. Обе полны — кот остаётся в корзине.
     const takeOut = (): void => {
-      if (!basketCat(ctx.state)) { ctx.toast(t('Перетащи сюда кота — и открой 📋 Заказы', 'Drag a cat here — then open 📋 Orders')); return; }
-      clearOrderBasket(ctx.state);
+      const inBasket = basketCat(ctx.state);
+      if (!inBasket) { ctx.toast(t('Перетащи сюда кота — и открой 📋 Заказы', 'Drag a cat here — then open 📋 Orders')); return; }
+      const other: LiveRoom = inBasket.location === 'nursery' ? 'shelter' : 'nursery';
+      const r = moveCat(ctx.state, inBasket.id, inBasket.location, ctx.now());
+      const rr = r.ok ? r : moveCat(ctx.state, inBasket.id, other, ctx.now());
+      if (!rr.ok) { ctx.toast(t('Нет места на полу — сначала освободи комнату 🚫', 'No room on the floor — free some space first 🚫')); return; }
       ctx.commit();
       ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
     };
@@ -482,6 +506,7 @@ export function createNursery(ctx: UiContext): Room {
           btn.onTap = () => {
             const r = buyUpgrade(ctx.state, 'championSlots');
             if (r.ok) {
+              sfxEvent('buy');
               ctx.commit();
               ctx.toast(t(`Открыт пьедестал — ${place}-е место 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% дохода)`, `Pedestal unlocked — place ${place} 🏆 (+${Math.round((placeIncomeMult(i) - 1) * 100)}% income)`));
             }
@@ -740,11 +765,8 @@ export function createNursery(ctx: UiContext): Room {
     // корзина заказов (слева под названием): кот в ней — «предъявленный клиенту»
     if (basketZone.contains(lp.x, lp.y)) {
       if (fromBasket) return false; // вернули на место — endGrab покажет кота в корзине
-      if (wasChampion) {
-        // чемпиона сначала снимаем с пьедестала: на полу ему нужно место
-        const off = moveCat(ctx.state, cat.id, 'nursery');
-        if (!off.ok) { ctx.toast(off.reason); return false; }
-      }
+      // Корзина — отдельное место: putCatInBasket сам снимет кота с пьедестала или из
+      // слота вязки, пол ему при этом не нужен (место в комнате он не занимает).
       const r = putCatInBasket(ctx.state, cat.id);
       if (!r.ok) { ctx.toast(r.reason); return false; }
       ctx.commit();
@@ -765,16 +787,21 @@ export function createNursery(ctx: UiContext): Room {
       return true;
     }
     // криокапсула (справа): уронили кота на станцию → диалог заморозки (📺/💰/💎).
-    // Станция есть только при открытом крио-банке — иначе дроп сюда не перехватываем.
+    // Пока «Криогенетика» не куплена, станция заперта: кот возвращается на место, а
+    // тост говорит, где её открыть (как у биобанка в Приюте).
     // (Ветеринар отсюда убран — теперь это шприц в Инкубаторе, на кота в слоте вязки.)
-    if (cryoUnlocked(ctx.state) && cryoZone.contains(lp.x, lp.y)) {
+    if (cryoZone.contains(lp.x, lp.y)) {
+      if (!cryoUnlocked(ctx.state)) {
+        ctx.toast(t('Открой «❄️ Криогенетику» в Генолабе 🔬', 'Unlock "❄️ Cryogenetics" in the Genolab 🔬'));
+        return false;
+      }
       ctx.commit();               // grab-спрайт уничтожен — пол пересобран, кот снова виден
       standByStation(cat);        // откажешься морозить — кот остаётся у капсулы
       ctx.openFreezeConfirm(cat); // «Заморозить?» (📺 бесплатно / 💰 / 💎)
       return true;
     }
     if (wasChampion) {
-      const r = moveCat(ctx.state, cat.id, 'nursery'); // тоже проверяет вместимость пола
+      const r = moveCat(ctx.state, cat.id, 'nursery', ctx.now()); // тоже проверяет вместимость пола
       if (!r.ok) { ctx.toast(r.reason); return false; } // нет места → вернётся на пьедестал
       ctx.commit();
       ctx.toast(t('Кот снят с выставки', 'The cat is off the show'));
@@ -783,10 +810,11 @@ export function createNursery(ctx: UiContext): Room {
     if (fromBasket) {
       // кота вытащили из корзины перетаскиванием — вынимаем на пол в точку сброса
       // (глубина по Y сброса, как при обычном дропе на «живом полу»)
+      const r = moveCat(ctx.state, cat.id, 'nursery', ctx.now()); // на полу нужно место
+      if (!r.ok) { ctx.toast(r.reason); return false; }             // нет — вернётся в корзину
       const nz = Math.max(0, Math.min(1, (plane.yNear - lp.y) / Math.max(1, plane.yNear - plane.yFar)));
       const half = Math.max(1, plane.nearHalfW + (plane.farHalfW - plane.nearHalfW) * nz);
       rememberFloorPos(cat.id, (lp.x - plane.centerX) / half, nz);
-      clearOrderBasket(ctx.state);
       ctx.commit();
       ctx.toast(t('Котик вернулся на пол 🐾', 'The cat is back on the floor 🐾'));
       return true;
@@ -859,7 +887,7 @@ export function createNursery(ctx: UiContext): Room {
       btn.position.set(x + btnW / 2, 86);
       btn.onTap = () => {
         const r = buyFood(ctx.state, mode);
-        if (r.ok) { ctx.commit(); ctx.toast(t(`Корм +${Math.round(r.added)} 🍽`, `Food +${Math.round(r.added)} 🍽`)); }
+        if (r.ok) { sfxEvent('buy'); ctx.commit(); ctx.toast(t(`Корм +${Math.round(r.added)} 🍽`, `Food +${Math.round(r.added)} 🍽`)); }
         else ctx.toast(r.reason);
       };
       c.addChild(btn);
@@ -920,7 +948,7 @@ export function createNursery(ctx: UiContext): Room {
     feederUpdate = feeder.update;
 
     refreshChampions();
-    refreshCryo();   // станция-криокапсула появляется, когда открыт крио-банк
+    refreshCryo();   // станция-криокапсула: замок снимается покупкой «Криогенетики»
     refreshOrdersDesk(); // стойка заказов: кнопка со счётчиком + корзина-переноска
     floor.refresh();
   }
@@ -941,6 +969,12 @@ export function createNursery(ctx: UiContext): Room {
       ordersAcc += dt;
       if (ordersAcc >= 1) { ordersAcc = 0; updateOrdersBtn(); }
     }, tryDropCat,
+    // Стойка заказов стоит у самой кромки — над ней листание комнат «за шкирку»
+    // выключаем, иначе кота унесло бы в Приют вместо корзины.
+    blocksEdgeScroll: (gx, gy) => {
+      const lp = shell.container.toLocal({ x: gx, y: gy }, ctx.uiRoot);
+      return ordersStandZone.contains(lp.x, lp.y);
+    },
     // Обучение новичка (см. ui/tutorial.ts): `cat:<id>` — котик на полу,
     // 'pedestal' — зона дропа свободной тумбы выставки, 'orders' — кнопка 📋.
     anchor: (key) => {
@@ -952,6 +986,6 @@ export function createNursery(ctx: UiContext): Room {
     // Верхний ряд занят с обеих сторон: слева кормушка, справа стойка заказов.
     // Плашка подсказки обучения встаёт между ними и ничего не перекрывает
     // (п. 1.10.3 требований площадки); PAD титульной плашки — 18, см. shell.ts.
-    topReserve: { left: COL_W + 18, right: ORDERS_BW + EDGE_SAFE },
+    topReserve: { left: COL_W + PAD, right: ORDERS_BW + PAD },
   };
 }

@@ -5,7 +5,7 @@
 
 import { Container, Graphics, Rectangle, Sprite, Text } from 'pixi.js';
 import type { Application, FederatedPointerEvent, Point } from 'pixi.js';
-import type { Cat, BirthEvent, Ancestor, LiveRoom, OfflineIncome } from '../game/index.js';
+import type { Cat, BirthEvent, Ancestor, LiveRoom, OfflineIncome, Order } from '../game/index.js';
 import {
   isBusy, isInSlot, freeBreedSlot, assignBreeder, clearBreederSlot, moveCat, keepKittenWithParents,
   claimOrder, matchesOrder, renameCat,
@@ -14,7 +14,7 @@ import {
   roomCount, nurseryCapacity, shelterCapacity, makeCatInstance,
   catAncestors, pedigreeDepth, PEDIGREE_DEPTH, BOOSTS, buyBoost, adChargeBoost, toggleBoost, boostCharges, activeBoostId,
   BOOST_AD_COOLDOWN_MS,
-  adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, GROWTH_SPEEDUP_CRYSTAL_PER_MIN,
+  adoptCat, adoptReward, speedUpGrowth, adSkipGrowth, speedUpCost, growthBillableMs, GROWTH_SPEEDUP_CRYSTAL_PER_MIN,
   sendToLab, labReward, shelterTotals, adoptAll, sendAllToLab,
   healCat, HEAL_AD_HEARTS, HEAL_CRYSTAL_PER_HEART,
   freezeCat, cloneCat, disposeCryo, cloneCost, cloneCostCoins, cryoCount, cryoCapacity,
@@ -32,7 +32,7 @@ import {
 import { shopItems, buyPack } from '../platform/payments.js';
 import { showRewarded } from '../platform/ads.js';
 import { breedName, breedDescription, tierOfBreed, TIER_LEVEL, breedingOutcomes, tierUpTarget, dormantTraits, traitTag } from '../genetics/index.js';
-import type { RarityTier } from '../genetics/index.js';
+import type { RarityTier, Recipe } from '../genetics/index.js';
 import { BREEDS, randomCat, RECIPES, recipeKey } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import {
@@ -44,7 +44,7 @@ import { describeCat, catTraits, describeReq, describeRecipe, pct } from './desc
 import { catSprite, breedThumbTexture } from './catTextures.js';
 import { breedFaceTexture } from './breedFace.js';
 import { getMasterVolume, setMasterVolume, sfxEvent, sfxMeow } from './sound.js';
-import { canOfferAuth, isAuthorized, openAuthDialog } from '../platform/ysdk.js';
+import { canOfferAuth, isAuthorized, openAuthDialog, canOfferReview, requestReview } from '../platform/ysdk.js';
 import { t, tx, lang, setLang, AVAILABLE, type Lang, type LocStr } from '../i18n.js';
 
 /**
@@ -398,6 +398,27 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
     hint.position.set(W / 2, y - 8);
     extra.push(hint);
     y += hint.height + 8;
+  }
+
+  // «⭐ Оценить игру» — постоянный дубль автоматической просьбы (GAME.md §17.6):
+  // лояльный игрок оценит сам, и его не надо ловить пиком радости. Кнопку рисуем
+  // только когда платформа реально примет оценку (canReview: не гость, ещё не
+  // оценивал, в этой сессии не спрашивали) — мёртвых кнопок в игре быть не должно.
+  if (canOfferReview()) {
+    const rateBtn = new Button({
+      text: t('⭐ Оценить игру', '⭐ Rate the game'),
+      w: W - pad * 2, h: 44, color: COLORS.card, textColor: COLORS.ink, fontSize: 15,
+    });
+    rateBtn.position.set(W / 2, y + 22);
+    rateBtn.onTap = () => {
+      void requestReview().then((sent) => {
+        if (!sent) return; // закрыл окно — молча, без уговоров
+        ctx.toast(t('Спасибо за оценку! ❤️', 'Thank you for the review! ❤️'));
+        close();
+      });
+    };
+    extra.push(rateBtn);
+    y += 52;
   }
 
   // Политика конфиденциальности — п. 3.5: её текст обязан быть в самой игре.
@@ -880,6 +901,123 @@ export function buildLevelUpPanel(ctx: UiContext, info: LevelUpInfo, close: () =
 }
 
 /**
+ * Финал коллекции: выведены ВСЕ породы каталога. Панель одноразовая — её ставит
+ * в очередь Game.checkAllBreeds, он же взводит флаг state.allBreedsCongratsSeen.
+ * Вид — золотая витрина: салют по шапке, три легендарные мордочки-медальона,
+ * счётчик «N / N» и благодарность за игру.
+ */
+export function buildAllBreedsPanel(ctx: UiContext, close: () => void): Container {
+  const W = 360;
+  const pad = 22;
+  const GOLD = TIER_COLOR.legendary; // цвет легендарного тира — он же цвет финала
+  const root = new Container();
+  const parts: Container[] = [];
+
+  // --- шапка: золотая лента с салютом, кубком и заголовком ---
+  const bandH = 104;
+  const band = new Graphics();
+  band.roundRect(0, 0, W, bandH, 18).fill({ color: GOLD });
+  band.rect(0, bandH - 20, W, 20).fill({ color: GOLD }); // низ ленты — прямой, стык с панелью
+  // салют: звёздочки и конфетти (фиксированные точки — картинка одна и та же
+  // при каждом показе, случайность здесь ничего не даёт)
+  const confetti: ReadonlyArray<readonly [x: number, y: number, r: number]> = [
+    [26, 22, 3], [58, 46, 2], [92, 18, 2.5], [128, 40, 2], [300, 24, 3],
+    [268, 48, 2], [332, 44, 2.5], [232, 20, 2], [196, 52, 2], [160, 26, 2.5],
+  ];
+  for (const [cx, cy, r] of confetti) band.circle(cx, cy, r).fill({ color: 0xffffff, alpha: 0.5 });
+  for (const [sx, sy, sr] of [[36, 62, 9], [324, 70, 8], [70, 24, 7]] as const) {
+    band.star(sx, sy, 5, sr, sr * 0.45).fill({ color: 0xffffff, alpha: 0.42 });
+  }
+  parts.push(band);
+
+  const cup = label('🏆', 34, 0xffffff, '800');
+  cup.position.set(W / 2, 38);
+  const title = label(t('Коллекция собрана!', 'The collection is complete!'), 21, 0xffffff, '800');
+  title.position.set(W / 2, bandH - 26);
+  parts.push(cup, title);
+
+  let y = bandH + 14;
+
+  // --- три легендарные мордочки в золотых кольцах (парад вершины селекции) ---
+  const trio = BREEDS.filter((b) => b.tier === 'legendary').slice(0, 3);
+  const r = 34;
+  const gap = 26;
+  let mx = W / 2 - ((r * 2 * trio.length + gap * (trio.length - 1)) / 2) + r;
+  for (const b of trio) {
+    const m = new Container();
+    const back = new Graphics();
+    back.circle(0, 0, r * 1.16).fill({ color: GOLD, alpha: 0.16 });
+    back.circle(0, 3, r).fill({ color: COLORS.ink, alpha: 0.12 });
+    back.circle(0, 0, r).fill({ color: mixColor(COLORS.hud, GOLD, 0.16) });
+    m.addChild(back);
+    const face = breedFaceTexture(ctx.app, b.key);
+    if (face) {
+      const sp = new Sprite(face);
+      sp.anchor.set(0.5);
+      sp.scale.set((r * 2) / face.width);
+      m.addChild(sp);
+    } else {
+      m.addChild(label('🐾', r * 0.9, COLORS.inkSoft, '700'));
+    }
+    m.addChild(new Graphics().circle(0, 0, r).stroke({ width: 3, color: GOLD }));
+    m.position.set(mx, y + r);
+    parts.push(m);
+    mx += r * 2 + gap;
+  }
+  y += r * 2 + 14;
+
+  // --- счётчик пород: все до единой ---
+  const countPlate = panel(W - pad * 2, 40, mixColor(COLORS.card, GOLD, 0.18), 12);
+  countPlate.position.set(pad, y);
+  const countT = label(
+    t(`🐈 ${BREEDS.length} / ${BREEDS.length} пород выведено`, `🐈 ${BREEDS.length} / ${BREEDS.length} breeds obtained`),
+    16, INK, '800',
+  );
+  countT.position.set(W / 2, y + 20);
+  parts.push(countPlate, countT);
+  y += 52;
+
+  // --- поздравление и благодарность ---
+  const wrapText = (text: string, size: number, color: number, weight: '700' | '800'): Text => new Text({
+    text,
+    style: {
+      fontFamily: FONT, fontSize: size, fontWeight: weight, fill: color,
+      align: 'center', wordWrap: true, wordWrapWidth: W - pad * 2 - 20, lineHeight: size + 5,
+    },
+  });
+
+  const cong = wrapText(
+    t('Поздравляем! Вы вывели все существующие породы кошек!',
+      'Congratulations! You have bred every cat breed there is!'),
+    15, INK, '800',
+  );
+  cong.anchor.set(0.5, 0);
+  const thanks = wrapText(
+    t('На этом пока всё, благодарим вас за игру! ❤️',
+      'That is all for now — thank you for playing! ❤️'),
+    13, INK_SOFT, '700',
+  );
+  thanks.anchor.set(0.5, 0);
+
+  const textH = cong.height + 10 + thanks.height;
+  const textPlate = panel(W - pad * 2, textH + 28, COLORS.card, 14);
+  textPlate.position.set(pad, y);
+  cong.position.set(W / 2, y + 14);
+  thanks.position.set(W / 2, y + 14 + cong.height + 10);
+  parts.push(textPlate, cong, thanks);
+  y += textH + 40;
+
+  const btn = new Button({ text: t('❤️ Спасибо!', '❤️ Thank you!'), w: W - pad * 2, h: 48, color: GOLD, textColor: 0xffffff, fontSize: 17 });
+  btn.position.set(W / 2, y + 24);
+  btn.onTap = close;
+  parts.push(btn);
+  y += 60;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), ...parts);
+  return root;
+}
+
+/**
  * Карточка рождения: показывает новорождённого (облик, пол, редкость, родословную).
  * Если родилось несколько — листаем по одному кнопкой «Следующий».
  */
@@ -923,7 +1061,7 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     const tierT = label(tierName(cat.rarityTier), 13, TIER_COLOR[cat.rarityTier], '800');
     tierT.position.set(W / 2, y); y += 22;
 
-    const grow = label(t('пол и имя проявятся, когда подрастёт 🌱', 'sex and name appear once it grows up 🌱'), 12, COLORS.inkSoft, '600');
+    const grow = label(t('пол проявится, когда подрастёт 🌱', 'the sex appears once it grows up 🌱'), 12, COLORS.inkSoft, '600');
     grow.position.set(W / 2, y); y += 24;
 
     const extra: Container[] = [];
@@ -976,7 +1114,7 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
       const b = new Button({ text, w: W - 60, h: 46, color, fontSize: 16 });
       b.position.set(W / 2, y + 23);
       b.onTap = () => {
-        const r = moveCat(ctx.state, cat.id, room);
+        const r = moveCat(ctx.state, cat.id, room, ctx.now());
         if (!r.ok) { flashNoSpace(b.y - 4); return; }
         ctx.commit();
         ctx.toast(room === 'shelter' ? t('Малыш в приюте 🏠', 'The kitten is in the shelter 🏠') : t('Малыш в питомнике 🏆', 'The kitten is in the cattery 🏆'));
@@ -995,7 +1133,7 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
     ));
 
     // Крайний случай (мест нигде нет): оставить малыша с родителями в слоте — он
-    // растёт втрое медленнее и блокирует слот, пока его не унесут в комнату.
+    // растёт вдвое медленнее и блокирует слот, пока его не унесут в комнату.
     if (held) {
       const keep = new Button({
         text: t('🐾 Оставить с родителями', '🐾 Leave it with the parents'), w: W - 60, h: 44, color: COLORS.warn,
@@ -1005,7 +1143,7 @@ export function buildBirthCard(ctx: UiContext, events: BirthEvent[], close: () =
       keep.onTap = () => {
         keepKittenWithParents(ctx.state, cat.id, ctx.now());
         ctx.commit();
-        ctx.toast(t('Малыш остался с роднёй 🐾 (растёт медленно)', 'The kitten stayed with its family 🐾 (grows slowly)'));
+        ctx.toast(t('Малыш остался с роднёй 🐾 (в слоте растёт вдвое дольше)', 'The kitten stayed with its family 🐾 (in the slot it grows twice as long)'));
         advance();
       };
       btns.push(keep);
@@ -1247,6 +1385,7 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
       );
       return;
     }
+    sfxEvent('buy');
     ctx.commit();
     const lvlNow = researchLevel(ctx.state, def.id);
     ctx.toast(total > 1 ? t(`${def.glyph} ${tx(def.title)} · ур. ${lvlNow}/${total} ✅`, `${def.glyph} ${tx(def.title)} · lv. ${lvlNow}/${total} ✅`)
@@ -1277,7 +1416,7 @@ function addMoveButtons(ctx: UiContext, cat: Cat, close: () => void, addBtn: Add
   const inSlot = isInSlot(ctx.state, cat.id);
   const move = (room: LiveRoom, text: string, color: number): void => {
     addBtn(text, color, true, () => {
-      const r = moveCat(ctx.state, cat.id, room);
+      const r = moveCat(ctx.state, cat.id, room, ctx.now());
       if (!r.ok) { ctx.toast(r.reason); return; }
       clearBreederSlot(ctx.state, cat.id); // если стоял в слоте — снять со слота
       close(); ctx.commit();
@@ -1314,7 +1453,7 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   st.position.set(W / 2, y); y += 22;
   const tierT = label(t(`🍼 котёнок · ${tierName(cat.rarityTier)}`, `🍼 kitten · ${tierName(cat.rarityTier)}`), 13, tierCol, '800');
   tierT.position.set(W / 2, y); y += 22;
-  const hint = label(t('пол и имя проявятся, когда подрастёт 🌱', 'sex and name appear once it grows up 🌱'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
+  const hint = label(t('пол проявится, когда подрастёт 🌱', 'the sex appears once it grows up 🌱'), V(12.5, 12), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
   hint.position.set(W / 2, y); y += 24;
 
   // шкала взросления (заполняется в реальном времени)
@@ -1331,6 +1470,19 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   const timeT = label('', V(13.5, 13), V(INK, COLORS.ink), V('800', '700'));
   timeT.position.set(W / 2, barY + barH + 16);
   y = barY + barH + 34;
+
+  // Малышу, «оставленному с роднёй», срок удвоен (KITTEN_SLOW_FACTOR) — таймер выше
+  // показывает уже растянутый остаток, поэтому строкой поясняем причину и выход.
+  const slowNote: Container[] = [];
+  if (cat.growthMs) {
+    const note = label(
+      t('в слоте растёт вдвое дольше', 'in the slot it grows twice as long'),
+      V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'),
+    );
+    note.position.set(W / 2, y);
+    slowNote.push(note);
+    y += 20;
+  }
 
   // Кнопки: родословная (если известны родители) + переезд (в слоте — обе
   // комнаты) + закрыть. Малыш не занимает место навсегда — его можно переселить.
@@ -1366,7 +1518,7 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
 
   const kitBg = panel(W, y, V(lighten(tierCol, 0.92), COLORS.hud), 18);
   if (VIVID) kitBg.roundRect(0, 0, W, y, 18).stroke({ width: 3, color: tierCol, alpha: 0.5 });
-  root.addChild(kitBg, title, st, tierT, hint, barBg, bar, timeT, ...controls, closeBtn);
+  root.addChild(kitBg, title, st, tierT, hint, barBg, bar, timeT, ...slowNote, ...controls, closeBtn);
 
   const mmss = (ms: number): string => {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -1474,7 +1626,9 @@ export function buildGrowConfirm(ctx: UiContext, cat: Cat, close: () => void): C
   root.addChild(adBtn);
   y += 52;
 
-  const gcost = speedUpCost(remain, GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
+  // Цена — от остатка в обычном масштабе: за тесноту слота игрок не доплачивает
+  // (полный скип = те же 3 💎, хоть у малыша на таймере и 30 мин).
+  const gcost = speedUpCost(growthBillableMs(cat, ctx.now()), GROWTH_SPEEDUP_CRYSTAL_PER_MIN);
   const afford = ctx.state.crystals >= gcost;
   const crysBtn = new Button({
     text: t(`💎 Вырастить сразу · ${gcost}`, `💎 Grow up instantly · ${gcost}`), w: btnW, h: 44,
@@ -2018,6 +2172,242 @@ export function buildBreedCard(ctx: UiContext, breedKey: string, close: () => vo
   y += 50;
 
   root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+  return root;
+}
+
+/**
+ * 🧪 Вскрытие колбы стола исследований — ЕДИНСТВЕННОЕ место, где называется
+ * изученный рецепт: уведомление о готовности его намеренно не раскрывает, иначе
+ * вскрывать было бы нечего. Панель собирается сразу целиком (высота не скачет),
+ * анимация лишь показывает её по частям: колба кипит и дрожит → вспышка с
+ * искрами → портрет породы «выпрыгивает» из света (в цвете, а затем застывает
+ * силуэтом, если породу ещё не вывели) → имя, рецепт и кнопки. Тикер снимает
+ * себя сам, когда оверлей закрыли (root.destroyed).
+ */
+export function buildRecipeRevealPanel(ctx: UiContext, recipe: Recipe, close: () => void): Container {
+  const W = 340;
+  const root = new Container();
+  const breedKey = recipe.result;
+  const tier = tierOfBreed(breedKey);
+  const tierCol = TIER_COLOR[tier];
+  const bred = breedDiscovered(ctx.state, breedKey);
+
+  const title = label(t('🧪 Колба вскрыта', '🧪 The flask is open'), 18, COLORS.ink, '800');
+  title.position.set(W / 2, 28);
+
+  // --- сцена раскрытия ---
+  const stageTop = 48;
+  const stageH = 158;
+  const cx = W / 2;
+  const cy = stageTop + stageH / 2;
+  const stageBg = new Graphics();
+  stageBg.roundRect(cx - 120, stageTop, 240, stageH, 18)
+    .fill({ color: lighten(COLORS.dna, 0.9) })
+    .stroke({ width: 3, color: COLORS.dna, alpha: 0.5 });
+
+  const glow = new Graphics();   // сияние под колбой, потом ореол портрета
+  const burst = new Graphics();  // вспышка, кольцо и искры (рисуются покадрово)
+  const flaskG = new Graphics();
+  const flask = new Container();
+  flask.addChild(flaskG);
+  flask.position.set(cx, cy);
+
+  // Портрет породы: силуэт (рецепт знаем, породу ещё не вывели) или цветной, если
+  // порода уже выведена. Контейнер закреплён «по земле» — pop растит его вверх.
+  const tex = breedThumbTexture(breedKey);
+  const portrait = new Container();
+  portrait.position.set(cx, stageTop + stageH - 12);
+  let ghost: Sprite | null = null;
+  if (tex) {
+    const sp = new Sprite(tex);
+    sp.anchor.set(0.5, 1);
+    sp.scale.set(Math.min((stageH * 0.82) / tex.height, (W * 0.46) / tex.width));
+    if (!bred) sp.tint = 0x241d29;
+    portrait.addChild(sp);
+    if (!bred) { // цветной «призрак» поверх силуэта: в свете вспышки порода видна вся
+      ghost = new Sprite(tex);
+      ghost.anchor.set(0.5, 1);
+      ghost.scale.copyFrom(sp.scale);
+      portrait.addChild(ghost);
+    }
+  } else {
+    const paw = label('🐾', 52, bred ? COLORS.ink : darken(COLORS.ink, 0.55), '800');
+    paw.position.set(0, -stageH * 0.36);
+    portrait.addChild(paw);
+  }
+  portrait.alpha = 0;
+  portrait.scale.set(0.3);
+
+  root.addChild(title, stageBg, glow, portrait, flask, burst);
+
+  // --- подписи (проявляются после вспышки) ---
+  const info = new Container();
+  let y = stageTop + stageH + 12;
+  const name = label(stackWords(breedName(breedKey)), 19, tierCol, '800');
+  name.anchor.set(0.5, 0);
+  name.position.set(W / 2, y);
+  info.addChild(name);
+  y += name.height + 6;
+
+  const st = stars(tier, 15);
+  st.position.set(W / 2, y);
+  info.addChild(st);
+  y += 20;
+
+  const tierT = label(tierName(tier), 12.5, tierCol, '800');
+  tierT.position.set(W / 2, y);
+  info.addChild(tierT);
+  y += 20;
+
+  const pairT = new Text({
+    text: `🧪 ${describeRecipe(recipe).pair}`,
+    style: {
+      fontFamily: FONT, fontSize: 13 * UI_SCALE, fontWeight: '800', fill: COLORS.ink,
+      wordWrap: true, wordWrapWidth: W - 48, lineHeight: 17 * UI_SCALE, align: 'center',
+    },
+  });
+  pairT.anchor.set(0.5, 0);
+  pairT.position.set(W / 2, y);
+  info.addChild(pairT);
+  y += pairT.height + 6;
+
+  const status = label(
+    bred ? t('📜 рецепт записан в Котодекс', '📜 the recipe is written into the Catdex')
+      : t('📜 рецепт записан — породу ещё предстоит вывести', '📜 recipe written — the breed is yet to be bred'),
+    12, COLORS.inkSoft, '700',
+  );
+  status.position.set(W / 2, y);
+  info.addChild(status);
+  y += 22;
+  root.addChild(info);
+
+  // --- кнопки (включаются, когда раскрытие доиграло) ---
+  const btns = new Container();
+  const openBtn = new Button({
+    text: t('📖 Посмотреть в Котодексе', '📖 Open in the Catdex'), w: W - 60, h: 42,
+    color: COLORS.primary, fontSize: 15,
+  });
+  openBtn.position.set(W / 2, y + 21);
+  openBtn.onTap = () => ctx.openBreedCard(breedKey);
+  y += 50;
+  const okBtn = new Button({
+    text: t('Отлично!', 'Great!'), w: 180, h: 40, color: COLORS.cardEdge,
+    textColor: COLORS.ink, fontSize: 14,
+  });
+  okBtn.position.set(W / 2, y + 20);
+  okBtn.onTap = close;
+  y += 50;
+  btns.addChild(openBtn, okBtn);
+  root.addChild(btns);
+
+  info.alpha = 0;
+  btns.alpha = 0;
+  btns.eventMode = 'none'; // пока раскрытие играет, по кнопкам не тыкают вслепую
+
+  root.addChildAt(panel(W, y, COLORS.hud, 18), 0);
+
+  // --- анимация ---
+  const BOIL = 0.95; // сколько колба кипит и дрожит до вспышки
+  const bubbles = Array.from({ length: 7 }, () => ({
+    x: -24 + Math.random() * 48, r: 2.2 + Math.random() * 3, sp: 0.55 + Math.random() * 0.7, ph: Math.random(),
+  }));
+  interface Spark { x: number; y: number; vx: number; vy: number; r: number; col: number; life: number; max: number }
+  const sparks: Spark[] = [];
+  let tm = 0;
+  let popped = false;
+
+  /** Колба: стекло, реактив и поднимающиеся пузырьки (k — «накал» 0..1). */
+  const drawFlask = (k: number): void => {
+    flaskG.clear();
+    const body = lighten(COLORS.dna, 0.86);
+    flaskG.roundRect(-14, -66, 28, 22, 7).fill({ color: body }).stroke({ width: 3, color: COLORS.dna, alpha: 0.8 });
+    flaskG.roundRect(-20, -76, 40, 12, 5).fill({ color: COLORS.cardEdge }).stroke({ width: 2, color: COLORS.dna, alpha: 0.5 });
+    flaskG.roundRect(-44, -50, 88, 100, 26).fill({ color: body }).stroke({ width: 3, color: COLORS.dna, alpha: 0.8 });
+    // реактив: уровень слегка «дышит» вместе с кипением
+    const lvl = 6 + Math.sin(tm * 7) * 2 * k;
+    flaskG.roundRect(-38, -6 - lvl, 76, 50 + lvl, 22).fill({ color: COLORS.dna, alpha: 0.6 });
+    for (const b of bubbles) {
+      const p = (tm * b.sp * (0.6 + k) + b.ph) % 1;
+      flaskG.circle(b.x + Math.sin(p * 6.3) * 3, 40 - p * 52, b.r * (0.5 + p * 0.6))
+        .fill({ color: 0xffffff, alpha: 0.55 * (1 - p * 0.7) });
+    }
+    flaskG.roundRect(-34, -44, 12, 40, 6).fill({ color: 0xffffff, alpha: 0.45 }); // блик на стекле
+  };
+
+  const tick = (tk: { deltaMS: number }): void => {
+    if (root.destroyed) { ctx.app.ticker.remove(tick); return; }
+    const dt = Math.min(0.05, tk.deltaMS / 1000);
+    tm += dt;
+    const q = tm - BOIL; // < 0 — колба ещё кипит
+
+    if (q < 0) {
+      const k = tm / BOIL;
+      flask.x = cx + Math.sin(tm * 34) * (1 + 3.5 * k * k); // дрожь нарастает
+      flask.rotation = Math.sin(tm * 27) * 0.035 * k;
+      flask.scale.set(1 + 0.07 * k * k);
+      glow.clear();
+      glow.circle(cx, cy, 52 + 14 * k).fill({ color: COLORS.dna, alpha: 0.1 + 0.3 * k * k });
+      drawFlask(k);
+    } else {
+      if (!popped) { // вспышка: колба «раскрывается» светом и брызгами
+        popped = true;
+        for (let i = 0; i < 16; i++) {
+          const a = (i / 16) * Math.PI * 2 + Math.random() * 0.4;
+          const v = 130 + Math.random() * 190;
+          sparks.push({
+            x: cx, y: cy, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 40,
+            r: 2.5 + Math.random() * 3.5, col: i % 2 ? tierCol : COLORS.dna,
+            life: 0, max: 0.55 + Math.random() * 0.35,
+          });
+        }
+      }
+      const f = Math.min(1, q / 0.22);
+      flask.alpha = 1 - f;
+      flask.scale.set(1 + 0.55 * f);
+      if (f >= 1) flask.visible = false;
+
+      // портрет выпрыгивает из света (лёгкий перелёт масштаба)
+      const p = Math.max(0, Math.min(1, (q - 0.05) / 0.45));
+      const c1 = 1.70158;
+      const eb = 1 + (c1 + 1) * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+      portrait.alpha = Math.min(1, p * 1.8);
+      portrait.scale.set(0.3 + 0.7 * eb);
+      if (ghost) ghost.alpha = 1 - Math.max(0, Math.min(1, (q - 0.5) / 0.45)); // цвет гаснет в силуэт
+
+      glow.clear();
+      const pulse = 0.16 + 0.06 * Math.sin(tm * 3.2);
+      glow.circle(cx, cy + 12, 58 + 6 * Math.sin(tm * 3.2)).fill({ color: tierCol, alpha: pulse * portrait.alpha });
+
+      const ia = Math.max(0, Math.min(1, (q - 0.3) / 0.35));
+      info.alpha = ia;
+      info.y = 14 * (1 - ia);
+      const ba = Math.max(0, Math.min(1, (q - 0.55) / 0.35));
+      btns.alpha = ba;
+      if (ba >= 1 && btns.eventMode === 'none') btns.eventMode = 'auto';
+    }
+
+    burst.clear();
+    if (popped) {
+      const fq = Math.min(1, q / 0.4);
+      if (fq < 1) burst.circle(cx, cy, 24 + 150 * fq).fill({ color: 0xffffff, alpha: 0.85 * (1 - fq) });
+      const rq = Math.min(1, q / 0.6);
+      if (rq < 1) burst.circle(cx, cy, 30 + 110 * rq).stroke({ width: 1 + 4 * (1 - rq), color: tierCol, alpha: 0.8 * (1 - rq) });
+      for (const s of sparks) {
+        s.life += dt;
+        if (s.life >= s.max) continue;
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        s.vy += 240 * dt; // искры оседают
+        s.vx *= 0.98;
+        const a = 1 - s.life / s.max;
+        burst.circle(s.x, s.y, s.r * a + 0.5).fill({ color: s.col, alpha: a });
+      }
+    }
+  };
+
+  drawFlask(0);
+  ctx.app.ticker.add(tick);
+  sfxEvent('lab'); // булькание реактива — тот же звук, что при передаче кота в биобанк
   return root;
 }
 
@@ -2823,8 +3213,9 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
  * Выполнить заказ можно ТОЛЬКО котом из корзины: кнопка «Выполнить» активна лишь у строк,
  * под которые он подходит.
  *
- * РАСКЛАДКА строки: «Выполнить» — справа сверху, «📺 обновить» — слева снизу (по разным
- * углам карточки, чтобы не промахнуться пальцем), таймер жизни — текстом справа снизу.
+ * РАСКЛАДКА строки: правая колонка сверху вниз — «Выполнить», таймер жизни, «📺 обновить».
+ * Главная кнопка стоит отдельно сверху (её жали чаще всего и промахивались по соседней
+ * 📺), а таймер жизни разделяет их прослойкой. 📺-обновление спрашивает подтверждение.
  */
 export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 620;
@@ -2913,13 +3304,13 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
       row.addChild(rew);
     }
 
-    // таймер жизни — над кнопками, в правой колонке
+    // таймер жизни — между кнопками, в правой колонке (заодно разводит их по краям)
     const timer = label(t(`⏳ сменится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
     timer.anchor.set(1, 0.5);
-    timer.position.set(cardW - 16, V(17, 70));
+    timer.position.set(cardW - 16, V(58, 70));
     row.addChild(timer);
 
-    // главная кнопка «Выполнить» — в правой колонке, под таймером
+    // главная кнопка «Выполнить» — в правой колонке сверху, подальше от 📺
     const btnText = !cat ? t('нужен кот', 'need a cat') : busy ? t('кот занят', 'cat is busy') : fits ? t('Выполнить', 'Complete') : t('не подходит', 'does not match');
     const btn = new Button({
       text: btnText, w: V(COL_W, 150), h: V(36, 40),
@@ -2927,17 +3318,20 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
       textColor: ready ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 15,
     });
     btn.enabled = ready;
-    btn.position.set(V(colCx, cardW - 16 - 75), V(48, 26));
+    btn.position.set(V(colCx, cardW - 16 - 75), V(29, 26));
     btn.onTap = () => {
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) {
         sfxEvent('order');
+        // Крупный заказ (тот, что платит 💎) — пик радости: подходящий момент
+        // предложить оценить игру. Само окно покажет Game, когда экран освободится.
+        if (r.reward.crystals > 0) ctx.wantReview();
         ctx.commit(); ctx.toast(t('Заказ выполнен! ', 'Order complete! ') + rewardText(r.reward)); close(); ctx.openOrders();
       } else ctx.toast(r.reason);
     };
     row.addChild(btn);
 
-    // 📺-обновление — под «Выполнить», в той же колонке.
+    // 📺-обновление — в самом низу колонки, под таймером.
     // Кулдаун свой у каждого заказа, поэтому состояние кнопки считается по строке.
     const adAvail = canAdRefreshOrder(order, ctx.now());
     const refBtn = new Button({
@@ -2947,17 +3341,10 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
       textColor: adAvail ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 11,
     });
     refBtn.enabled = adAvail;
-    refBtn.position.set(V(colCx, 16 + 89), V(80, 70));
-    refBtn.onTap = () => {
-      void showRewarded().then((watched) => {
-        if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); return; }
-        const r = adRefreshOrder(ctx.state, ctx.rng, order.id, ctx.now());
-        if (!r.ok) { ctx.toast(r.reason); return; }
-        ctx.commit();
-        ctx.toast(t('Заказ обновлён 📺', 'Order refreshed 📺'));
-        close(); ctx.openOrders();
-      });
-    };
+    refBtn.position.set(V(colCx, 16 + 89), V(81, 70));
+    // Не обновляем сразу: заказ вместе с наградой пропадает безвозвратно, а кнопка
+    // соседствует с «Выполнить» — сначала спрашиваем (см. buildOrderRefreshConfirm).
+    refBtn.onTap = () => { close(); ctx.openOrderRefreshConfirm(order.id); };
     row.addChild(refBtn);
 
     row.position.set(16, y);
@@ -2972,6 +3359,80 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const H = y + 56;
   root.addChild(panel(W, H, COLORS.hud, 18));
   root.addChild(title, basket, adHelp, rows, closeBtn);
+  return root;
+}
+
+/**
+ * Подтверждение 📺-обновления заказа («Реклама · обновить» на доске заказов).
+ *
+ * Раньше тап сразу запускал рекламу и подменял заказ, а кнопка соседствует с
+ * «Выполнить» — промах стоил игроку уже присмотренной награды. Оверлей в игре
+ * один, поэтому и «Отмена», и итог обновления возвращают на доску (back).
+ */
+export function buildOrderRefreshConfirm(ctx: UiContext, order: Order, back: () => void): Container {
+  const W = 340;
+  const pad = 22;
+  const root = new Container();
+  const tc = TIER_COLOR[orderTier(order.req)];
+
+  const title = label(t('📺 Обновить заказ?', '📺 Refresh the order?'), 19, COLORS.ink, '800');
+  title.position.set(W / 2, 30);
+
+  const req = new Text({
+    text: `"${describeReq(order.req)}"`,
+    style: {
+      fontFamily: FONT, fontSize: 15.5 * UI_SCALE, fontWeight: '800',
+      fill: V(darken(tc, 0.55), COLORS.ink),
+      align: 'center', wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 20 * UI_SCALE,
+    },
+  });
+  req.anchor.set(0.5, 0);
+  req.position.set(W / 2, 56);
+
+  const rew = rewardRow(order.reward, 14.5);
+  rew.position.set((W - rew.width) / 2, req.y + req.height + 16);
+
+  const body = new Text({
+    text: t(
+      'Этот заказ пропадёт — на его месте появится другой, случайный. Награда может оказаться и меньше нынешней.\n\n'
+      + 'За просмотр рекламы. Обновить заказ можно раз в час.',
+      'This order disappears — a different, random one takes its place. The reward may turn out smaller than the current one.\n\n'
+      + 'Costs an ad view. An order can be refreshed once per hour.',
+    ),
+    style: {
+      fontFamily: FONT, fontSize: 13 * UI_SCALE, fontWeight: '600', fill: COLORS.inkSoft,
+      wordWrap: true, wordWrapWidth: W - pad * 2, lineHeight: 18 * UI_SCALE, align: 'left',
+    },
+  });
+  body.anchor.set(0, 0);
+  body.position.set(pad, rew.y + rew.height + 16);
+
+  let y = body.y + body.height + 16;
+  const gap = 12;
+  const bw = (W - pad * 2 - gap) / 2;
+  const noBtn = new Button({ text: t('Отмена', 'Cancel'), w: bw, h: 48, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 16 });
+  noBtn.position.set(pad + bw / 2, y + 24);
+  noBtn.onTap = back;
+  const yesBtn = new Button({
+    text: t('📺 Обновить', '📺 Refresh'), w: bw, h: 48,
+    color: V(darken(COLORS.secondary, 0.1), COLORS.secondary), fontSize: 16,
+  });
+  yesBtn.position.set(pad + bw + gap + bw / 2, y + 24);
+  yesBtn.onTap = () => {
+    yesBtn.enabled = false;
+    noBtn.enabled = false;
+    void showRewarded().then((watched) => {
+      if (!watched) { ctx.toast(t('Реклама недоступна', 'Ad unavailable')); back(); return; }
+      const r = adRefreshOrder(ctx.state, ctx.rng, order.id, ctx.now());
+      if (!r.ok) { ctx.toast(r.reason); back(); return; }
+      ctx.commit();
+      ctx.toast(t('Заказ обновлён 📺', 'Order refreshed 📺'));
+      back();
+    });
+  };
+  y += 56;
+
+  root.addChild(panel(W, y, COLORS.hud, 18), title, req, rew, body, noBtn, yesBtn);
   return root;
 }
 

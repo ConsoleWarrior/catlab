@@ -6,8 +6,10 @@ import {
   msUntilOrderExpiry, ORDER_TARGET, ORDER_REFRESH_MS, ORDER_AD_REFRESH_COOLDOWN_MS,
   ORDER_SELL_SLOTS, ORDER_CRYSTALS, ORDER_CRYSTALS_MAX, ORDER_CRYSTAL_LEVELS, orderCrystalsFor,
   ORDER_SELL_CRYSTALS, ORDER_SELL_CRYSTAL_CHANCE, orderRepFor, MAX_LEVEL,
+  putCatInBasket, isInBasket, roomCount, moveCat, setChampion, isChampion,
+  assignBreeder, isInSlot, startBreeding, nurseryCapacity, shelterCapacity,
 } from './index.js';
-import type { Order } from './index.js';
+import type { Order, GameState } from './index.js';
 
 const noReward = { coins: 0, crystals: 0, dna: 0, reputation: 0 };
 const mkOrder = (over: Partial<Order>): Order => ({
@@ -369,5 +371,96 @@ describe('💎 за заказ: только «цель», от уровня л�
     for (const o of s.orders) o.expiresAt = 1;
     refreshExpiredOrders(s, makeRng(28), 1000);
     expect(s.orders.map((o) => o.kind)).toEqual(kinds);
+  });
+});
+
+describe('корзина заказов — отдельное место (как слот вязки и пьедестал)', () => {
+  const addCat = (s: GameState, sex: 'female' | 'male' = 'female') => {
+    const c = makeCatInstance(s, makeCat(sex), 0, 'nursery', 'persian');
+    s.cats.push(c);
+    return c;
+  };
+
+  it('кот в корзине не занимает места в комнате', () => {
+    const s = createInitialState(makeRng(60), 0);
+    s.cats = [];
+    const cat = addCat(s);
+    expect(roomCount(s, 'nursery')).toBe(1);
+    expect(putCatInBasket(s, cat.id).ok).toBe(true);
+    expect(roomCount(s, 'nursery')).toBe(0); // «в переноске», а не на полу
+    expect(isInBasket(s, cat.id)).toBe(true);
+  });
+
+  it('кота из слота вязки можно положить в корзину — слот освобождается', () => {
+    const s = createInitialState(makeRng(61), 0);
+    s.cats = [];
+    const cat = addCat(s);
+    expect(assignBreeder(s, 0, cat.id, 0).ok).toBe(true);
+    expect(isInSlot(s, cat.id)).toBe(true);
+    expect(putCatInBasket(s, cat.id).ok).toBe(true);
+    expect(isInSlot(s, cat.id)).toBe(false);
+    expect(isInBasket(s, cat.id)).toBe(true);
+  });
+
+  it('идёт вязка — кота в корзину не забрать', () => {
+    const s = createInitialState(makeRng(62), 0);
+    s.cats = [];
+    const female = addCat(s, 'female');
+    const male = addCat(s, 'male');
+    assignBreeder(s, 0, female.id, 0);
+    assignBreeder(s, 0, male.id, 0);
+    expect(startBreeding(s, 0, female.id, male.id, 0, makeRng(62)).ok).toBe(true);
+    expect(putCatInBasket(s, female.id).ok).toBe(false);
+    expect(s.orderBasket).toBeNull();
+  });
+
+  it('из корзины на пьедестал — кот только на пьедестале, без дубля', () => {
+    const s = createInitialState(makeRng(63), 0);
+    s.cats = [];
+    const cat = addCat(s);
+    putCatInBasket(s, cat.id);
+    expect(setChampion(s, cat.id, 0, 0).ok).toBe(true);
+    expect(isChampion(s, cat.id)).toBe(true);
+    expect(s.orderBasket).toBeNull(); // корзина пуста — кот не «раздвоился»
+  });
+
+  it('в корзину с пьедестала — кот только в корзине', () => {
+    const s = createInitialState(makeRng(64), 0);
+    s.cats = [];
+    const cat = addCat(s);
+    setChampion(s, cat.id, 0, 0);
+    expect(putCatInBasket(s, cat.id).ok).toBe(true);
+    expect(isChampion(s, cat.id)).toBe(false);
+    expect(isInBasket(s, cat.id)).toBe(true);
+  });
+
+  it('обратно на пол — только если в комнате есть место', () => {
+    const s = createInitialState(makeRng(65), 0);
+    s.cats = [];
+    const cat = addCat(s);
+    putCatInBasket(s, cat.id);
+    // забиваем питомник до потолка, пока кот «в переноске»
+    while (roomCount(s, 'nursery') < nurseryCapacity(s)) addCat(s);
+    expect(moveCat(s, cat.id, 'nursery', 0).ok).toBe(false); // некуда — остаётся в корзине
+    expect(isInBasket(s, cat.id)).toBe(true);
+    expect(moveCat(s, cat.id, 'shelter', 0).ok).toBe(true);  // в приюте место есть
+    expect(s.orderBasket).toBeNull();
+    expect(cat.location).toBe('shelter');
+  });
+
+  it('вытесненному из корзины коту ищется пол, иначе замена не проходит', () => {
+    const s = createInitialState(makeRng(66), 0);
+    s.cats = [];
+    const first = addCat(s);
+    const second = addCat(s);
+    putCatInBasket(s, first.id);
+    // питомник и приют забиты — первому некуда вернуться
+    while (roomCount(s, 'nursery') < nurseryCapacity(s)) addCat(s);
+    while (roomCount(s, 'shelter') < shelterCapacity(s)) {
+      const c = makeCatInstance(s, makeCat('female'), 0, 'shelter', 'persian');
+      s.cats.push(c);
+    }
+    expect(putCatInBasket(s, second.id).ok).toBe(false);
+    expect(isInBasket(s, first.id)).toBe(true); // корзина не тронута
   });
 });

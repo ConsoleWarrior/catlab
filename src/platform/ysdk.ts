@@ -66,6 +66,18 @@ export interface YaAdv {
   showFullscreenAdv(opts: { callbacks: YaAdvCallbacks }): void;
 }
 
+/**
+ * Оценка игры (sdk-review). `canReview` отвечает, примет ли платформа оценку
+ * прямо сейчас; `reason` при отказе: NO_AUTH (гость), GAME_RATED (уже оценивал),
+ * REVIEW_ALREADY_REQUESTED / REVIEW_WAS_REQUESTED (в этой сессии уже спрашивали),
+ * UNKNOWN. `requestReview` показывает нативное окно со звёздами и комментарием;
+ * feedbackSent === true — игрок оценку поставил, false — закрыл окно.
+ */
+export interface YaFeedback {
+  canReview(): Promise<{ value: boolean; reason?: string }>;
+  requestReview(): Promise<{ feedbackSent: boolean }>;
+}
+
 export interface Ysdk {
   getPlayer(opts?: { scopes?: boolean; signed?: boolean }): Promise<YaPlayer>;
   getPayments(opts?: { signed?: boolean }): Promise<YaPayments>;
@@ -74,6 +86,7 @@ export interface Ysdk {
   environment?: { i18n?: { lang?: string; tld?: string } };
   auth?: { openAuthDialog(): Promise<void> };
   adv?: YaAdv;
+  feedback?: YaFeedback;
   /** События платформы (game_api_pause / game_api_resume). */
   on?(event: string, cb: () => void): void;
   off?(event: string, cb: () => void): void;
@@ -132,6 +145,7 @@ export async function openAuthDialog(): Promise<boolean> {
     // облачный сейв должен идти уже в аккаунт (п. 1.13.3 — прогресс доступен с
     // разных устройств). Не получилось — останется гостевой, игра не ломается.
     try { player = await withTimeout(sdk.getPlayer({ scopes: false })); } catch { /* оставляем прежнего */ }
+    void checkReview(); // гость стал авторизованным — оценка могла открыться (NO_AUTH снят)
     return isAuthorized();
   } catch {
     return false; // игрок закрыл окно входа — обычный сценарий
@@ -166,6 +180,56 @@ export function platformLang(): string | null {
 /** Объект rewarded-рекламы (adv.showRewardedVideo); null — SDK нет или платформа его не даёт. */
 export function getAdv(): YaAdv | null {
   return sdk?.adv ?? null;
+}
+
+// --- Оценка игры (feedback API) ---
+//
+// Платформа сама решает, кому можно предлагать оценку: гостю нельзя (NO_AUTH),
+// уже оценившему нельзя (GAME_RATED), и спросить можно РОВНО один раз за сессию.
+// Ответ приходит обещанием, а интерфейс строится синхронно, поэтому держим
+// последний ответ в кэше: `canOfferReview()` — то, что знаем на сейчас.
+let reviewOffer = false;
+
+/** Спросить платформу, примет ли она оценку, и обновить кэш. */
+async function checkReview(): Promise<boolean> {
+  const fb = sdk?.feedback;
+  if (!fb) { reviewOffer = false; return false; }
+  try {
+    const res = await withTimeout(fb.canReview());
+    reviewOffer = !!res?.value;
+  } catch {
+    reviewOffer = false; // ошибка на стороне платформы — просто не предлагаем
+  }
+  return reviewOffer;
+}
+
+/** Оценку можно предложить прямо сейчас (кэш последней проверки canReview). */
+export function canOfferReview(): boolean {
+  return reviewOffer;
+}
+
+/**
+ * Показать нативное окно оценки. true — игрок поставил оценку, false — закрыл
+ * окно, оценка недоступна или платформы нет.
+ *
+ * `canReview` перед показом обязателен по документации (без него платформа
+ * отвечает ошибкой «use canReview before requestReview»), и заодно это свежая
+ * проверка причин отказа. Ждём БЕЗ таймаута: окно живёт, пока игрок не закроет
+ * его сам. На это время геймплей стоит — окно платформы поверх игры это пауза.
+ */
+export async function requestReview(): Promise<boolean> {
+  const fb = sdk?.feedback;
+  if (!fb || !(await checkReview())) return false;
+  gameplayStop();
+  try {
+    const res = await fb.requestReview();
+    return !!res?.feedbackSent;
+  } catch {
+    return false;
+  } finally {
+    gameplayStart();
+    void checkReview(); // запрос израсходован на сессию — кнопка «Оценить» спрячется
+  }
 }
 
 let readyDone = false;
@@ -267,6 +331,10 @@ async function connect(): Promise<void> {
   } catch {
     player = null; // облака не будет, останется localStorage
   }
+
+  // Доступность оценки узнаём заранее: кнопка «⭐ Оценить игру» в ⚙️ Настройках
+  // строится синхронно и должна знать ответ до того, как её нарисуют.
+  void checkReview();
 }
 
 /** Ждём опоздавший тег сколько потребуется — игра в это время уже играется. */

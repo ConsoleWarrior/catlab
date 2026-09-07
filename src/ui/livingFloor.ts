@@ -84,6 +84,8 @@ interface Actor {
   wantToy: boolean;          // идёт к подвесной игрушке, место у неё уже занято за ним
   toySlot: number;           // занятое место у игрушки (−1 — не занимает)
   swipeT: number;            // фаза взмаха лапой в состоянии 'play' (<0 — пауза до следующего)
+  swipeTgt: number;          // за каким мячиком кот тянется этим взмахом (−1 — ни за каким)
+  swipeUp: number;           // 0…1 — насколько тянуться вверх (высокий мячик ↔ низкий)
   onShelf: boolean;          // стоит на настенной полке (своя опора: свой Y, масштаб, границы)
   wantShelf: boolean;        // идёт под полку, чтобы запрыгнуть
   shelfLeft: number;         // сколько ещё гостит наверху, с
@@ -126,24 +128,33 @@ const SHELF_STAY_MIN = 22, SHELF_STAY_VAR = 40;
 const SHELF_WISH = 0.2; // доля «походов», которые взрослый кот затевает ради полки
 
 // Подвесная игрушка (помпон на верёвке у кошачьего комплекса, Приют): коты
-// подходят и гоняют её лапой. Мест у игрушки TOY_SLOT_U.length — по два с каждой
-// стороны от мячика (в ширинах кота), дальние машут слабее: до них мячик
-// долетает только на размахе. Одновременно у игрушки не больше этих мест —
-// иначе коты слились бы в кучу под верёвкой.
+// подходят и гоняют её лапой. Мест ровно два — по одному с каждой стороны от
+// мячика, вплотную. Дальних мест НЕТ: с них кот махал лапой в пустоту (мячик
+// долетал редко), и со стороны это читалось как «прыгает боком, не дотягиваясь».
 /** Глубина, на которой коты встают к игрушке. Экспортируется: комната по ней
  *  считает, на какой глубине РИСОВАТЬ игрушку (мячик висит на уровне кошачьей
  *  головы, и коты у игрушки должны оставаться ЗА ним, а не закрывать его). */
 export const TOY_Z = 0.82;
-// Места разнесены шире, чем «личное пространство» расталкивания (0.48·catH) —
-// иначе пришедший на дальнее место кот вечно отпихивался бы от ближнего.
-const TOY_SLOT_U = [-0.62, 0.62, -1.6, 1.6];
+// Смещение места от мячика — в ШИРИНАХ КОРПУСА самого кота (котёнок встаёт
+// ближе): полкорпуса, чтобы мячик оказался прямо у морды, а не за спиной.
+const TOY_SLOT_U = [-0.62, 0.62];
 const TOY_PLAY_MIN = 5, TOY_PLAY_VAR = 7; // с — сколько кот возится с игрушкой
 const TOY_WISH = 0.22;     // доля «походов», затеваемых ради игрушки
 const SWIPE_DUR = 0.34;    // с — сам взмах лапой
 const SWIPE_HIT = 0.17;    // с — момент касания мячика внутри взмаха
 const SWIPE_GAP_MIN = 0.7, SWIPE_GAP_VAR = 0.9; // с — пауза между взмахами
-const SWIPE_ARM = 0.62;    // длина «лапы» в высотах кота: дальше мячик не достать
 const TOY_REACH = 14;      // px — насколько точно кот должен встать на своё место
+
+// Досягаемость лапы считается в РОСТАХ САМОГО КОТА (рост = catH · перспектива ·
+// growthScale), поэтому правило одно на все пропорции сцены: на телефоне кот
+// относительно комнаты крупнее и дотягивается до ВЕРХНЕГО шарика, на ПК — только
+// до нижнего помпона, а котёнок на ПК не достаёт ни до чего и к игрушке вовсе не
+// идёт (иначе махал бы впустую). Мячиков на подвесе два, и кот перед каждым
+// взмахом выбирает тот, до которого реально дотянется.
+const PAW_UP = 1.2;        // высота лапы над линией ног (кот привстал и тянется)
+const SWIPE_ARM = 0.72;    // вылет лапы по горизонтали
+const SWIPE_UP = 0.35;     // насколько выше лапы ещё можно достать, привстав
+const SWIPE_DOWN = 0.9;    // ...и насколько ниже (низкий мячик катают лапой)
 
 // Память поз котов между пересборками комнат (ресайз окна пересоздаёт «живой
 // пол» целиком). Смещение по X храним нормированным (u = ox/maxOx ∈ [-1..1]),
@@ -176,14 +187,20 @@ export interface ShelfOpts {
   layer?: Container;
 }
 
-/** Подвесная игрушка комнаты, с которой коты играют (см. ui/hangingToy.ts). */
-export interface ToyOpts {
-  /** Смещение мячика (в покое) от центра комнаты по X — к нему коты и идут. */
-  ox: number;
-  /** Где мячик СЕЙЧАС (он качается): по нему кот решает, дотянулся ли лапой. */
-  ballOx(): number;
+/** Один мячик подвесной игрушки (см. ui/hangingToy.ts). */
+export interface ToyTarget {
+  /** Где мячик СЕЙЧАС (он качается), в координатах слоя пола. */
+  ballAt(): { x: number; y: number };
   /** Толкнуть мячик лапой: dir = +1 вправо по экрану, −1 влево; power ≈ 0…1. */
   hit(dir: 1 | -1, power: number): void;
+}
+
+/** Подвесная игрушка комнаты, с которой коты играют (см. ui/hangingToy.ts). */
+export interface ToyOpts {
+  /** Смещение от центра комнаты по X, куда коты подходят играть (мячик в покое). */
+  ox: number;
+  /** Мячики на одном подвесе: кот бьёт тот, до которого дотянется лапой. */
+  targets: readonly ToyTarget[];
 }
 
 export function createLivingFloor(
@@ -268,23 +285,77 @@ export function createLivingFloor(
   }
 
   // --- места у подвесной игрушки ---
-  /** Точка на полу, где стоит кот, занявший i-е место у игрушки. */
-  const toySlotOx = (i: number): number =>
-    (toy?.ox ?? 0) + (TOY_SLOT_U[i] ?? 0) * catH * 0.55 * depthScale(TOY_Z);
+  /** Рост кота на глубине игрушки (перспектива + он ещё котёнок). */
+  const toyCatH = (a: Actor): number =>
+    catH * depthScale(TOY_Z) * growthScale(a.cat, ctx.now());
+  /** Точка на полу, где стоит кот, занявший i-е место: полкорпуса от мячика.
+   *  Корпус у каждого свой — котёнок встаёт ближе, иначе не дотянется. */
+  const toySlotOx = (i: number, a: Actor): number =>
+    (toy?.ox ?? 0) + (TOY_SLOT_U[i] ?? 0) * toyCatH(a) * 0.55;
   /** Кот дошёл до своего места у игрушки. */
   const atToySlot = (a: Actor): boolean => a.toySlot >= 0
-    && Math.abs(a.ox - toySlotOx(a.toySlot)) < TOY_REACH && Math.abs(a.z - TOY_Z) < 0.07;
+    && Math.abs(a.ox - toySlotOx(a.toySlot, a)) < TOY_REACH && Math.abs(a.z - TOY_Z) < 0.07;
+  /**
+   * Насколько мячик вне досягаемости лапы: 0 — лапа ровно на нём, ≥1 — не достать.
+   * `dx` передаётся отдельно: решая «идти ли играть», кот ещё не на месте, и важна
+   * только ВЫСОТА мячика (dx = 0 — «если встану прямо под ним»).
+   */
+  function toyMiss(a: Actor, t: ToyTarget, dx: number): { miss: number; up: number } {
+    const h = toyCatH(a);
+    const b = t.ballAt();
+    const dy = b.y - (yAt(TOY_Z) - h * PAW_UP); // >0 — мячик ниже поднятой лапы
+    const far = dy > 0 ? dy / (h * SWIPE_DOWN) : -dy / (h * SWIPE_UP);
+    // для позы важна не лапа, а МАКУШКА: мячик выше головы — кот встаёт свечкой,
+    // на уровне головы и ниже — бьёт выпадом вперёд, не поднимаясь
+    const up = ((yAt(TOY_Z) - h) - b.y) / (h * SWIPE_UP);
+    return {
+      miss: Math.max(Math.abs(dx) / (h * SWIPE_ARM), far),
+      up: Math.max(0, Math.min(1, up)),
+    };
+  }
+  /** Есть ли мячик, до которого этот кот вообще дотянется, встав вплотную. */
+  const canPlayWithToy = (a: Actor): boolean =>
+    !!toy && toy.targets.some((t) => toyMiss(a, t, 0).miss < 0.95);
   /** Занять свободное место у игрушки (ближнее к коту). Уже занятое — оставить. */
   function claimToySlot(a: Actor): boolean {
-    if (!toy) return false;
+    if (!toy || !canPlayWithToy(a)) return false;
     if (a.toySlot >= 0) return true;
     const free = TOY_SLOT_U.map((_, i) => i)
       .filter((i) => !actors.some((b) => b !== a && b.toySlot === i))
-      .sort((i, j) => Math.abs(a.ox - toySlotOx(i)) - Math.abs(a.ox - toySlotOx(j)));
+      .sort((i, j) => Math.abs(a.ox - toySlotOx(i, a)) - Math.abs(a.ox - toySlotOx(j, a)));
     const pick = free[0];
     if (pick === undefined) return false;
     a.toySlot = pick;
     return true;
+  }
+
+  /**
+   * Начало взмаха: кот выбирает мячик, до которого дотянется (их два, на разной
+   * высоте), поворачивается к нему и запоминает, насколько тянуться ВВЕРХ — по
+   * этому строится поза: выпад вперёд к низкому, стойка свечкой к высокому.
+   */
+  function aimSwipe(a: Actor): void {
+    if (!toy) return;
+    let best = -1, bestMiss = Infinity, bestDx = 0;
+    a.swipeUp = 0;
+    toy.targets.forEach((t, i) => {
+      const dx = t.ballAt().x - (centerX + a.ox);
+      const r = toyMiss(a, t, dx);
+      if (r.miss < bestMiss) { best = i; bestMiss = r.miss; bestDx = dx; a.swipeUp = r.up; }
+    });
+    a.swipeTgt = best;
+    if (Math.abs(bestDx) > 1) a.facing = (Math.sign(bestDx) || a.facing) as 1 | -1;
+  }
+
+  /** Пик взмаха: лапа толкает выбранный мячик — если тот не успел улететь. */
+  function swipeHit(a: Actor): void {
+    const t = toy?.targets[a.swipeTgt];
+    if (!t) return;
+    const dx = t.ballAt().x - (centerX + a.ox);
+    const { miss } = toyMiss(a, t, dx);
+    if (miss >= 1) return; // качнулся дальше лапы — кот махнул вслед и промазал
+    t.hit((dx >= 0 ? 1 : -1) as 1 | -1,
+      (1 - miss) * (0.5 + 0.45 * growthScale(a.cat, ctx.now())));
   }
   /** Уйти от игрушки: место освобождается для следующего кота. */
   function releaseToySlot(a: Actor): void {
@@ -384,7 +455,7 @@ export function createLivingFloor(
     // собрался к игрушке — идём на своё место под мячиком
     if (a.wantToy && toy && a.toySlot >= 0) {
       a.targetZ = TOY_Z;
-      a.targetOx = toySlotOx(a.toySlot);
+      a.targetOx = toySlotOx(a.toySlot, a);
       a.leapT = 0;
       a.leapPending = false;
       enterState(a, 'walk', 8 + Math.random() * 3);
@@ -651,7 +722,7 @@ export function createLivingFloor(
       stuckT: 0, pushed: 0,
       // место у игрушки при пересборке актёра не наследуем: пересобранный кот
       // начинает с 'idle', и удержанное место просто висело бы занятым
-      wantToy: false, toySlot: -1, swipeT: 0,
+      wantToy: false, toySlot: -1, swipeT: 0, swipeTgt: -1, swipeUp: 0,
       onShelf, wantShelf: false, jump: null,
       shelfLeft: prev?.shelfLeft ?? SHELF_STAY_MIN + Math.random() * SHELF_STAY_VAR,
       infoIcon: null,
@@ -833,20 +904,8 @@ export function createLivingFloor(
         // мячик и толкает его прочь от кота (дальние места бьют слабее)
         const was = a.swipeT;
         a.swipeT += dt;
-        if (toy) {
-          const d = toy.ballOx() - a.ox; // куда качнулся мячик относительно кота
-          // замахиваемся в ту сторону, где мячик сейчас
-          if (was < 0 && a.swipeT >= 0) a.facing = (Math.sign(d) || a.facing) as 1 | -1;
-          // пик взмаха: лапа достаёт мячик, только если он в пределах вытянутой
-          // лапы — иначе кот просто машет по воздуху вслед улетевшему мячику
-          if (was < SWIPE_HIT && a.swipeT >= SWIPE_HIT) {
-            const arm = catH * SWIPE_ARM * depthScale(TOY_Z);
-            const near = 1 - Math.abs(d) / arm;
-            if (near > 0) {
-              toy.hit((d >= 0 ? 1 : -1) as 1 | -1, near * (0.5 + 0.45 * growthScale(a.cat, now)));
-            }
-          }
-        }
+        if (was < 0 && a.swipeT >= 0) aimSwipe(a);                 // замах — выбрали мячик
+        if (was < SWIPE_HIT && a.swipeT >= SWIPE_HIT) swipeHit(a); // пик — толчок лапой
         if (a.swipeT >= SWIPE_DUR) a.swipeT = -(SWIPE_GAP_MIN + Math.random() * SWIPE_GAP_VAR);
         if (a.stateLeft <= 0) pickNextState(a);
       } else if (a.stateLeft <= 0) {
@@ -857,7 +916,7 @@ export function createLivingFloor(
 
       // --- поза по текущему состоянию ---
       const turnDip = a.turnT > 0 ? Math.sin((1 - a.turnT / TURN_DUR) * Math.PI) : 0;
-      let sx = 1, sy = 1, rot = 0, bodyLift = 0, hop = 0;
+      let sx = 1, sy = 1, rot = 0, bodyLift = 0, hop = 0, lungeX = 0;
       switch (a.state) {
         case 'walk': {
           if (a.leapT > 0) {
@@ -927,15 +986,18 @@ export function createLivingFloor(
           break;
         }
         case 'play': {
-          // взмах: кот привстаёт на задние лапы, тянется к мячику и опадает.
-          // Между взмахами (swipeT < 0 или уже после взмаха) просто дышит.
+          // Взмах — ВЫПАД к мячику, а не прыжок на месте: корпус подаётся вперёд
+          // и вверх с наклоном, лапы (тень) остаются на полу.
+          // Между взмахами (swipeT < 0 или уже после взмаха) кот просто дышит.
           const p = a.swipeT >= 0 && a.swipeT < SWIPE_DUR ? a.swipeT / SWIPE_DUR : -1;
           const arc = p < 0 ? 0 : Math.sin(p * Math.PI);
+          const up = a.swipeUp;                  // 1 — мячик высоко: кот встаёт свечкой
           hop = arc * 0.5;                       // тень поджимается под привставшим котом
-          bodyLift = arc * catH * 0.3;
-          sy = (1 + arc * 0.16) * (p < 0 ? 1 + Math.sin(a.phase * 2) * 0.02 : 1);
-          sx = 1 - arc * 0.07;
-          rot = a.facing * 0.26 * arc;           // наклон корпуса к мячику
+          bodyLift = arc * catH * (0.18 + 0.26 * up);
+          lungeX = a.facing * arc * catH * 0.17 * (1 - 0.55 * up); // выпад — к низкому
+          sy = (1 + arc * (0.1 + 0.12 * up)) * (p < 0 ? 1 + Math.sin(a.phase * 2) * 0.02 : 1);
+          sx = 1 - arc * (0.05 + 0.04 * up);
+          rot = a.facing * (0.33 - 0.16 * up) * arc; // к высокому тянется прямее
           break;
         }
         case 'land': {
@@ -961,6 +1023,7 @@ export function createLivingFloor(
       a.shadow.scale.set(1 - hop * 0.15);
       a.shadow.visible = !a.jump; // оторвался от опоры — тень под лапами гасим
       a.body.y = -bodyLift;
+      a.body.x = lungeX; // выпад к игрушке (во всех прочих позах — 0)
 
       // опора могла смениться прямо в этом кадре (взлёт/посадка) — пересчитываем
       ds = poseScale(a);
@@ -1110,7 +1173,8 @@ export function createLivingFloor(
     const focus = ctx.infoFocus();
     const cand = actors
       .filter((a) => !a.busy && a.view.visible && !a.onShelf && !a.wantShelf && !a.jump
-        && a.toySlot < 0 && a.state !== 'play' && !(focus?.id === a.cat.id && focus.frozen))
+        && a.toySlot < 0 && a.state !== 'play' && !(focus?.id === a.cat.id && focus.frozen)
+        && canPlayWithToy(a)) // до кого мячик не достаёт по росту — того и не зовём
       .sort((a, b) => Math.abs(a.ox - toy.ox) - Math.abs(b.ox - toy.ox));
     let sent = 0;
     for (const a of cand) {

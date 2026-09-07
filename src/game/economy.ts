@@ -195,13 +195,15 @@ export function catsIn(state: GameState, room: LiveRoom): Cat[] {
 }
 
 /**
- * Сколько котов реально живёт в комнате (на полу) — без тех, кто физически в слоте
- * инкубатора (родители вязки и «оставленный с роднёй» малыш) и без чемпионов на
- * пьедесталах выставки (они «в отъезде» на подиуме, а не в комнате). Это число и есть
- * заполненность комнаты для проверки вместимости и подписей «N/cap».
+ * Сколько котов реально живёт в комнате (на полу). Из счёта выпадают все три
+ * «спецместа», где кот стоит отдельно от толпы: слот инкубатора (родители вязки и
+ * «оставленный с роднёй» малыш), пьедестал выставки и корзина заказов — кот там
+ * «в отъезде», а не в комнате. Это число и есть заполненность комнаты для проверки
+ * вместимости и подписей «N/cap».
  */
 export function roomCount(state: GameState, room: LiveRoom): number {
-  return state.cats.filter((c) => c.location === room && !isInSlot(state, c.id) && !isChampion(state, c.id)).length;
+  return state.cats.filter((c) => c.location === room
+    && !isInSlot(state, c.id) && !isChampion(state, c.id) && !isInBasket(state, c.id)).length;
 }
 
 /** Кот занят, если участвует в активной вязке. */
@@ -392,7 +394,8 @@ export function autoFeed(state: GameState, elapsedMin: number): void {
 /**
  * Длительность взросления конкретного кота. По умолчанию KITTEN_GROWTH_MS, но у
  * малыша, «оставленного с родителями», она в KITTEN_SLOW_FACTOR раз больше —
- * он растёт втрое медленнее (см. keepKittenWithParents).
+ * он растёт вдвое медленнее, пока сидит в слоте (см. keepKittenWithParents;
+ * moveCat возвращает обычный темп, когда малыша уносят в комнату).
  */
 export function effGrowthMs(cat: Cat): number {
   return cat.growthMs && cat.growthMs > 0 ? cat.growthMs : C.KITTEN_GROWTH_MS;
@@ -426,6 +429,18 @@ export function isAdult(cat: Cat, now: number): boolean {
 /** Сколько мс осталось котёнку до взросления (0 — уже взрослый). */
 export function growthRemainingMs(cat: Cat, now: number): number {
   return Math.max(0, effGrowthMs(cat) - (now - cat.bornAt));
+}
+
+/**
+ * Остаток роста в ОБЫЧНОМ масштабе — по нему считается цена 💎 за «Вырастить сейчас».
+ * У малыша в слоте срок растянут (KITTEN_SLOW_FACTOR), но платить за тесноту игрок не
+ * должен: берём долю оставшегося роста и переводим её в минуты обычных KITTEN_GROWTH_MS,
+ * так что полный скип стоит те же 3 💎 хоть в слоте, хоть в комнате.
+ */
+export function growthBillableMs(cat: Cat, now: number): number {
+  const left = growthRemainingMs(cat, now);
+  if (left <= 0) return 0;
+  return left * (C.KITTEN_GROWTH_MS / effGrowthMs(cat));
 }
 
 // --- Генная инженерия ---

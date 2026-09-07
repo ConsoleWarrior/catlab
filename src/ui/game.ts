@@ -9,8 +9,8 @@ import {
   Application, Assets, Container, Graphics, Rectangle, Sprite, Text,
 } from 'pixi.js';
 import type { Texture, FederatedPointerEvent } from 'pixi.js';
-import { makeRng, randomCat, expressPhenotype, pick, BREEDS, breedName } from '../genetics/index.js';
-import type { Rng } from '../genetics/index.js';
+import { makeRng, randomCat, expressPhenotype, pick, BREEDS } from '../genetics/index.js';
+import type { Recipe, Rng } from '../genetics/index.js';
 import type { Sex } from '../genetics/index.js';
 import { buildCat } from '../render/catSprite.js';
 import {
@@ -20,7 +20,8 @@ import {
   nextLevelRep, unlocksAtLevel, levelCrystalReward, LEVEL_REP_THRESHOLDS, MAX_LEVEL, addReputation,
   foodRatePerMin, isStarving, autoFeedEnabled, buyFood, cryoUnlocked,
   finishRecipeResearch, refreshExpiredOrders,
-  grantCrystals, isKnownPack, tutorialActive, tutorialStep, finishTutorial, restartTutorial,
+  grantCrystals, isKnownPack, allBreedsBred, canAskReview, noteReviewAsked,
+  tutorialActive, tutorialStep, finishTutorial, restartTutorial,
   markTutorialSeen, grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   OFFLINE_REPORT_MIN_MS,
 } from '../game/index.js';
@@ -45,9 +46,9 @@ import {
   buildCatMenu, buildOrdersPanel, buildBirthCard, buildPedigreePanel, buildTutorialDonePanel,
   buildBoostMenu, buildAdoptConfirm, buildLabConfirm, buildBulkAdoptConfirm, buildBulkLabConfirm,
   buildHealConfirm, buildCryoMenu, buildGrowConfirm,
-  buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildPairPreview,
+  buildFreezeConfirm, buildAnalyzeConfirm, buildBreedCard, buildRecipeRevealPanel, buildPairPreview,
   buildDevMenu, buildResearchConfirm, buildSettingsPanel, buildShopPanel, buildOfflineReport,
-  buildLevelUpPanel, buildPrivacyPanel, buildResetConfirm,
+  buildLevelUpPanel, buildAllBreedsPanel, buildPrivacyPanel, buildResetConfirm, buildOrderRefreshConfirm,
 } from './overlays.js';
 import type { OfflineReport, LevelUpInfo } from './overlays.js';
 import { buildRoomHelpPanel } from './roomHelp.js';
@@ -55,9 +56,10 @@ import {
   initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler, platformLang,
   setLatePlayerHandler,
 } from '../platform/ysdk.js';
+import { canOfferReview, requestReview } from '../platform/ysdk.js';
 import { loadSaveCandidates, writeSave, writeSaveAwait, adoptLatePlayer, resetSave } from '../platform/storage.js';
 import { initPayments, shopAvailable, buyPack } from '../platform/payments.js';
-import { setAdPauseHandler } from '../platform/ads.js';
+import { setAdPauseHandler, adRecently } from '../platform/ads.js';
 import { initLang, t, onLangChange, setLang } from '../i18n.js';
 
 // --- Виртуальное разрешение (требования Яндекс Игр, п. 1.6 и 1.10) ---
@@ -194,6 +196,12 @@ export class Game implements UiContext {
   // Финал обучения ждёт показа панелью «Обучение пройдено» с подарком и кнопкой
   // «Забрать» (ставится в Tutorial.finish, показывается в update на свободном экране).
   private pendingTutorDone = false;
+  // Финал коллекции: выведены ВСЕ породы. Ставится в checkAllBreeds (флаг в сейве
+  // взводится там же — панель одноразовая), показывается в update на свободном экране.
+  private pendingAllBreeds = false;
+  // «Пик радости» случился — можно предложить оценить игру. Показывается в update,
+  // когда экран свободен от всех окон и рядом нет рекламы (см. wantReview/askReview).
+  private pendingReview = false;
   private toastT: Text | null = null;
   private toastUntil = 0;
 
@@ -478,6 +486,7 @@ export class Game implements UiContext {
         app: this.app, state: this.state,
         goRoom: (i: number) => this.goRoom(i),
         openOrders: () => this.openOrders(),
+        orderRefresh: (id?: string) => this.openOrderRefreshConfirm(id ?? this.state.orders[0]?.id ?? ''),
         openRoomHelp: (id = 'incubator') => this.openRoomHelp(id),
         openSettings: () => this.openSettings(),
         openPrivacy: () => this.openPrivacy(),
@@ -697,7 +706,7 @@ export class Game implements UiContext {
     for (const e of events) {
       if (!e.kitten) continue;
       const id = e.kitten.id;
-      if (!moveCat(this.state, id, 'nursery').ok && !moveCat(this.state, id, 'shelter').ok) {
+      if (!moveCat(this.state, id, 'nursery', now).ok && !moveCat(this.state, id, 'shelter', now).ok) {
         keepKittenWithParents(this.state, id, now);
       }
     }
@@ -773,6 +782,7 @@ export class Game implements UiContext {
     }
     this.updateHud();
     this.checkLevelUp(); // повышение уровня от любого действия → баннер со списком открытий
+    this.checkAllBreeds(); // Котодекс собран полностью → финальное поздравление (один раз)
     // Помечаем «есть что сохранять», но НЕ трогаем таймер: он тикает от первого
     // несохранённого действия. Раньше здесь стоял сброс, и у игрока, который
     // действует чаще раза в 8 секунд (обычный темп в Инкубаторе и заказах),
@@ -940,6 +950,11 @@ export class Game implements UiContext {
     this.showOverlay(buildBreedCard(this, breedKey, close));
   }
 
+  openRecipeReveal(recipe: Recipe): void {
+    const close = (): void => this.closeOverlay();
+    this.showOverlay(buildRecipeRevealPanel(this, recipe, close));
+  }
+
   openPairPreview(mother: Cat, father: Cat): void {
     // шаг обучения «посмотри прогноз пары» — из состояния его не вычислить
     if (markTutorialSeen(this.state, 'preview')) this.save();
@@ -968,6 +983,14 @@ export class Game implements UiContext {
     if (markTutorialSeen(this.state, 'orders')) this.save();
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildOrdersPanel(this, close));
+  }
+
+  /** Подтверждение 📺-обновления заказа: и отмена, и итог возвращают на доску. */
+  openOrderRefreshConfirm(orderId: string): void {
+    const back = (): void => this.openOrders();
+    const order = this.state.orders.find((o) => o.id === orderId);
+    if (!order) { back(); return; }   // заказ успел смениться сам — просто открываем доску
+    this.showOverlay(buildOrderRefreshConfirm(this, order, back));
   }
 
   /** Справка комнаты (ℹ️ в титульной плашке). Общей стены «Как играть» больше нет:
@@ -1016,6 +1039,8 @@ export class Game implements UiContext {
     this.pendingOffline = null;
     this.pendingLevelUp = null;
     this.pendingTutorDone = false;
+    this.pendingAllBreeds = false;
+    this.pendingReview = false;
     this.catInfoFocus = null;
     this.clearSelection();
     this.incomeAcc = 0;
@@ -1156,6 +1181,8 @@ export class Game implements UiContext {
     g.edgeCd -= dt;
     if (g.edgeCd > 0) return;
     const edge = Math.min(72, this.roomW * 0.12);
+    // над целью дропа у кромки (стойка заказов Питомника) не листаем — там ждут кота
+    if (this.rooms[this.currentRoom]?.blocksEdgeScroll?.(g.x, g.y)) return;
     const lo = this.roomIndex('incubator');
     const hi = this.roomIndex('shelter');
     // 2 c между сменами комнат — чтобы не проскакивать центральную комнату насквозь
@@ -1180,7 +1207,7 @@ export class Game implements UiContext {
     // ничего не меняется (тот же пол, не из слота) — просто приземлить на полу
     if (cat.location === room && !staged) return false;
     // moveCat сам проверит место и снимет «оставленного с роднёй» малыша со слота
-    const r = moveCat(this.state, cat.id, room);
+    const r = moveCat(this.state, cat.id, room, this.now());
     if (!r.ok) { this.toast(r.reason); return false; } // нет места → вернётся в слот
     clearBreederSlot(this.state, cat.id); // если был родителем — снять (для малыша no-op)
     this.commit();
@@ -1498,6 +1525,12 @@ export class Game implements UiContext {
       unlocks.unshift(...this.pendingLevelUp.unlocks);
     }
     this.pendingLevelUp = { level: to, crystals, unlocks };
+    // Пик радости для просьбы об оценке: 4-5 уровень лаборатории — игра уже
+    // «зашла» (петля освоена, механики открываются), но усталости ещё нет.
+    // Проверяем ПЕРЕСЕЧЕНИЕ рубежа, а не итоговый уровень: после долгой отлучки
+    // опыт может перебросить сразу через несколько уровней, и точное «ровно 4
+    // или 5» такой момент просто терял бы.
+    if (to >= 4 && from < 5) this.wantReview();
   }
 
   /**
@@ -1521,6 +1554,55 @@ export class Game implements UiContext {
     // тап по затемнению — тоже «забрать»: подарок заработан, терять его нельзя
     this.overlayDim?.removeAllListeners('pointertap');
     this.overlayDim?.on('pointertap', claim);
+  }
+
+  /**
+   * Финал коллекции: последняя порода выведена. Проверяем из commit() — то есть
+   * после любого действия, каким бы путём порода ни пришла (вязка, клон, заказ).
+   * Флаг в сейве ставим сразу, при постановке в очередь: панель одноразовая, а
+   * Котодекс остаётся полным навсегда — иначе окно всплывало бы снова и снова.
+   */
+  private checkAllBreeds(): void {
+    if (this.state.allBreedsCongratsSeen || !allBreedsBred(this.state)) return;
+    this.state.allBreedsCongratsSeen = true;
+    this.pendingAllBreeds = true;
+    this.save();
+  }
+
+  /** Показать поздравление с полной коллекцией (экран уже свободен от оверлеев). */
+  private showAllBreedsPanel(): void {
+    this.pendingAllBreeds = false;
+    sfxEvent('levelup'); // та же фанфара, что и на повышении уровня
+    this.showOverlay(buildAllBreedsPanel(this, () => this.closeOverlay()));
+  }
+
+  /**
+   * Отметить «пик радости»: момент, в который уместно предложить оценить игру
+   * (первая легендарная порода, 4-5 уровень лаборатории, крупный заказ). Само
+   * окно платформы показывается позже — из update, когда экран свободен.
+   */
+  wantReview(): void {
+    if (!this.pendingReview && canAskReview(this.state, this.now())) this.pendingReview = true;
+  }
+
+  /**
+   * Нативное окно оценки (звёзды + комментарий рисует сама площадка). Своего
+   * пре-диалога «Нравится игра?» намеренно нет: лишний экран только съедает
+   * согласия, а окно платформы и так закрывается крестиком.
+   *
+   * Попытку засчитываем по факту показа, а не по результату: закрыл окно —
+   * значит просить снова можно не раньше, чем через REVIEW_ASK_COOLDOWN_MS.
+   * Гостю и уже оценившему платформа сама не даст (canOfferReview → canReview),
+   * и такой отказ попытку не тратит.
+   */
+  private askReview(): void {
+    this.pendingReview = false;
+    if (!canOfferReview() || !canAskReview(this.state, this.now())) return;
+    noteReviewAsked(this.state, this.now());
+    this.save();
+    void requestReview().then((sent) => {
+      if (sent) this.toast(t('Спасибо за оценку! ❤️', 'Thank you for the review! ❤️'));
+    });
   }
 
   /** Показать накопленную панель повышения уровня (экран уже свободен от оверлеев). */
@@ -1807,6 +1889,9 @@ export class Game implements UiContext {
         // первую в Котодексе породу отмечаем отдельной фанфарой — событие редкое,
         // обычное рождение звучит скромнее (на выводок один звук, а не по малышу)
         sfxEvent(events.some((e) => e.kitten && e.newBreed) ? 'newbreed' : 'birth');
+        // Легендарная порода, открытая впервые — вершина селекции и лучший момент
+        // спросить об оценке (окно придёт после карточки рождения, см. update).
+        if (events.some((e) => e.newBreed && e.kitten?.rarityTier === 'legendary')) this.wantReview();
         const base = born > 1 ? t(`Малыши родились: ${born} 🐾`, `Kittens born: ${born} 🐾`) : t('Малыш родился! 🐾', 'A kitten is born! 🐾');
         this.toast(rep ? `${base} +${rep} ⭐` : base);
       }
@@ -1824,7 +1909,9 @@ export class Game implements UiContext {
     if (this.state.recipeResearch?.readyAt > 0 && this.now() >= this.state.recipeResearch.readyAt) {
       const res = finishRecipeResearch(this.state, this.now(), this.rng);
       this.commit();
-      if (res.recipe) this.toast(t(`📜 Рецепт изучен: «${breedName(res.recipe.result)}»! Загляни в Котодекс`, `📜 Recipe researched: "${breedName(res.recipe.result)}"! Check the Catdex`));
+      // какой именно рецепт достался — не говорим: колбу вскрывают руками в
+      // Генолабе (стол исследований → «Вскрыть колбу»), там и раскрытие
+      if (res.sealed) this.toast(t('🧪 Исследование готово! Колба ждёт в Генолабе', '🧪 Research is done! A flask is waiting in the Genolab'));
       else if (res.refunded) this.toast(t('Исследовать нечего — все рецепты открыты, ресурсы возвращены ↩', 'Nothing left to research — every recipe is known, resources refunded ↩'));
     }
 
@@ -1835,6 +1922,20 @@ export class Game implements UiContext {
     // за обучение не должен спорить с фанфарой уровня за одного и того же кота.
     if (this.pendingTutorDone && !this.overlayOpen && !this.pendingOffline && !this.pendingLevelUp) {
       this.showTutorDonePanel();
+    }
+    // Финал коллекции — последним в очереди: это самая крупная новость, и она не
+    // должна мелькнуть под карточкой рождения или фанфарой уровня за того же кота.
+    if (this.pendingAllBreeds && !this.overlayOpen && !this.pendingOffline
+      && !this.pendingLevelUp && !this.pendingTutorDone) {
+      this.showAllBreedsPanel();
+    }
+    // Просьба оценить игру — в самом хвосте очереди: окно платформы не должно
+    // накладываться ни на одно наше окно и не должно идти в одной цепочке с
+    // рекламой (после ролика выдерживаем тишину, см. adRecently).
+    if (this.pendingReview && !this.overlayOpen && !this.pendingOffline
+      && !this.pendingLevelUp && !this.pendingTutorDone && !this.pendingAllBreeds
+      && !adRecently()) {
+      this.askReview();
     }
 
     this.updateHud();

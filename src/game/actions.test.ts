@@ -5,7 +5,7 @@ import {
   collectReady, adoptCat, moveCat, keepKittenWithParents,
   buyUpgrade, unlockGene, collectIncome, offlineAdBonus, claimOfflineAdBonus, breedingDuration,
   passiveRatePerMin, offlineCapMin, buyCat, buyCatCost, isRescuePair, buyBoost, adChargeBoost, toggleBoost, activeBoostId, unlockResearch,
-  isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, nurseryCapacity,
+  isOld, breedsLeft, roomCount, isAdult, growthRemainingMs, growthProgress, nurseryCapacity,
   revealPedigree, pedigreeHasFog, serialize, deserialize, BOOST_AD_COOLDOWN_MS,
 } from './index.js';
 import { STARTER_CAT_COST, MAX_HEARTS, KITTEN_GROWTH_MS, KITTEN_SLOW_FACTOR } from './config.js';
@@ -550,15 +550,38 @@ describe('малыш с родителями (рождение)', () => {
     expect(isInSlot(s, female.id)).toBe(false);
   });
 
-  it('keepKittenWithParents включает медленный рост (втрое)', () => {
+  it('новорождённый в слоте растёт вдвое дольше с первой секунды', () => {
+    const { s, kitten } = bornKitten(108);
+    const born = kitten.bornAt;
+    expect(kitten.growthMs).toBe(KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR);
+    expect(growthRemainingMs(kitten, born)).toBe(KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR);
+    expect(isAdult(kitten, born + KITTEN_GROWTH_MS)).toBe(false); // обычного срока мало
+    expect(isInSlot(s, kitten.id)).toBe(true);
+  });
+
+  it('keepKittenWithParents включает медленный рост (вдвое)', () => {
     const { s, kitten } = bornKitten(104);
     const now = 5_000;
     keepKittenWithParents(s, kitten.id, now);
     expect(kitten.growthMs).toBe(KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR);
-    // в обычный срок ещё не взрослый — взрослеет только через утроенный
+    // в обычный срок ещё не взрослый — взрослеет только через удвоенный
     expect(isAdult(kitten, now + KITTEN_GROWTH_MS)).toBe(false);
     expect(isAdult(kitten, now + KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR)).toBe(true);
     expect(growthRemainingMs(kitten, now)).toBe(KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR);
+  });
+
+  it('унесли из слота в комнату — темп снова обычный, доля роста сохраняется', () => {
+    const { s, kitten } = bornKitten(104);
+    const now = 5_000;
+    keepKittenWithParents(s, kitten.id, now);
+    // половина растянутого срока в слоте = половина роста
+    const half = now + KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR * 0.5;
+    expect(moveCat(s, kitten.id, 'shelter', half).ok).toBe(true);
+    expect(kitten.growthMs).toBeUndefined();
+    expect(growthProgress(kitten, half)).toBeCloseTo(0.5, 5);
+    // остаток идёт в обычном темпе: полсрока обычных 15 мин
+    expect(growthRemainingMs(kitten, half)).toBe(KITTEN_GROWTH_MS * 0.5);
+    expect(isAdult(kitten, half + KITTEN_GROWTH_MS * 0.5)).toBe(true);
   });
 
   it('подросший малыш уходит родителем в соседний слот и не остаётся в родном (без раздвоения)', () => {
@@ -573,7 +596,8 @@ describe('малыш с родителями (рождение)', () => {
     const kitten = collectReady(s, dur, rng)[0]!.kitten!;
     expect(s.slots[0]!.kittenId).toBe(kitten.id);
 
-    const grown = dur + KITTEN_GROWTH_MS; // малыш дорос до взрослого
+    // малыш остался в слоте → срок взросления удвоен (KITTEN_SLOW_FACTOR)
+    const grown = dur + KITTEN_GROWTH_MS * KITTEN_SLOW_FACTOR;
     expect(isAdult(kitten, grown)).toBe(true);
     // ставим подросшего малыша в соседний слот как родителя
     expect(assignBreeder(s, 1, kitten.id, grown).ok).toBe(true);

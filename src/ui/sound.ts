@@ -44,7 +44,13 @@ export type SfxEvent =
   | 'freeze'    // кот заморожен в криокапсулу
   | 'lab'       // кот сдан в лабораторию «на эксперименты»
   | 'adopt'     // кот отдан «в добрые руки»
+  | 'buy'       // покупка за 💰 (кот, корм, слот, пьедестал, узел «Улучшений»)
   | 'heal';     // ветеринар восстановил вязки
+
+// У события может не быть своего файла — тогда играем звук-донор. Звон монет один
+// и тот же и когда монеты приходят («в добрые руки»), и когда уходят (покупка);
+// появится отдельный buy.mp3 — достаточно убрать строчку.
+const EVENT_FILE: Partial<Record<SfxEvent, SfxEvent>> = { buy: 'adopt' };
 
 const TARGET_RMS = 0.08; // ориентир «нормальной» громкости (≈ −22 дБFS)
 const GAIN_MIN = 0.25;   // пределы автоподстройки: совсем тихая запись не должна
@@ -190,12 +196,13 @@ export function initSfx(): void {
  */
 export function sfxEvent(id: SfxEvent): void {
   const now = performance.now();
-  if (now - (eventAt.get(id) ?? -Infinity) < EVENT_GAP_MS) return;
-  const alias = `ev:${id}`;
+  const file = EVENT_FILE[id] ?? id; // гашение повторов считаем по ФАЙЛУ, а не по событию
+  if (now - (eventAt.get(file) ?? -Infinity) < EVENT_GAP_MS) return;
+  const alias = `ev:${file}`;
   if (!sound.exists(alias)) return; // initSfx ещё не звали (find бы бросил исключение)
   const s = sound.find(alias);
   if (!s.isLoaded) return; // ещё грузится — молчим, ждать событие не будет
-  eventAt.set(id, now);
+  eventAt.set(file, now);
   s.play();
 }
 

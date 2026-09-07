@@ -37,6 +37,19 @@ const WATCHDOG_MS = 30_000;
 const WATCHDOG_OPEN_MS = 240_000;
 
 let showing = false;
+let lastAdEndedAt = 0; // когда закончился последний показ (для «тишины» после рекламы)
+
+/** Пауза после рекламы, в течение которой другие окна поверх игры неуместны. */
+export const AD_QUIET_MS = 60_000;
+
+/**
+ * Реклама идёт прямо сейчас или только что закончилась. Нужна тем окнам, которые
+ * не должны идти «в одной цепочке» с роликом, — прежде всего нативной просьбе
+ * оценить игру (см. GAME.md §17.6).
+ */
+export function adRecently(quietMs: number = AD_QUIET_MS): boolean {
+  return showing || Date.now() - lastAdEndedAt < quietMs;
+}
 
 let pauseUi: ((on: boolean) => void) | null = null;
 
@@ -87,6 +100,7 @@ function run(show: (finish: (ok: boolean) => void, opened: () => void) => void):
       done = true;
       clearTimeout(timer);
       showing = false;
+      lastAdEndedAt = Date.now();
       gameplayStart();
       pauseUi?.(false);
       resolve(ok);
@@ -109,6 +123,11 @@ function devMock(ms: number): Promise<boolean> {
   showing = true;
   pauseUi?.(true); // и на локалке пауза настоящая — иначе её нечем проверить
   return new Promise((resolve) => {
-    setTimeout(() => { showing = false; pauseUi?.(false); resolve(true); }, ms);
+    setTimeout(() => {
+      showing = false;
+      lastAdEndedAt = Date.now(); // и на локалке «тишина после рекламы» настоящая
+      pauseUi?.(false);
+      resolve(true);
+    }, ms);
   });
 }

@@ -22,7 +22,7 @@ import {
   RESEARCH, isUnlocked, unlockLevelOf,
   researchLevel, researchOwned, researchMaxed, researchNext, researchExtraCoins, canAffordResearch,
   breedDiscovered, breedStudied, researchableRecipes,
-  startRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
+  startRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch, revealRecipeResearch,
   recipeResearchCost, recipeResearchMs,
   speedUpCost, RECIPE_AD_SKIP_MS, RECIPE_SPEEDUP_CRYSTAL_PER_MIN,
 } from '../../game/index.js';
@@ -32,6 +32,7 @@ import type { Room, UiContext } from '../context.js';
 import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, INK, INK_SOFT, label, panel, tierName, TIER_COLOR, TIERS, V, VIVID } from '../theme.js';
 import { breedThumbTexture } from '../catTextures.js';
+import { sfxEvent } from '../sound.js';
 import { t, tx, type LocStr } from '../../i18n.js';
 
 type Section = 'codex' | 'research' | 'recipes';
@@ -150,6 +151,14 @@ export function createGenolab(ctx: UiContext): Room {
       b.position.set(bw / 2 + i * (bw + gap), 21);
       b.onTap = () => { section = d.id; remembered.section = d.id; refresh(); };
       c.addChild(b);
+      // колба с результатом ждёт вскрытия — красная точка на вкладке, чтобы её
+      // не пришлось искать (какой это рецепт, метка, разумеется, не выдаёт)
+      if (d.id === 'recipes' && ctx.state.recipeResearch?.pending) {
+        const dot = new Graphics();
+        dot.circle(0, 0, 6).fill(0xe4695f).stroke({ width: 2, color: 0xffffff, alpha: 0.95 });
+        dot.position.set(b.x + bw / 2 - 12, 9);
+        c.addChild(dot);
+      }
     });
     return c;
   }
@@ -600,6 +609,8 @@ export function createGenolab(ctx: UiContext): Room {
   let recipeBar: Graphics | null = null;
   let recipeTime: Text | null = null;
   let recipeBarGeom = { x: 0, y: 0, w: 0 };
+  let sealedFlask: Container | null = null; // готовая колба «дышит», пока её не вскрыли
+  let sealedT = 0;
 
   function mmss(ms: number): string {
     const s = Math.max(0, Math.ceil(ms / 1000));
@@ -619,6 +630,7 @@ export function createGenolab(ctx: UiContext): Room {
     const viewH = shell.contentH - viewTop;
     recipeBar = null;
     recipeTime = null;
+    sealedFlask = null;
 
     // Гейт уровнем лаборатории — как у Улучшений.
     if (!isUnlocked(ctx.state, 'recipeLab')) {
@@ -639,10 +651,11 @@ export function createGenolab(ctx: UiContext): Room {
 
     const rr = ctx.state.recipeResearch;
     const busy = rr.readyAt > 0;
+    const sealed = !!rr.pending; // результат готов, но колба ещё запечатана
     const pool = researchableRecipes(ctx.state);
 
     // --- карточка стола ---
-    const deskH = 158;
+    const deskH = sealed ? 172 : 158; // готовой колбе нужен ряд повыше (колба + подпись + кнопка)
     const desk = panel(viewW, deskH, V(lighten(COLORS.dna, 0.87), COLORS.card), 16);
     if (VIVID) { // рамка цвета 🧬 и блик поверху: стол выглядит прибором, а не листом бумаги
       desk.roundRect(0, 0, viewW, deskH, 16).stroke({ width: 3, color: COLORS.dna, alpha: 0.5 });
@@ -660,7 +673,47 @@ export function createGenolab(ctx: UiContext): Room {
     sub.position.set(18, viewTop + 44);
     shell.body.addChild(sub);
 
-    if (busy) {
+    if (sealed) {
+      // Результат готов, но КАКОЙ рецепт — знает только колба: имя откроется
+      // в анимации вскрытия (buildRecipeRevealPanel), а не в уведомлении.
+      const flask = new Container();
+      flask.position.set(54, viewTop + 104); // слева у края карточки: подпись встаёт рядом, а не поверх
+      flask.scale.set(1.25);
+      const g = new Graphics();
+      g.circle(0, 0, 26).fill({ color: COLORS.dna, alpha: 0.18 });               // сияние
+      g.roundRect(-7, -30, 14, 11, 4).fill({ color: COLORS.cardEdge }).stroke({ width: 2, color: COLORS.dna, alpha: 0.7 });
+      g.roundRect(-19, -22, 38, 44, 12).fill({ color: lighten(COLORS.dna, 0.86) }).stroke({ width: 2.5, color: COLORS.dna, alpha: 0.85 });
+      g.roundRect(-16, -2, 32, 21, 10).fill({ color: COLORS.dna, alpha: 0.6 });  // реактив
+      g.circle(-6, 2, 3).fill({ color: 0xffffff, alpha: 0.6 });
+      g.circle(5, 8, 2).fill({ color: 0xffffff, alpha: 0.5 });
+      flask.addChild(g);
+      const q = label('?', 17, V(shade(COLORS.dna, 0.5), COLORS.ink), '800');
+      q.position.set(0, 6);
+      flask.addChild(q);
+      shell.body.addChild(flask);
+      sealedFlask = flask;
+
+      const ready = label(t('Результат готов!', 'The result is ready!'), V(16, 15), V(shade(COLORS.good, 0.6), COLORS.good), '800');
+      ready.anchor.set(0, 0.5);
+      ready.position.set(96, viewTop + 90);
+      const hint = label(t('колба запечатана — вскрой, чтобы узнать рецепт', 'the flask is sealed — open it to see the recipe'), V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
+      hint.anchor.set(0, 0.5);
+      hint.position.set(96, viewTop + 112);
+      shell.body.addChild(ready, hint);
+
+      const open = new Button({
+        text: t('🧪 Вскрыть колбу', '🧪 Open the flask'), w: Math.min(300, viewW - 48), h: 42,
+        color: V(shade(COLORS.dna, 0.86), COLORS.dna), fontSize: 15,
+      });
+      open.position.set(viewW / 2, viewTop + 145);
+      open.onTap = () => {
+        const recipe = revealRecipeResearch(ctx.state);
+        ctx.commit();
+        if (recipe) ctx.openRecipeReveal(recipe);
+        else ctx.toast(t('Колба оказалась пуста ↩', 'The flask turned out to be empty ↩'));
+      };
+      shell.body.addChild(open);
+    } else if (busy) {
       // идёт исследование: прогресс-бар + время + ускорения 📺/💎 (как в слоте вязки)
       const barW = Math.round(viewW * 0.6);
       const barX = Math.round((viewW - barW) / 2);
@@ -739,7 +792,7 @@ export function createGenolab(ctx: UiContext): Room {
       start.position.set(viewW / 2, viewTop + 118);
       start.onTap = () => {
         const r = startRecipeResearch(ctx.state, ctx.now());
-        if (r.ok) { ctx.commit(); ctx.toast(t('Исследование началось 🧪', 'Research started 🧪')); }
+        if (r.ok) { sfxEvent('lab'); ctx.commit(); ctx.toast(t('Исследование началось 🧪', 'Research started 🧪')); }
         else ctx.toast(r.reason === 'locked' ? t('Стол ещё заперт 🔒', 'The bench is still locked 🔒') : r.reason);
       };
       shell.body.addChild(start);
@@ -832,6 +885,7 @@ export function createGenolab(ctx: UiContext): Room {
     shell.body.removeChildren();
     recipeBar = null;
     recipeTime = null;
+    sealedFlask = null;
     shell.body.addChild(tabBar());
     if (section === 'codex') renderCodex();
     else if (section === 'research') renderResearch();
@@ -839,7 +893,12 @@ export function createGenolab(ctx: UiContext): Room {
   }
 
   /** Живой прогресс стола исследований (бар + счётчик), пока открыта вкладка. */
-  function tick(_dt: number): void {
+  function tick(dt: number): void {
+    if (sealedFlask && !sealedFlask.destroyed) { // колба «дышит»: её ждут, а не проходят мимо
+      sealedT += dt;
+      sealedFlask.scale.set(1 + 0.06 * Math.sin(sealedT * 3.4));
+      sealedFlask.rotation = Math.sin(sealedT * 1.7) * 0.05;
+    }
     if (!recipeBar || !recipeTime) return;
     const rr = ctx.state.recipeResearch;
     if (rr.readyAt === 0) return; // завершение обработает game.update → commit → refresh

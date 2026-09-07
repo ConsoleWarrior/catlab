@@ -26,6 +26,7 @@ export {
   PEDESTAL_COSTS, PEDESTAL_PLACES, PLACE_INCOME_MULT,
   OFFLINE_CAP_BASE_MIN, OFFLINE_REPORT_MIN_MS, OFFLINE_AD_BONUS,
   START_COINS, START_CRYSTALS, START_DNA, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
+  REVIEW_ASK_MAX, REVIEW_ASK_COOLDOWN_MS,
 } from './config.js';
 export type { UpgradeDef, GeneDef, BoostDef, BoostId, ResearchDef, ResearchLevel, ResearchEffectKind, LabFeature, CrystalPack } from './config.js';
 export {
@@ -37,7 +38,8 @@ export {
   catFoodPerMin, feedingCatCount, foodBuyQuote,
   feedEfficiency, autoFeedEnabled, autoFeed, breedChanceMult, kinshipSafety, extraHearts, applyExtraHearts,
   hiddenRaritySteps, hiddenTierWeights,
-  makeCatInstance, buyCatCost, isRescuePair, growthScale, growthProgress, growthRemainingMs, isAdult,
+  makeCatInstance, buyCatCost, isRescuePair, growthScale, growthProgress, growthRemainingMs,
+  growthBillableMs, isAdult,
   boostCharges, activeBoostId, activeBoosts, consumeBoosts, researchBonus,
   researchLevel, researchOwned, researchMaxed, researchNext, isOld, breedsLeft, heartsOf, isSterile,
   catMarketValue, pedigreeValueMult, healthValueMult, labReward, shelterTotals,
@@ -55,7 +57,7 @@ export {
   revealPedigree, pedigreeHasFog, knownAncestorBreeds,
 } from './pedigree.js';
 export {
-  recipeIsKnown, breedDiscovered, breedStudied, knownRecipesFor,
+  recipeIsKnown, breedDiscovered, breedStudied, allBreedsBred, knownRecipesFor,
   researchableRecipes, outcomeRevealed,
 } from './knowledge.js';
 export {
@@ -74,7 +76,7 @@ export {
   putCatInBasket, clearOrderBasket,
   buyUpgrade, unlockGene, analyzeCat, freeAnalyzeCat, claimOrder, buyCat, buyBoost, adChargeBoost, toggleBoost, unlockResearch,
   addReputation, buyFood, healCat, freezeCat, cloneCat, disposeCryo,
-  startRecipeResearch, finishRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
+  startRecipeResearch, finishRecipeResearch, revealRecipeResearch, speedUpRecipeResearch, adSkipRecipeResearch,
   grantCrystals, firstPurchaseBonusAvailable, isKnownPack,
 } from './actions.js';
 export type { Result, BirthEvent, OfflineIncome } from './actions.js';
@@ -83,3 +85,4 @@ export {
   grantTutorialReward, analyzeTarget, adoptTarget, kittenInSlot, growTarget, shelterTarget,
 } from './tutorial.js';
 export type { TutorStep } from './tutorial.js';
+export { canAskReview, noteReviewAsked } from './review.js';

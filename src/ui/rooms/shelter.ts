@@ -17,10 +17,10 @@ import type { Cat } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane, cornerStation, stationBadge, shelfPlane, buildShelf } from './shell.js';
 import { Button, COLORS, label } from '../theme.js';
-import { createLivingFloor, TOY_Z, type ToyOpts } from '../livingFloor.js';
+import { createLivingFloor, TOY_Z, type ToyTarget } from '../livingFloor.js';
 import { decorPoint, decorTexture } from '../decorArt.js';
 import { createHangingToy, type HangingToy } from '../hangingToy.js';
-import { sfxMeow } from '../sound.js';
+import { sfxEvent, sfxMeow } from '../sound.js';
 import { t } from '../../i18n.js';
 
 // Кошачий комплекс — единственный декор Приюта, к которому что-то подвешено.
@@ -35,12 +35,13 @@ const TOWER = 'tower3_seed1002';
  * находит точку подвеса в комнате при любой пропорции экрана); pivot/ball —
  * пиксели уже СВОЕЙ текстуры игрушки. Числа те же, что в scripts/cut_toy.py.
  *
- * Коты играют только с помпоном (`paws`): он висит ровно на высоте поднятой
- * лапы, а шарик на короткой нитке — под самой площадкой, до него не достать.
+ * Лапой коты гоняют обе: до какой дотянется конкретный кот, решает уже «живой
+ * пол» по его росту (на телефоне сцена крупнее, и коты достают до верхнего
+ * шарика тоже). `stand: true` — игрушка, под которую коты подходят вставать.
  */
 const SHELTER_TOYS = [
-  { sprite: 'toy_pom', mount: [467, 352], pivot: [25, 2], ball: [30, 300], ballR: 24, period: 1.15, paws: true },
-  { sprite: 'toy_bead', mount: [485, 340], pivot: [14, 2], ball: [20, 107], ballR: 18, period: 0.72, paws: false },
+  { sprite: 'toy_pom', mount: [467, 352], pivot: [25, 2], ball: [30, 300], ballR: 24, period: 1.15, stand: true },
+  { sprite: 'toy_bead', mount: [485, 340], pivot: [14, 2], ball: [20, 107], ballR: 18, period: 0.72, stand: false },
 ] as const;
 
 // Правая колонка шапки приюта: пара массовых кнопок и «Купить котика» под ними.
@@ -143,6 +144,7 @@ export function createShelter(ctx: UiContext): Room {
     buyBtn.onTap = () => {
       const r = buyCat(ctx.state, ctx.rng, ctx.now());
       if (r.ok) {
+        sfxEvent('buy'); // звон монет — как и на всякой другой покупке
         ctx.commit();
         ctx.toast(r.cats.length > 1 ? t('Приют подарил пару: ♀ и ♂ 🐱🐱', 'The shelter gave you a pair: ♀ and ♂ 🐱🐱') : t('Новый котик в приюте 🐱', 'A new cat is in the shelter 🐱'));
       }
@@ -193,8 +195,14 @@ export function createShelter(ctx: UiContext): Room {
   // кошачьей головы, и за спинами игроков его было бы не видно. Коты, идущие
   // ещё ближе к зрителю, рисуются поверх — но до этой высоты они не достают.
   const toyDepth = plane.yNear + (plane.yFar - plane.yNear) * (TOY_Z - 0.06);
+  // Слой хит-зон игрушек — ПОВЕРХ котов (floorLayer): кружок тапа по мячику
+  // должен выигрывать у кота, который стоит ближе к зрителю и накрывает мячик
+  // своим прямоугольником (вместе с подписью над головой). Сами спрайты игрушек
+  // при этом остаются в слое пола, по глубине.
+  const toyTapLayer = new Container();
   const toys: HangingToy[] = [];
-  let toyOpts: ToyOpts | undefined;
+  const toyTargets: ToyTarget[] = [];
+  let toyOx: number | null = null;
   for (const spec of SHELTER_TOYS) {
     const tex = decorTexture(spec.sprite);
     const at = decorPoint('shelter', TOWER, spec.mount[0], spec.mount[1], ctx.roomW, ctx.roomH);
@@ -204,18 +212,18 @@ export function createShelter(ctx: UiContext): Room {
       pivotX: spec.pivot[0], pivotY: spec.pivot[1],
       ballX: spec.ball[0], ballY: spec.ball[1], ballR: spec.ballR,
       period: spec.period,
+      minHitR: ctx.roomH * 0.038, // мелкий мячик — палец крупнее, зону расширяем
     }, at.x, at.y, at.scale);
     toy.view.zIndex = Math.round(toyDepth);
     floorLayer.addChild(toy.view);
+    toyTapLayer.addChild(toy.hitView);
     toys.push(toy);
-    if (spec.paws) {
-      toyOpts = {
-        ox: toy.ballAt().x - plane.centerX, // мячик в покое — к нему коты и идут
-        ballOx: () => toy.ballAt().x - plane.centerX,
-        hit: (dir, power) => toy.push(dir, power),
-      };
-    }
+    // обе игрушки — цели для лап; «живой пол» сам решит, до какой кот дотянется
+    toyTargets.push({ ballAt: () => toy.ballAt(), hit: (dir, power) => toy.push(dir, power) });
+    if (spec.stand) toyOx = toy.ballAt().x - plane.centerX; // мячик в покое — сюда и идут
   }
+
+  shell.container.addChild(toyTapLayer); // после floorLayer — значит, поверх котов
 
   const floor = createLivingFloor(
     ctx, floorLayer,
@@ -225,7 +233,7 @@ export function createShelter(ctx: UiContext): Room {
     () => catsIn(ctx.state, 'shelter')
       .filter((c) => !isInSlot(ctx.state, c.id) && !isInBasket(ctx.state, c.id)),
     { plane: shelf, layer: shelfCatLayer },
-    toyOpts,
+    toyOx === null ? undefined : { ox: toyOx, targets: toyTargets },
   );
 
   // Тап по мячику: он улетает от пальца, а пара ближайших котов бросает свои

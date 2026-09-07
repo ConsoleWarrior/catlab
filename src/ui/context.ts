@@ -4,7 +4,7 @@
  */
 
 import type { Application, Container, Texture, FederatedPointerEvent } from 'pixi.js';
-import type { Rng } from '../genetics/index.js';
+import type { Recipe, Rng } from '../genetics/index.js';
 import type { Cat, GameState, BirthEvent } from '../game/index.js';
 
 /** Параметры взятия котика «за шкирку» (живой котик в комнате). */
@@ -33,6 +33,14 @@ export interface Room {
    * Вернуть true, если кот пристроен (состояние изменилось) — иначе он вернётся назад.
    */
   tryDropCat?(cat: Cat, sceneX: number, sceneY: number): boolean;
+  /**
+   * Гасит ли комната авто-листание комнат «за шкирку» в этой точке (координаты
+   * виртуальной сцены). Пока кота несут, палец у кромки экрана уводит в соседнюю
+   * комнату (game.ts, carryEdgeScroll) — но у самой кромки могут стоять и цели
+   * дропа (стойка заказов Питомника). Над ними листание выключаем, иначе кота
+   * унесёт из комнаты вместо того, чтобы его принять.
+   */
+  blocksEdgeScroll?(sceneX: number, sceneY: number): boolean;
   /**
    * Узел-«якорь» для подсветки обучения (см. src/ui/tutorial.ts): комната
    * отдаёт свой живой узел по ключу — `cat:<id>`, `slot`, `breed`, `preview`.
@@ -122,6 +130,12 @@ export interface UiContext {
   openAnalyzeConfirm(cat: Cat): void;
   /** Карточка породы из Котодекса: портрет/силуэт + рецепты с условиями и шансами. */
   openBreedCard(breedKey: string): void;
+  /**
+   * Вскрытие колбы стола исследований: анимация раскрытия + название рецепта.
+   * Рецепт к этому моменту УЖЕ записан в knownRecipes (revealRecipeResearch) —
+   * панель только показывает результат, закрытие её ничего не теряет.
+   */
+  openRecipeReveal(recipe: Recipe): void;
   /** Превью пары «тир-тизер»: распределение исходов вязки (кнопка 🔮 в инкубаторе). */
   openPairPreview(mother: Cat, father: Cat): void;
   /** Карточка(и) новорождённых после «Забрать» в инкубаторе. */
@@ -131,12 +145,20 @@ export interface UiContext {
   /** Подтверждение покупки узла дерева «Улучшения» (Генолаб) — защита от случайного тапа. */
   openResearchConfirm(defId: string): void;
   openOrders(): void;
+  /** Подтверждение 📺-обновления заказа (доска заказов) — защита от случайного тапа. */
+  openOrderRefreshConfirm(orderId: string): void;
   /** Справка комнаты (кнопка ℹ️ в титульной плашке) — тексты в src/ui/roomHelp.ts. */
   openRoomHelp(roomId: string): void;
   /** Политика конфиденциальности (п. 3.5) — открывается из ⚙️ Настроек. */
   openPrivacy(): void;
   /** Подтверждение полного сброса прогресса («Начать заново» в ⚙️ Настройках). */
   openResetConfirm(): void;
+  /**
+   * Отметить «пик радости» — момент, когда игроку уместно предложить оценить
+   * игру. Показывать окно самому не нужно: Game сверит лимиты (game/review.ts) и
+   * правила площадки и покажет его позже, когда экран свободен от других окон.
+   */
+  wantReview(): void;
   /** Начать взятие котика за шкирку (вызывается из pointerdown по котику). */
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void;
   /**

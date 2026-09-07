@@ -11,7 +11,7 @@
  *   - иначе — «???» (не изучена).
  */
 
-import { RECIPES, recipeKey, recipesFor, isPedigreeRecipe } from '../genetics/index.js';
+import { BREEDS, RECIPES, recipeKey, recipesFor, isPedigreeRecipe } from '../genetics/index.js';
 import type { Recipe, SideSpec } from '../genetics/index.js';
 import type { Cat, GameState } from './types.js';
 
@@ -24,6 +24,15 @@ export function recipeIsKnown(state: GameState, r: Recipe): boolean {
 /** Порода выведена хотя бы раз (полноцветная клетка Котодекса). */
 export function breedDiscovered(state: GameState, breed: string): boolean {
   return state.discoveredBreeds.includes(breed);
+}
+
+/**
+ * Коллекция собрана: выведены ВСЕ породы каталога (именно выведены — открытый
+ * исследованием рецепт не считается). Финал коллекционной ветки: по нему игра
+ * один раз показывает поздравительную панель (см. Game.checkAllBreeds).
+ */
+export function allBreedsBred(state: GameState): boolean {
+  return BREEDS.every((b) => breedDiscovered(state, b.key));
 }
 
 /** Порода «изучена» (видна в Котодексе): выведена ИЛИ известен хотя бы один её рецепт. */

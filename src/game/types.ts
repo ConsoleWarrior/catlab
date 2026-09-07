@@ -68,7 +68,7 @@ export interface BreedingSlot {
   // undefined — вязки нет (или сейв/дев-слот, начатый до этого правила: бросок при рождении).
   plannedBreed?: string;
   // id новорождённого, «оставленного с родителями»: сидит в центре слота, растёт
-  // втрое медленнее и блокирует постановку новых котов, пока его не унесут в комнату.
+  // вдвое медленнее и блокирует постановку новых котов, пока его не унесут в комнату.
   kittenId: string | null;
 }
 
@@ -122,6 +122,10 @@ export interface GameState {
   upgrades: Record<string, number>; // id апгрейда → уровень
   unlockedGenes: string[];          // открытые гены/фичи (Генолаб, легаси)
   discoveredBreeds: string[];       // когда-либо полученные породы (Котодекс)
+  // Финальное поздравление «выведены ВСЕ породы» уже показано. Одноразовое:
+  // флаг ставится в момент постановки панели в очередь, чтобы окно не всплывало
+  // заново при каждом следующем действии игрока (Котодекс-то остаётся полным).
+  allBreedsCongratsSeen: boolean;
   boosts: Record<string, number>;   // склад зарядов усилителей (id → сколько куплено), любых типов
   activeBoost: string | null;       // какой усилитель СЕЙЧАС активен (сработает в вязке); единовременно только один
   research: Record<string, number>; // id узла дерева «Улучшений» → купленный уровень (0/нет — не начат)
@@ -129,11 +133,17 @@ export interface GameState {
   // породы отдельно — discoveredBreeds). Порода «изучена» = выведена ИЛИ рецепт открыт.
   knownRecipes: string[];
   // Стол исследования рецептов (вкладка «Исследования» Генолаба): 1 слот-таймер.
-  // readyAt === 0 — стол свободен. По завершении finishRecipeResearch выдаёт
-  // случайный рецепт из достижимого пула (researchableRecipes). paidCoins/paidDna —
-  // фактически уплаченная цена запуска (зависит от уровня лабы); нужна для точного
-  // возврата, если пул опустеет за время исследования (уровень мог вырасти).
-  recipeResearch: { startedAt: number; readyAt: number; paidCoins: number; paidDna: number };
+  // readyAt === 0 — стол свободен. По завершении finishRecipeResearch выбирает
+  // случайный рецепт из достижимого пула (researchableRecipes) и кладёт его ключ
+  // в pending — ЗАПЕЧАТАННУЮ колбу: до того, как игрок вскроет её сам
+  // (revealRecipeResearch), рецепт не попадает в knownRecipes и нигде не назван,
+  // иначе интрига «что же изучили» пропадала бы вместе с текстом уведомления.
+  // paidCoins/paidDna — фактически уплаченная цена запуска (зависит от уровня
+  // лабы); нужна для точного возврата, если пул опустеет за время исследования.
+  recipeResearch: {
+    startedAt: number; readyAt: number; paidCoins: number; paidDna: number;
+    pending: string | null; // ключ рецепта в невскрытой колбе (recipeKey)
+  };
   cryo: Cat[];                      // замороженные коты в криокапсулах (крио-банк): не едят/не доход/не вязка
   unlockedRooms: RoomId[];
   orders: Order[];                  // ORDER_TARGET слотов, каждый с активным заказом (см. orders.ts)
@@ -156,6 +166,9 @@ export interface GameState {
   // последних PROCESSED_PURCHASES_KEEP штук.
   processedPurchases: string[];
   firstPurchaseDone: boolean;       // бонус первой покупки (+50%) уже выдан
+  // Просьба оценить игру (см. game/review.ts): свой лимит поверх «раз за сессию».
+  reviewAsks: number;               // сколько раз окно оценки всплывало САМО (кнопка в ⚙️ не в счёт)
+  reviewLastAskAt: number;          // когда это было в последний раз, мс (0 — ни разу)
   tutorial: TutorialState;          // обучение новичка (первая вязка), см. game/tutorial.ts
   nextId: number;                   // счётчик уникальных id
 }

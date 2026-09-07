@@ -29,7 +29,7 @@ import { roomShell } from './shell.js';
 import { Button, COLORS, FONT, label, panel } from '../theme.js';
 import { catSprite, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { decorTexture } from '../decorArt.js';
-import { sfxMeow } from '../sound.js';
+import { sfxEvent, sfxMeow } from '../sound.js';
 import { darken } from '../../render/palette.js';
 import { t, tx } from '../../i18n.js';
 
@@ -505,7 +505,7 @@ export function createIncubator(ctx: UiContext): Room {
     const hearts = new Container();
     chamber.addChild(hearts);
 
-    // «оставленный с роднёй» малыш — в центре, маленький, растёт втрое медленнее.
+    // «оставленный с роднёй» малыш — в центре, маленький, растёт вдвое медленнее.
     // Берётся за шкирку → унести в комнату (или тап → меню кота).
     let kitten: Sprite | undefined;
     let kitGlow: Sprite | undefined;
@@ -587,7 +587,7 @@ export function createIncubator(ctx: UiContext): Room {
         b.position.set(w / 2, yy);
         b.onTap = () => {
           if (!heldKitten) return;
-          const r = moveCat(ctx.state, heldKitten.id, room);
+          const r = moveCat(ctx.state, heldKitten.id, room, ctx.now());
           if (!r.ok) { ctx.toast(r.reason); return; }
           ctx.commit();
           ctx.toast(room === 'shelter' ? t('Малыш в приюте 🏠', 'The kitten is in the shelter 🏠') : t('Малыш в питомнике 🏆', 'The kitten is in the cattery 🏆'));
@@ -709,7 +709,7 @@ export function createIncubator(ctx: UiContext): Room {
         btn.position.set(w / 2, h - 26);
         btn.onTap = () => {
           const r = buyUpgrade(ctx.state, 'slots');
-          if (r.ok) { ctx.commit(); ctx.toast(t('Новый слот вязки 💞', 'A new breeding slot 💞')); }
+          if (r.ok) { sfxEvent('buy'); ctx.commit(); ctx.toast(t('Новый слот вязки 💞', 'A new breeding slot 💞')); }
           else ctx.toast(r.reason === 'locked' ? t('Слот ещё заперт 🔒', 'The slot is still locked 🔒') : r.reason);
         };
         card.addChild(btn);
