@@ -28,14 +28,14 @@ import {
   foodEnabled, foodCap, foodLevel, foodMinutesLeft, isStarving, buyFood, unlockLevelOf,
   foodRatePerMin, feedingCatCount, foodBuyQuote,
   cryoUnlocked,
-  isInBasket, basketCat, putCatInBasket, matchesOrder,
+  isInBasket, basketCat, putCatInBasket, matchesOrder, fillableOrderCount,
   FOOD_PACK_UNITS, CHAMPION_SLOTS_BASE, UPGRADES,
 } from '../../game/index.js';
 import type { Cat, LiveRoom } from '../../game/index.js';
 import type { Room, UiContext } from '../context.js';
 import { roomShell, floorPlane, cornerStation, stationBadge, PAD } from './shell.js';
 import { decorTexture } from '../decorArt.js';
-import { Button, COLORS, INK, INK_SOFT, label, V, VIVID } from '../theme.js';
+import { Button, COLORS, INK, INK_SOFT, IS_TOUCH, label, V, VIVID } from '../theme.js';
 import { createLivingFloor, rememberFloorPos } from '../livingFloor.js';
 import { catArtTexture, catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT } from '../catTextures.js';
 import { attachBlink, type Blinker } from '../eyeBlink.js';
@@ -61,58 +61,84 @@ const ORDERS_BH = 44;
 // впритык к краю уводила кота в соседнюю комнату вместо того, чтобы его принять.
 // Теперь от этого спасает не отступ, а blocksEdgeScroll: над стойкой листание
 // выключено (см. ordersStandZone).
+// ИИ-спрайт переноски (assets/decor/*.webp, ключ = имя файла) и его ПРОЁМ в долях
+// картинки: туда игра сажает предъявляемого кота. Замерено по самому спрайту —
+// при замене арта пересчитать. Нет текстуры → векторный фолбэк drawCarrier.
+const CARRIER_SPRITE = 'carrier_open';
+const CARRIER_HOLE = { top: 0.27, feet: 0.78, wide: 0.56 };
 // Палитра стойки: тёплый «клиентский» оранжевый у кнопки, плетёнка у корзины.
 const ORDERS_TINT = 0xf2952f;
 const CARRIER_BODY = 0xf1c890;  // плетёный бок корзины
 const CARRIER_EDGE = 0xb0723a;  // кант плетёнки и прутья дверцы
 
 /**
- * Корзина заказов — плетёная переноска с РАСПАХНУТОЙ дверцей: короб с крышкой и
- * ручкой, спереди широкий проём (туда садится предъявляемый кот), слева дверца
- * откинута наружу, за габарит короба — внутри она отняла бы место у кота.
- * Рисуется одним Graphics, поэтому дверца не повёрнутый спрайт, а четырёхугольник
- * с перспективой (дальний край короче). `fits` — кот подходит под заказ: зелёный кант.
+ * Корзина заказов — МЯГКАЯ СУМКА-ПЕРЕНОСКА: округлый короб с ремнём-ручкой,
+ * молнией по крышке и распахнутым сетчатым окном (туда садится предъявляемый кот).
+ * Слева откинута створка — знак «открыто, клади кота».
+ *
+ * Почему сумка, а не плетёная корзина: блок широкий (≈2:1 — он повторяет ширину
+ * кнопки «Заказы клиентов»), и в такой пропорции плетёнка читалась ящиком. У мягкой
+ * переноски 2:1 — родная форма, поэтому на телефоне, где блок мельче всего, силуэт
+ * узнаётся сразу. Это ФОЛБЭК: обычно на стойке стоит ИИ-спрайт (CARRIER_SPRITE),
+ * а вектор рисуется, только если текстура не загрузилась.
+ *
+ * Пропорции считаем от короба (`bodyH`), а не от всего блока: ручка выходит за него.
  */
 function drawCarrier(g: Graphics, x: number, y: number, w: number, h: number, fits: boolean): void {
   const edge = fits ? COLORS.good : CARRIER_EDGE;
-  g.ellipse(x + w / 2, y + h - 2, w * 0.42, 6).fill({ color: 0x000000, alpha: 0.12 });
+  const lidY = y + h * 0.17;               // верх сумки (выше — только ручка)
+  const bodyH = h * 0.83 - 3;
+  const r = bodyH * 0.34;                  // мягкие борта: радиус в треть высоты
+  const oX = x + w * 0.15, oW = w * 0.7;   // открытое окно — тут сидит кот
+  const oY = lidY + bodyH * 0.24, oH = bodyH * 0.72;
 
-  // распахнутая дверца слева (рисуем первой — петли уходят под короб)
-  const hx = x + 4, fx = x - w * 0.13;
-  g.poly([hx, y + h * 0.36, fx, y + h * 0.45, fx, y + h * 0.81, hx, y + h * 0.9])
-    .fill({ color: 0xfffaf0, alpha: 0.97 })
-    .stroke({ width: 3, color: darken(CARRIER_EDGE, 0.1), alpha: 0.95 });
-  for (const k of [0.4, 0.72]) { // прутья створки
-    g.moveTo(hx + (fx - hx) * k, y + h * (0.36 + 0.09 * k))
-      .lineTo(hx + (fx - hx) * k, y + h * (0.9 - 0.09 * k))
-      .stroke({ width: 1.8, color: CARRIER_EDGE, alpha: 0.55 });
-  }
+  g.ellipse(x + w / 2, y + h, w * 0.38, h * 0.04).fill({ color: 0x000000, alpha: 0.14 });
 
-  // ручка над коробом
-  g.moveTo(x + w * 0.38, y + h * 0.18)
-    .quadraticCurveTo(x + w * 0.5, y + h * 0.005, x + w * 0.62, y + h * 0.18)
-    .stroke({ width: 6, color: darken(CARRIER_EDGE, 0.12), alpha: 0.95 });
+  // распахнутая створка у левого косяка (первой — петли уходят под сумку)
+  const hx = x + 6, fx = x - w * 0.05;
+  g.poly([hx, oY + oH * 0.08, fx, oY + oH * 0.2, fx, oY + oH * 0.88, hx, oY + oH]) 
+    .fill({ color: 0xfffaf3, alpha: 0.95 })
+    .stroke({ width: 2.5, color: darken(CARRIER_EDGE, 0.12), alpha: 0.9 });
+  g.moveTo(hx + (fx - hx) * 0.55, oY + oH * 0.22).lineTo(hx + (fx - hx) * 0.55, oY + oH * 0.86)
+    .stroke({ width: 1.6, color: CARRIER_EDGE, alpha: 0.45 });
 
-  // короб + крышка + «плетение»
-  g.roundRect(x + 2, y + h * 0.15, w - 4, h * 0.83, 16)
+  // ремень-ручка: тёмная дуга и светлый блик поверх
+  const hw = Math.max(6, h * 0.075);
+  g.moveTo(x + w * 0.38, lidY + 4).quadraticCurveTo(x + w * 0.5, y - h * 0.02, x + w * 0.62, lidY + 4)
+    .stroke({ width: hw, color: darken(CARRIER_EDGE, 0.18), alpha: 0.95 });
+  g.moveTo(x + w * 0.41, lidY + 2).quadraticCurveTo(x + w * 0.5, y + h * 0.02, x + w * 0.59, lidY + 2)
+    .stroke({ width: hw * 0.28, color: lighten(CARRIER_BODY, 0.5), alpha: 0.7 });
+
+  // корпус сумки + светлая крышка и блик по ней
+  g.roundRect(x + 2, lidY, w - 4, bodyH, r)
     .fill({ color: CARRIER_BODY, alpha: 0.97 })
     .stroke({ width: 3, color: edge, alpha: 0.95 });
-  g.roundRect(x + 2, y + h * 0.15, w - 4, h * 0.2, 14)
-    .fill({ color: lighten(CARRIER_BODY, 0.18), alpha: 1 });
-  g.rect(x + 8, y + h * 0.345, w - 16, 2).fill({ color: CARRIER_EDGE, alpha: 0.28 });
-  for (const k of [0.5, 0.66, 0.82]) { // прутья плетёнки — по боковинам, мимо проёма
-    g.rect(x + 8, y + h * k, w * 0.09, 2).fill({ color: CARRIER_EDGE, alpha: 0.35 });
-    g.rect(x + w * 0.91 - 8, y + h * k, w * 0.09, 2).fill({ color: CARRIER_EDGE, alpha: 0.35 });
-  }
+  g.roundRect(x + 2, lidY, w - 4, bodyH * 0.3, r)
+    .fill({ color: lighten(CARRIER_BODY, 0.22), alpha: 1 });
+  g.roundRect(x + 10, lidY + 4, w - 20, bodyH * 0.12, r * 0.4).fill({ color: 0xffffff, alpha: 0.32 });
 
-  // проём: сюда садится кот (глубина + кант, петли дверцы на левом косяке)
-  g.roundRect(x + w * 0.11, y + h * 0.33, w * 0.78, h * 0.57, 12)
-    .fill({ color: 0x6b4a2e, alpha: 0.22 })
-    .stroke({ width: 2.5, color: edge, alpha: 0.85 });
-  g.roundRect(x + w * 0.13, y + h * 0.35, w * 0.74, h * 0.1, 8).fill({ color: 0x4a3120, alpha: 0.13 });
-  for (const k of [0.44, 0.78]) {
-    g.roundRect(x + 1, y + h * k, 8, h * 0.06, 3).fill({ color: darken(CARRIER_EDGE, 0.15), alpha: 0.9 });
+  // молния по крышке: пунктир и бегунок справа
+  const zipY = lidY + bodyH * 0.3;
+  for (let sx = x + 12; sx < x + w - 16; sx += 7) {
+    g.rect(sx, zipY - 1, 4, 2).fill({ color: darken(CARRIER_EDGE, 0.05), alpha: 0.5 });
   }
+  g.circle(x + w - 14, zipY, Math.max(2.5, h * 0.03)).fill({ color: darken(CARRIER_EDGE, 0.2), alpha: 0.9 });
+
+  // открытое окно: тёплая глубина, тень под крышкой и кант. Сетку не рисуем —
+  // в мелком размере (телефон) она читалась решёткой полок, а не тканью.
+  g.roundRect(oX, oY, oW, oH, oH * 0.3).fill({ color: 0x6b4a2e, alpha: 0.26 });
+  g.roundRect(oX + 3, oY + 2, oW - 6, oH * 0.2, oH * 0.14).fill({ color: 0x4a3120, alpha: 0.16 });
+  g.roundRect(oX, oY, oW, oH, oH * 0.3).stroke({ width: 2.5, color: edge, alpha: 0.9 });
+
+  // строчка по низу, петли слева и колечко ремня справа
+  for (let sx = x + 14; sx < x + w - 14; sx += 9) {
+    g.rect(sx, lidY + bodyH - 7, 5, 1.6).fill({ color: CARRIER_EDGE, alpha: 0.3 });
+  }
+  for (const k of [0.14, 0.84]) {
+    g.roundRect(x + 2, oY + oH * k, 7, oH * 0.1, 3).fill({ color: darken(CARRIER_EDGE, 0.15), alpha: 0.9 });
+  }
+  g.circle(x + w - 9, lidY + bodyH * 0.6, Math.max(3, h * 0.035))
+    .stroke({ width: 2, color: darken(CARRIER_EDGE, 0.15), alpha: 0.85 });
 }
 
 /**
@@ -245,9 +271,24 @@ export function createNursery(ctx: UiContext): Room {
   shell.container.addChildAt(ordersLayer, shell.container.getChildIndex(floorLayer));
   // Блок стал шире прежнего: на кнопке теперь полное название, а в корзину лучше
   // видно кота. Высота корзины — от высоты комнаты (на телефоне сцена низкая).
-  const ORDERS_BW = Math.round(Math.max(150, Math.min(226, ctx.roomW * 0.2)));
-  const BASKET_W = ORDERS_BW;
-  const BASKET_H = Math.round(Math.max(104, Math.min(158, ctx.roomH * 0.23)));
+  // На тач-устройствах стойку держим компактнее (−15% по ширине, −10% по высоте):
+  // виртуальная сцена там ниже, текст крупнее на UI_SCALE, и в прежних долях
+  // переноска отъедала заметный кусок экрана телефона.
+  const ORDERS_BW = Math.round(IS_TOUCH
+    ? Math.max(150, Math.min(200, ctx.roomW * 0.17))
+    : Math.max(150, Math.min(226, ctx.roomW * 0.2)));
+  // Переноска уже кнопки: во всю её ширину она выходила 2:1 и читалась «пеналом»,
+  // а по бокам от кота оставались пустые поля. На телефоне сужаем сильнее — там
+  // блок и так занимал заметный кусок экрана.
+  const BASKET_W = Math.round(ORDERS_BW * (IS_TOUCH ? 0.85 : 1));
+  // Высоту берём из пропорций САМОГО спрайта переноски: растягивать рисованную
+  // сумку под чужой аспект нельзя (плывут ручка и проём). Нет текстуры (фолбэк —
+  // вектор) — считаем от высоты комнаты, как раньше.
+  const carrierTex = decorTexture(CARRIER_SPRITE);
+  const BASKET_H = Math.round(carrierTex
+    ? Math.min(ctx.roomH * 0.3, BASKET_W / (carrierTex.width / carrierTex.height))
+    : (IS_TOUCH ? Math.max(98, Math.min(158, ctx.roomH * 0.21))
+      : Math.max(104, Math.min(158, ctx.roomH * 0.23))));
   const BASKET_PILL_H = 19; // плашка «подходит/не подходит» — ВНУТРИ корзины, у нижней кромки
   let basketZone = new Rectangle(0, 0, 0, 0);
   let ordersStandZone = new Rectangle(0, 0, 0, 0);
@@ -279,8 +320,8 @@ export function createNursery(ctx: UiContext): Room {
     ordersBtn = btn;
     ordersLayer.addChild(btn);
 
-    // счётчик заказов — кружком у правого верхнего угла кнопки (вместо таймера
-    // ближайшей смены: он показывал один случайный слот и ни на что не влиял)
+    // счётчик ВЫПОЛНИМЫХ заказов — кружком у правого верхнего угла кнопки (вместо
+    // таймера ближайшей смены: он показывал один случайный слот и ни на что не влиял)
     const badgeR = 13;
     const bgx = cx + ORDERS_BW / 2 - badgeR + 2, bgy = cy - ORDERS_BH / 2 + 2;
     ordersCountBg = new Graphics();
@@ -308,14 +349,36 @@ export function createNursery(ctx: UiContext): Room {
     // подсветка, когда кот в корзине подходит хоть под один заказ на доске
     const fits = !!cat && ctx.state.orders.some((o) => matchesOrder(o, cat));
 
+    // Переноска — ИИ-спрайт того же стиля, что и остальной арт комнат. Кант у
+    // рисунка не перекрасить, поэтому «кот подходит» показываем зелёным ореолом
+    // вокруг него. Текстуры нет (не загрузилась) — рисуем векторный фолбэк.
     const box = new Graphics();
-    if (VIVID) drawCarrier(box, bx, by, BASKET_W, BASKET_H, fits);
+    if (carrierTex) {
+      if (fits) {
+        box.roundRect(bx - 4, by - 4, BASKET_W + 8, BASKET_H + 8, 18)
+          .stroke({ width: 4, color: COLORS.good, alpha: 0.85 });
+      }
+    } else if (VIVID) drawCarrier(box, bx, by, BASKET_W, BASKET_H, fits);
     else {
       box.roundRect(bx, by, BASKET_W, BASKET_H, 14)
         .fill({ color: cat ? 0xfff3d9 : 0xffffff, alpha: cat ? 0.95 : 0.7 })
         .stroke({ width: fits ? 3 : 2, color: fits ? COLORS.good : COLORS.cardEdge });
     }
     ordersLayer.addChild(box);
+    if (carrierTex) {
+      const artSp = new Sprite(carrierTex);
+      artSp.width = BASKET_W;
+      artSp.height = BASKET_H;
+      artSp.position.set(bx, by);
+      ordersLayer.addChild(artSp);
+    }
+    // Зона тапа по переноске — ПУСТОЙ контейнер с hitArea (приём из hangingToy):
+    // у Graphics без геометрии hitArea не работает, а спрайт переноски трогать
+    // нельзя — он лежит под котом. Добавляем до кота, чтобы кот перехватывал
+    // свои жесты (взять за шкирку) первым.
+    const hit = new Container();
+    hit.hitArea = new Rectangle(bx, by, BASKET_W, BASKET_H);
+    ordersLayer.addChild(hit);
 
     // Вынуть кота из корзины обратно на пол (тап по корзине/коту). В корзине кот места
     // не занимал, так что возвращаем через moveCat — он проверит вместимость: сначала
@@ -334,20 +397,23 @@ export function createNursery(ctx: UiContext): Room {
     if (cat) {
       // арт-спрайт коллекции (тот же вариант, что кот показывает на полу), фолбэк — процедурный
       const sp = new Sprite(catArtTexture(cat) ?? ctx.catTexture(cat));
-      const feet = by + BASKET_H - BASKET_PILL_H - 6; // лапы кота — над плашкой статуса
+      // Проём в долях блока: у ИИ-переноски окно замерено по картинке, у вектора своё.
+      const hole = carrierTex ? CARRIER_HOLE : { top: V(0.36, 0.08), feet: 1 - 12 / BASKET_H, wide: 1 - V(40, 20) / BASKET_W };
+      const feet = by + BASKET_H * hole.feet; // лапы кота — на дне проёма
       // в «нарядном» виде кот сидит внутри проёма переноски, а не во всю коробку
-      const top = by + BASKET_H * V(0.36, 0.08);
-      const k = Math.min((BASKET_W - V(40, 20)) / sp.texture.width, (feet - top) / sp.texture.height);
+      const top = by + BASKET_H * hole.top;
+      const k = Math.min((BASKET_W * hole.wide) / sp.texture.width, (feet - top) / sp.texture.height);
       sp.scale.set(k);
       sp.anchor.set(0.5, 1);
       sp.position.set(bx + BASKET_W / 2, feet);
       // тонкая рамка на фоне комнаты читается плохо — статус подписываем словами.
-      // Плашка лежит ВНУТРИ корзины: снаружи она спорила бы с именами котов на полу.
       const badge = label(fits ? t('✓ подходит', '✓ matches') : t('не подходит', 'does not match'), 11.5, COLORS.ink, '800');
       badge.anchor.set(0.5, 0.5);
       const pill = new Graphics();
       const pw = Math.min(BASKET_W - 12, badge.width + 14);
-      const pillY = by + BASKET_H - BASKET_PILL_H - 5;
+      // Плашка лежит НА нижней кромке сумки (половиной снаружи): внутри она отнимала
+      // у кота четверть высоты, а на телефоне от кота оставался значок.
+      const pillY = by + BASKET_H * 0.9 - BASKET_PILL_H / 2;
       pill.roundRect(bx + BASKET_W / 2 - pw / 2, pillY, pw, BASKET_PILL_H, 9)
         .fill({ color: fits ? COLORS.good : COLORS.cardEdge, alpha: 0.95 });
       badge.position.set(bx + BASKET_W / 2, pillY + BASKET_PILL_H / 2);
@@ -366,30 +432,41 @@ export function createNursery(ctx: UiContext): Room {
         onDrop: () => { /* никуда не пристроили — кот остаётся в корзине (show вернул) */ },
       }, e));
     } else {
+      // Подпись лежит в тёмном проёме переноски — берём светлый цвет и короткий
+      // текст в две строки: длинное «корзина заказов…» вылезало на бока сумки.
       const hint = label(
-        V(t('корзина заказов\nперетащи кота сюда', 'order basket\ndrag a cat in here'), t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket')),
-        V(11, 12.5), V(INK_SOFT, COLORS.inkSoft), '700',
+        V(t('перетащи\nкота сюда', 'drag a cat\nin here'), t('🧺\nкорзина\nзаказов', '🧺\norder\nbasket')),
+        V(11, 12.5), V(carrierTex ? 0xf6e8d8 : INK_SOFT, COLORS.inkSoft), '700',
       );
+      hint.style.wordWrap = true;
+      hint.style.wordWrapWidth = BASKET_W * (carrierTex ? CARRIER_HOLE.wide + 0.08 : 0.76);
+      hint.style.align = 'center';
       hint.anchor.set(0.5);
-      hint.position.set(bx + BASKET_W / 2, by + BASKET_H * V(0.58, 0.5));
+      hint.position.set(bx + BASKET_W / 2, by + BASKET_H * (carrierTex ? (CARRIER_HOLE.top + CARRIER_HOLE.feet) / 2 : V(0.58, 0.5)));
       ordersLayer.addChild(hint);
     }
 
     // тап по корзине: с котом — вынуть обратно на пол, пустая — подсказка
-    box.eventMode = 'static';
-    box.cursor = cat ? 'pointer' : 'default';
-    box.on('pointertap', takeOut);
+    hit.eventMode = 'static';
+    hit.cursor = cat ? 'pointer' : 'default';
+    hit.on('pointertap', takeOut);
   }
 
   /** Счётчик на кнопке: сколько заказов сейчас на доске (кружок у её угла). */
+  /**
+   * Кружок на кнопке: сколько заказов игрок может закрыть ПРЯМО СЕЙЧАС своими
+   * котами (fillableOrderCount — живые коты, крио не в счёт). Число заказов на
+   * доске всегда ORDER_TARGET и ни о чём не говорило; так кружок сразу зовёт
+   * открыть доску, когда там появилось выполнимое. Нечего выполнять — 0 серым.
+   */
   function updateOrdersBtn(): void {
-    const total = ctx.state.orders.length;
+    const ready = fillableOrderCount(ctx.state);
     if (!ordersCount || !ordersCountBg) return;
-    ordersCount.text = String(total);
+    ordersCount.text = String(ready);
     const { x, y, r } = ordersBadgeGeom;
     ordersCountBg.clear();
     ordersCountBg.circle(x, y, r)
-      .fill({ color: total > 0 ? COLORS.good : COLORS.cardEdge, alpha: 1 })
+      .fill({ color: ready > 0 ? COLORS.good : COLORS.cardEdge, alpha: 1 })
       .stroke({ width: 2, color: 0xffffff, alpha: 0.95 });
   }
 

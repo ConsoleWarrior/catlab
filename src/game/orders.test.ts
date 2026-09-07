@@ -8,8 +8,9 @@ import {
   ORDER_SELL_CRYSTALS, ORDER_SELL_CRYSTAL_CHANCE, orderRepFor, MAX_LEVEL,
   putCatInBasket, isInBasket, roomCount, moveCat, setChampion, isChampion,
   assignBreeder, isInSlot, startBreeding, nurseryCapacity, shelterCapacity,
+  fillableOrderCount,
 } from './index.js';
-import type { Order, GameState } from './index.js';
+import type { Cat, Order, GameState } from './index.js';
 
 const noReward = { coins: 0, crystals: 0, dna: 0, reputation: 0 };
 const mkOrder = (over: Partial<Order>): Order => ({
@@ -462,5 +463,72 @@ describe('корзина заказов — отдельное место (ка�
     }
     expect(putCatInBasket(s, second.id).ok).toBe(false);
     expect(isInBasket(s, first.id)).toBe(true); // корзина не тронута
+  });
+});
+
+describe('fillableOrderCount (кружок на кнопке 📋)', () => {
+  /** Пустая доска + пустой питомник: заказы и котов расставляем сами. */
+  const setup = (seed: number, ...reqs: Order['req'][]): GameState => {
+    const s = createInitialState(makeRng(seed), 0);
+    s.cats = [];
+    s.orders = reqs.map((req, i) => mkOrder({ id: 'o' + i, req }));
+    return s;
+  };
+  const add = (s: GameState, breed: string, sex: 'female' | 'male' = 'female'): Cat => {
+    const c = makeCatInstance(s, makeCat(sex), 0, 'nursery', breed);
+    s.cats.push(c);
+    return c;
+  };
+
+  it('считает только те заказы, под которые есть кот', () => {
+    const s = setup(70, { breed: 'persian' }, { breed: 'siamese' });
+    expect(fillableOrderCount(s)).toBe(0);
+    add(s, 'persian');
+    expect(fillableOrderCount(s)).toBe(1);
+    add(s, 'siamese');
+    expect(fillableOrderCount(s)).toBe(2);
+  });
+
+  it('один кот закрывает только один заказ', () => {
+    const s = setup(71, { breed: 'persian' }, { breed: 'persian' });
+    add(s, 'persian');
+    expect(fillableOrderCount(s)).toBe(1);
+    add(s, 'persian', 'male');
+    expect(fillableOrderCount(s)).toBe(2);
+  });
+
+  it('кот засчитывается тому заказу, который без него не закрыть', () => {
+    // персидский подходит и «не ниже uncommon», и заказу на породу — но заказ на
+    // породу больше некому закрыть, поэтому в паре с бенгальским выходит 2, а не 1
+    const s = setup(72, { minRarity: 'uncommon' }, { breed: 'persian' });
+    add(s, 'persian');
+    add(s, 'bengal', 'male');
+    expect(fillableOrderCount(s)).toBe(2);
+  });
+
+  it('кот в криобанке не считается', () => {
+    const s = setup(73, { breed: 'persian' });
+    const cat = add(s, 'persian');
+    expect(fillableOrderCount(s)).toBe(1);
+    s.cats = s.cats.filter((c) => c.id !== cat.id); // заморозили: cats → cryo
+    s.cryo.push(cat);
+    expect(fillableOrderCount(s)).toBe(0);
+  });
+
+  it('кот, занятый идущей вязкой, не считается', () => {
+    const s = setup(74, { breed: 'persian' });
+    const female = add(s, 'persian');
+    const male = add(s, 'persian', 'male');
+    expect(fillableOrderCount(s)).toBe(1);
+    assignBreeder(s, 0, female.id, 0);
+    assignBreeder(s, 0, male.id, 0);
+    expect(startBreeding(s, 0, female.id, male.id, 0, makeRng(74)).ok).toBe(true);
+    expect(fillableOrderCount(s)).toBe(0);
+  });
+
+  it('не больше числа заказов на доске', () => {
+    const s = setup(75, { breed: 'persian' }, { breed: 'persian' });
+    for (let i = 0; i < 6; i++) add(s, 'persian');
+    expect(fillableOrderCount(s)).toBe(2);
   });
 });

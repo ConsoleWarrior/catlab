@@ -66,7 +66,7 @@ export {
 } from './kinship.js';
 export {
   matchesOrder, generateOrder, initOrders, refreshExpiredOrders, adRefreshOrder, replaceOrder,
-  msUntilOrderExpiry, canAdRefreshOrder, msUntilAdRefresh,
+  msUntilOrderExpiry, canAdRefreshOrder, msUntilAdRefresh, fillableOrderCount,
 } from './orders.js';
 export {
   collectIncome, offlineAdBonus, claimOfflineAdBonus,

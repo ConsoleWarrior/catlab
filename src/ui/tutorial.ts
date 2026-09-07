@@ -81,6 +81,10 @@ interface Hint {
 }
 
 const PLATE_MAX_W = 460;
+// Сколько секунд цель должна простоять ПОД плашкой, прежде чем та перепрыгнет на
+// другую сторону: кот-цель ходит по полу, и без этой выдержки плашка мельтешила
+// туда-сюда на каждом его шаге.
+const SIDE_SWITCH_S = 0.9;
 // Ниже этой ширины плашка не сжимается даже в узком коридоре между панелями
 // комнаты: текст подсказки должен оставаться читаемым (п. 1.10.1).
 const MIN_PLATE_W = 300;
@@ -98,6 +102,14 @@ export class Tutorial {
   private t = 0;                 // общее время (пульс кольца)
   private gestureT = 0;          // фаза жеста руки
   private lastStep: TutorStep | null = null;
+  // Позиция плашки «залипает»: сторону выбираем один раз на цель (см. pickSide),
+  // а не каждый кадр, иначе она скачет за ходящим котом и за открытием панелей.
+  private plateSide: 'top' | 'bottom' = 'bottom';
+  private plateAim = '';         // комната/якорь текущей цели — сменился, сторону выбираем заново
+  private sideFixed = false;     // сторона под эту цель уже выбрана
+  private overlapT = 0;          // сколько цель уже стоит под плашкой, с
+  private plateH = 52;           // высота плашки прошлого кадра (нужна pickSide до первого layout)
+  private plateDrawn = '';       // что нарисовано в плашке сейчас — лишний раз не пересобираем
 
   constructor(private readonly host: TutorHost) {
     // 'passive', а не 'none': сам слой тапы не ловит, но интерактивный ребёнок —
@@ -167,15 +179,25 @@ export class Tutorial {
     const navNode = here ? null : this.host.navDot(roomIdx);
     const target = node ?? navNode;
 
+    // Цель шага сменилась (другая комната или другой якорь) — плашке разрешено
+    // выбрать сторону заново. Внутри одной цели она стоит на месте, см. pickSide.
+    const aim = `${hint.room}/${hint.key ?? ''}`;
+    if (aim !== this.plateAim) { this.plateAim = aim; this.sideFixed = false; this.overlapT = 0; }
+
+    // Кота держат за шкирку: сам он висит в руке, а его узел на полу остался
+    // стоять на месте — кольцо вокруг него светило бы в пустоту. Пока кота несут,
+    // указатель на кота не рисуем вовсе (зоны дропа — 'slot', 'adopt', 'pedestal'
+    // — подсвечиваются как раньше: туда и надо целиться).
+    const dragging = !!this.host.ctx.carrying() && !!hint.key?.startsWith('cat:');
+
     this.layer.visible = true;
     // Пока открыт оверлей, кольцо/рука бессмысленны — цель под панелью. Плашку
     // оставляем: она и объясняет, какую кнопку в этом меню нажать.
-    const showPointer = !overlay && !!target;
+    const showPointer = !overlay && !dragging && !!target;
 
     this.ring.visible = showPointer;
     this.hand.visible = showPointer;
 
-    let targetY = this.host.ctx.roomH; // для выбора стороны плашки, если цели нет
     if (showPointer && target) {
       const b = target.getBounds();
       const k = this.scale();
@@ -183,14 +205,49 @@ export class Tutorial {
       // размеры цели в координатах сцены (getBounds() — пиксели окна)
       const w = Math.min(this.host.ctx.roomW * 0.8, b.width / k);
       const h = Math.min(this.host.ctx.roomH * 0.8, b.height / k);
-      targetY = p.y;
       const r = this.drawRing(p.x, p.y, w, h);
       this.moveHand(p.x, p.y, r, here ? hint.gesture : 'tap');
+      this.pickSide(p.y, Math.max(r, h / 2), dt);
     }
+    // Цели на экране нет (оверлей, чужая комната, кот в руке) — сторону не трогаем:
+    // плашка остаётся там же, где стояла, и не прыгает на каждое открытие меню.
+    this.layoutPlate(hint.text, this.plateSide);
+  }
 
-    // Плашка не должна накрывать цель: цель внизу — уводим текст наверх.
-    const bottom = targetY > this.host.ctx.roomH * 0.62;
-    this.layoutPlate(hint.text, bottom ? 'top' : 'bottom');
+  /**
+   * Выбор стороны плашки. Раньше сторону решал порог `targetY > roomH*0.62`, и
+   * считался он каждый кадр: кот-цель ходит по полу и пересекает порог туда-сюда,
+   * а стоило открыть меню кота (цель «пропадала» под панелью) — плашка уезжала
+   * наверх и по закрытии возвращалась вниз. Теперь сторона выбирается ОДИН РАЗ
+   * на цель по тому же порогу, а меняется, только если цель действительно заехала
+   * под плашку, продержалась там SIDE_SWITCH_S и на другой стороне ей свободно
+   * (иначе крупная цель, накрытая с обеих сторон, гоняла бы плашку по кругу).
+   */
+  private pickSide(cy: number, half: number, dt: number): void {
+    if (!this.sideFixed) {
+      this.plateSide = cy > this.host.ctx.roomH * 0.62 ? 'top' : 'bottom';
+      this.sideFixed = true;
+      this.overlapT = 0;
+      return;
+    }
+    const hits = (side: 'top' | 'bottom'): boolean => {
+      const y = this.plateY(side, this.plateH);
+      return cy + half > y - 6 && cy - half < y + this.plateH + 6;
+    };
+    const other: 'top' | 'bottom' = this.plateSide === 'top' ? 'bottom' : 'top';
+    this.overlapT = hits(this.plateSide) && !hits(other) ? this.overlapT + dt : 0;
+    if (this.overlapT >= SIDE_SWITCH_S) { this.plateSide = other; this.overlapT = 0; }
+  }
+
+  /**
+   * Верх плашки на выбранной стороне. Сверху она встаёт ПОД титульной строкой
+   * комнаты (название, счётчик и кнопки рядом должны остаться видимыми —
+   * п. 1.10.3), снизу — над полосой навигации.
+   */
+  private plateY(side: 'top' | 'bottom', h: number): number {
+    return side === 'top'
+      ? this.host.ctx.topInset + 8 + TITLE_H + 10
+      : this.host.ctx.roomH - NAV_RESERVE - h - 12;
   }
 
   /** Масштаб сцены: getBounds() отдаёт пиксели окна, а рисуем мы в uiRoot. */
@@ -278,17 +335,24 @@ export class Tutorial {
         corridor - 16,
       ),
     ));
-    this.plateText.style.wordWrapWidth = W - 76;
-    this.plateText.text = text;
-    const H = Math.max(52, this.plateText.height + 26);
+    // Текст и подложка не меняются от кадра к кадру — пересобираем их, только
+    // когда реально поменялись текст, сторона или ширина коридора.
+    const key = `${side}|${W}|${text}`;
+    if (key !== this.plateDrawn) {
+      this.plateDrawn = key;
+      this.plateText.style.wordWrapWidth = W - 76;
+      this.plateText.text = text;
+      this.plateH = Math.max(52, this.plateText.height + 26);
 
-    this.plateBg.clear();
-    this.plateBg.roundRect(0, 0, W, H, 16)
-      .fill({ color: COLORS.hud, alpha: 0.96 })
-      .stroke({ width: 2, color: COLORS.primary, alpha: 0.8 });
+      this.plateBg.clear();
+      this.plateBg.roundRect(0, 0, W, this.plateH, 16)
+        .fill({ color: COLORS.hud, alpha: 0.96 })
+        .stroke({ width: 2, color: COLORS.primary, alpha: 0.8 });
 
-    this.plateText.position.set(20, H / 2);
-    this.skipBtn.position.set(W - 26, H / 2);
+      this.plateText.position.set(20, this.plateH / 2);
+      this.skipBtn.position.set(W - 26, this.plateH / 2);
+    }
+    const H = this.plateH;
 
     // Центр — по свободному коридору, а не по всей сцене; на всякий случай
     // прижимаем к краям экрана (коридор мог оказаться уже минимальной ширины).
@@ -296,13 +360,7 @@ export class Tutorial {
       Math.max(8, left + (corridor - W) / 2),
       this.host.ctx.roomW - W - 8,
     ));
-    // Сверху плашка встаёт ПОД титульной строкой комнаты: название, счётчик и
-    // кнопки рядом с ним должны остаться видимыми (п. 1.10.3 — элементы не
-    // перекрывают друг друга). Снизу — над полосой навигации.
-    const y = side === 'top'
-      ? this.host.ctx.topInset + 8 + TITLE_H + 10
-      : this.host.ctx.roomH - NAV_RESERVE - H - 12;
-    this.plate.position.set(x, y);
+    this.plate.position.set(x, this.plateY(side, H));
   }
 
   /** Текст и цель шага. Внутри шагов-переносов подшаг выбирается по «коту в руках». */

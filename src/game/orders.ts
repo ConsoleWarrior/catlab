@@ -27,6 +27,7 @@ import {
 } from '../genetics/index.js';
 import type { Rng } from '../genetics/index.js';
 import { t } from '../i18n.js';
+import { isBusy } from './economy.js';
 import type { Cat, GameState, Order, OrderKind, OrderReq } from './types.js';
 import * as C from './config.js';
 
@@ -218,4 +219,45 @@ export function replaceOrder(state: GameState, rng: Rng, orderId: string, now: n
   const i = state.orders.findIndex((x) => x.id === orderId);
   if (i < 0) return;
   state.orders[i] = generateOrder(state, rng, now, slotKind(i), state.orders[i]!.adRefreshAt ?? 0);
+}
+
+/**
+ * Сколько заказов на доске игрок может закрыть ПРЯМО СЕЙЧАС своими котами — это
+ * число и стоит в кружке на кнопке «📋 Заказы клиентов» (раньше там было просто
+ * ORDER_TARGET, одно и то же всегда). Считаем по ЖИВЫМ котам (`state.cats`):
+ * замороженные лежат отдельно в `state.cryo` и в счёт не идут — их сперва надо
+ * разморозить. Занятые идущей вязкой тоже не в счёт: такого кота в корзину не
+ * положить (см. putCatInBasket), значит заказ им сейчас не закрыть.
+ *
+ * Один кот закрывает только ОДИН заказ (после выполнения он уезжает к клиенту),
+ * поэтому это максимальное паросочетание «заказ ↔ кот», а не сумма совпадений:
+ * с единственным сиамским котом два заказа на сиамскую дают 1, а не 2. Слотов
+ * всего ORDER_TARGET, так что берём простой алгоритм Куна — перебор дешёвый.
+ */
+export function fillableOrderCount(state: GameState): number {
+  const cats = state.cats.filter((c) => !isBusy(state, c.id));
+  const takenBy: (number | null)[] = cats.map(() => null); // индекс заказа, занявшего кота
+  const seen: boolean[] = [];
+
+  /** Пытается найти заказу `oi` своего кота, потеснив уже разобранные заказы. */
+  const assign = (oi: number): boolean => {
+    const order = state.orders[oi]!;
+    for (let ci = 0; ci < cats.length; ci++) {
+      if (seen[ci] || !matchesOrder(order, cats[ci]!)) continue;
+      seen[ci] = true;
+      const holder = takenBy[ci];
+      if (holder === null || holder === undefined || assign(holder)) {
+        takenBy[ci] = oi;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  let n = 0;
+  for (let oi = 0; oi < state.orders.length; oi++) {
+    seen.length = 0;
+    if (assign(oi)) n++;
+  }
+  return n;
 }

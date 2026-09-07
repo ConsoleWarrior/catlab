@@ -14,7 +14,7 @@ export const FONT = 'system-ui, "Segoe UI", sans-serif';
 // кнопок (Button строит подпись через label), звёзд и пиллов. Геометрию (ширины
 // панелей/кнопок) НЕ трогаем — поэтому множитель мал: слишком длинная надпись
 // фикс-ширины иначе начала бы вылезать за край.
-const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+export const IS_TOUCH = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 export const UI_SCALE = IS_TOUCH ? 1.2 : 1;
 
 /** Палитра «тёплая лаборатория». */
