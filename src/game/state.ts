@@ -55,8 +55,8 @@ export function createInitialState(rng: Rng, now: number): GameState {
     // новая игра — обучение с нуля (подарки целы, ничего ещё не показано)
     tutorial: {
       done: false,
-      bornOnce: false, previewSeen: false, ordersSeen: false, adoptDone: false,
-      rewardTaken: false,
+      bornOnce: false, previewSeen: false, ordersSeen: false, genolabSeen: false,
+      adoptDone: false, rewardTaken: false,
     },
     nextId: 1,
   };
@@ -157,8 +157,8 @@ export function deserialize(json: string): GameState {
   if (!data.tutorial || typeof data.tutorial !== 'object') {
     data.tutorial = {
       done: true,
-      bornOnce: true, previewSeen: true, ordersSeen: true, adoptDone: true,
-      rewardTaken: true,
+      bornOnce: true, previewSeen: true, ordersSeen: true, genolabSeen: true,
+      adoptDone: true, rewardTaken: true,
     };
   } else {
     const t = data.tutorial;
@@ -173,7 +173,11 @@ export function deserialize(json: string): GameState {
     }
     if (typeof t.previewSeen !== 'boolean') t.previewSeen = t.done;
     if (typeof t.ordersSeen !== 'boolean') t.ordersSeen = t.done;
+    if (typeof t.genolabSeen !== 'boolean') t.genolabSeen = t.done;
     if (typeof t.adoptDone !== 'boolean') t.adoptDone = t.done;
+    // Обучение стало обязательным и непропускаемым (см. game/tutorial.ts), поэтому
+    // «свёрнутые подсказки» из промежуточной версии вычищаем из сейва.
+    delete (t as { hintsOff?: boolean }).hintsOff;
     // Подарок за обучение появился позже стартовых 💎: сейву с уже ЗАКРЫТЫМ обучением
     // он не положен (тот игрок начинал с 5 💎 на руках), недопройденному — положен.
     if (typeof t.rewardTaken !== 'boolean') t.rewardTaken = t.done;

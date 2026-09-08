@@ -22,7 +22,8 @@ import {
   finishRecipeResearch, refreshExpiredOrders,
   grantCrystals, isKnownPack, allBreedsBred, canAskReview, noteReviewAsked,
   tutorialActive, tutorialStep, finishTutorial, restartTutorial,
-  markTutorialSeen, grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
+  markTutorialSeen, tutorialMenuGate,
+  grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   OFFLINE_REPORT_MIN_MS,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
@@ -37,7 +38,7 @@ import { loadEyeData } from './eyeBlink.js';
 import { initSfx, sfxEvent, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
 import { setDecorTexture } from './decorArt.js';
-import { Tutorial } from './tutorial.js';
+import { Tutorial, tutorialRoomOf, tutorialGestureHint } from './tutorial.js';
 import { createFpsMeter, type FpsMeter } from './devFps.js'; // ⚠️ ВРЕМЕННОЕ DEV — убрать перед релизом
 import { DEVTOOLS } from './devTools.js';                    // ⚠️ ВРЕМЕННОЕ DEV — убрать перед релизом
 import { createIncubator } from './rooms/incubator.js';
@@ -94,6 +95,22 @@ const MIN_ASPECT = 4 / 3;
 // в него, и по бокам появлялись поля фона в 40-65 px. Со стороны это читалось
 // как «панели стоят не у края экрана» (стойка заказов справа, кормушка слева).
 const MAX_ASPECT = IS_TOUCH ? 3.2 : 2;
+
+// Пересборка сцены (layout) — операция дорогая и ЗАМЕТНАЯ: комнаты создаются
+// заново, весь UI перекладывается. Делать её из-за пары пикселей незачем, а
+// повод для этого возникает постоянно: мобильный вьюпорт «дышит» на 1-2 px
+// (адресная строка, полоса жестов), и раньше любая такая мелочь меняла vw на
+// единицу и роняла сцену в полную пересборку. Ниже этого порога ограничиваемся
+// равномерным масштабированием (fitRoot): игровое поле чуть-чуть не дотягивает
+// до края, полоса леттербокса выходит в 2-3 физических пикселя — не видно.
+const RELAYOUT_MIN_DIFF = 8; // виртуальных пикселей ширины
+
+// Сколько ждать после снятия паузы, прежде чем подгонять сцену под окно.
+// Показ рекламы и возврат со свёрнутой вкладки дёргают вьюпорт несколько раз
+// подряд (плеер уходит в фуллскрин, адресная строка прячется и возвращается), и
+// каждое такое событие — видимый рывок масштаба. Пережидаем всю серию и
+// пересчитываем один раз; если размер вернулся к прежнему — не делаем ничего.
+const RESIZE_SETTLE_MS = 300;
 
 // Последний срок, когда лоадер платформы снимается в любом случае (см. start()).
 // Больше обычного старта с запасом: 14.6 МБ ассетов на медленной мобильной сети
@@ -234,6 +251,9 @@ export class Game implements UiContext {
   private saveTimer = 0;
   private saveDirty = false;    // есть несохранённые изменения (см. commit/update)
   private resizePending = false; // ресайз пришёл при открытом поле ввода (см. resize)
+  // Ресайз заморожен на время паузы (реклама, свёрнутая вкладка) — см. setPause.
+  private resizeFrozen = false;
+  private unfreezeTimer: ReturnType<typeof setTimeout> | null = null;
   private wasStarving = false;   // для тоста «корм закончился» ровно при переходе к голоду
   // Отчёт «С возвращением» посчитан при загрузке сейва — но сцены тогда ещё нет,
   // поэтому окно показывается в конце start() (см. applyOffline).
@@ -377,10 +397,20 @@ export class Game implements UiContext {
       navDot: (i) => this.dots[i] ?? null,
       topReserve: () => this.rooms[this.currentRoom]?.topReserve ?? null,
       overlayOpen: () => this.overlayOpen,
-      skip: () => {
-        finishTutorial(this.state); this.commit();
-        this.toast(t('Подсказки выключены — справка по кнопке ℹ️ у названия комнаты',
-          'Hints are off — help is behind the ℹ️ button next to the room title'));
+      // Панель уже вписана в экран (fitOverlay) и лежит прямо в координатах
+      // сцены — плашке подсказки этого хватает, чтобы обойти её стороной.
+      overlayRect: () => {
+        const c = this.overlayContent;
+        return c ? { x: c.x, y: c.y, w: c.width, h: c.height } : null;
+      },
+      // Тап мимо цели: обучение обязательное, уйти с маршрута нельзя — просто
+      // повторяем подсказку тостом, чтобы тап не выглядел «игра зависла».
+      nudge: () => {
+        const step = tutorialStep(this.state, this.now());
+        // тост ещё висит — второй тап подряд не перебиваем
+        if (!step || this.toastUntil > this.now()) return;
+        this.toast(tutorialGestureHint(step)
+          || t('Сейчас доступно только подсвеченное действие 👆', 'Only the highlighted action is available right now 👆'));
       },
       finish: () => {
         // Обучение закрываем сразу (иначе Tutorial.update звал бы finish каждый кадр),
@@ -419,7 +449,12 @@ export class Game implements UiContext {
     // обучение (src/ui/tutorial.ts). Инструкции-стены «Как играть» больше нет
     // вовсе: её заменили пошаговый туториал и справки комнат (ℹ️).
     // При ?reset (скриншоты) не трогаем ни то, ни другое.
-    if (this.freshGame && !reset) this.goRoom(this.roomIndex('nursery'));
+    // Новая игра начинается в Питомнике (там стартовая пара). Игрок, вышедший
+    // посреди обучения, возвращается сразу в комнату своего шага — искать, где
+    // он остановился, ему не придётся (шаг считается от состояния).
+    const step = tutorialStep(this.state, this.now());
+    if (step) this.goRoom(this.roomIndex(tutorialRoomOf(step)));
+    else if (this.freshGame && !reset) this.goRoom(this.roomIndex('nursery'));
 
     // сцена собрана и отвечает на тапы — платформе можно убрать свой лоадер,
     // а нам показать канвас из-под своего экрана загрузки
@@ -548,6 +583,8 @@ export class Game implements UiContext {
         buyPack: (id: string) => buyPack(id).then((r) => { this.commit(); return r; }),
         openDev: () => this.openDevMenu(),
         fps: () => this.devFps?.toggle(), // панель FPS из консоли (кнопка 📊 в топбаре)
+        // DEV: пауза как от рекламы — проверка, что сцена не гоняется за вьюпортом
+        pause: (on: boolean) => this.setPause('dev', on),
         // окно «С возвращением» без реальной отлучки (по умолчанию — обрезка потолком)
         offlineReport: (r: Partial<OfflineReport> = {}) => {
           this.pendingOffline = {
@@ -927,6 +964,7 @@ export class Game implements UiContext {
     this.adPaused = now;  // update() замирает: доход, таймеры комнат, анимация
     sfxPause(now);        // мяуканье, хор мурлыканья и фоновая музыка
     setUiBlocked(now);    // и кнопки перестают принимать нажатия (п. 4.7)
+    this.freezeResize(now); // и сцена не гоняется за вьюпортом под рекламой
     // GameplayAPI платформы (п. 1.19.3) — ровно здесь и только на смене
     // состояния. Раньше start/stop звались ещё и из обработчика вкладки, и пара
     // «ушёл со вкладки во время рекламы — вернулся» давала платформе start при
@@ -941,6 +979,16 @@ export class Game implements UiContext {
   }
 
   openCatMenu(cat: Cat): void {
+    // Обучение: на шагах-жестах (донести кота за шкирку) меню только сбивает —
+    // вместо него повторяем подсказку тостом. Какие шаги жестовые и что в меню
+    // оставлять на остальных, решает ядро (tutorialMenuGate).
+    const gate = tutorialMenuGate(this.state, cat, this.now());
+    if (gate && !gate.open) {
+      const step = tutorialStep(this.state, this.now());
+      this.toast((step && tutorialGestureHint(step))
+        || t('Сейчас доступно только подсвеченное действие 👆', 'Only the highlighted action is available right now 👆'));
+      return;
+    }
     // первое открытие инфо = кот «изучен»: снимаем бейдж «новый» и сохраняемся
     // (commit пересоберёт «живой пол» — бейдж исчезнет). Событие тапа приходит со
     // stage (см. pointerup), а не с контейнера кота — пересборка пола тут безопасна.
@@ -1040,6 +1088,15 @@ export class Game implements UiContext {
   openResearchConfirm(defId: string): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildResearchConfirm(this, defId, close));
+  }
+
+  /**
+   * Отметка «просмотрового» шага обучения из комнаты (вкладка 📖 Котодекс).
+   * Панель/вкладка состояние игры не меняет, вычислить такой шаг из состояния
+   * нельзя — см. game/tutorial.ts. Вне обучения — пустышка.
+   */
+  noteTutorialSeen(what: 'genolab'): void {
+    if (markTutorialSeen(this.state, what)) this.save();
   }
 
   openOrders(): void {
@@ -1170,9 +1227,7 @@ export class Game implements UiContext {
       this.toast('DEV: все шаги уже пройдены — с нуля только на новой игре');
       return;
     }
-    this.goRoom(this.roomIndex(step === 'adopt' || step === 'orders' ? 'shelter'
-      : step === 'drag' || step === 'menu' || step === 'analyze' || step === 'champion' ? 'nursery'
-        : 'incubator'));
+    this.goRoom(this.roomIndex(tutorialRoomOf(step)));
     this.toast('DEV: обучение включено 🎓');
   }
 
@@ -1281,8 +1336,31 @@ export class Game implements UiContext {
 
   // --- раскладка ---
 
+  /**
+   * Пока игра на паузе (реклама, свёрнутая вкладка), ресайзы копить не нужно:
+   * сцену всё равно не видно за роликом, а вьюпорт под ним пляшет. Замораживаем
+   * подгонку и снимаем её не сразу после паузы, а когда вьюпорт устаканится.
+   *
+   * Отдельно «размер до рекламы» нигде не хранится и не нужен: раз под паузой мы
+   * рендерер не трогали, его текущий размер И ЕСТЬ дореламный. Если вьюпорт
+   * вернулся к прежнему (обычный случай), отложенный resize() ничего не найдёт и
+   * не сделает ничего — игрок не увидит ни рывка масштаба, ни пересборки.
+   */
+  private freezeResize(on: boolean): void {
+    if (this.unfreezeTimer) { clearTimeout(this.unfreezeTimer); this.unfreezeTimer = null; }
+    if (on) { this.resizeFrozen = true; return; }
+    this.unfreezeTimer = setTimeout(() => {
+      this.unfreezeTimer = null;
+      this.resizeFrozen = false;
+      this.resize();
+    }, RESIZE_SETTLE_MS);
+  }
+
   /** Подгоняем рендерер под реально видимую область (см. onResize выше). */
   private resize(): void {
+    // Пауза (реклама/свёрнутая вкладка) — ждём её конца, см. freezeResize.
+    // Ничего не запоминаем: снятие заморозки само вызовет resize().
+    if (this.resizeFrozen) return;
     // Пока в фокусе HTML-поле ввода (переименование кота), мобильная клавиатура
     // ужимает visualViewport — НЕ пересчитываем сцену, иначе игра «схлопывается»
     // под остаток экрана над клавиатурой.
@@ -1311,11 +1389,12 @@ export class Game implements UiContext {
       this.roomW = vw;
       this.roomH = DESIGN_H;
       this.layout();
-    } else if (vw !== this.roomW) {
+    } else if (Math.abs(vw - this.roomW) > RELAYOUT_MIN_DIFF) {
       // живой ресайз: пока окно тянут, картинка лишь равномерно масштабируется
       // (fitRoot ниже) — пропорции не меняются. Пересборку под новую виртуальную
       // ширину делаем один раз, когда размер устаканился: иначе комнаты
       // пересоздаются десятки раз за жест и содержимое «прыгает».
+      // Порог RELAYOUT_MIN_DIFF отсекает дрожание вьюпорта в пару пикселей.
       this.relayoutTimer = setTimeout(() => {
         this.relayoutTimer = null;
         this.roomW = vw;
@@ -1851,6 +1930,11 @@ export class Game implements UiContext {
       // иначе свайп листал бы комнаты вслепую
       if (this.adPaused) return;
       if (this.overlayOpen || this.pendingGrab) return; // котика берём — комнату не свайпим
+      // Обучение ведёт по жёсткому маршруту: уехать свайпом в чужую комнату
+      // нельзя, переход только по подсвеченной точке навигации. Кота при этом
+      // по-прежнему можно нести за шкирку — комнаты у кромки листаются сами
+      // (carryEdgeScroll), это часть шага «донеси до Инкубатора».
+      if (tutorialActive(this.state)) return;
       this.pointerActive = true;
       this.dragging = false;
       this.axisLock = 'none';

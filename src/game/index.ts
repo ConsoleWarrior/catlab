@@ -81,7 +81,8 @@ export {
 } from './actions.js';
 export type { Result, BirthEvent, OfflineIncome } from './actions.js';
 export {
-  tutorialStep, tutorialActive, finishTutorial, restartTutorial, markTutorialSeen,
+  tutorialStep, tutorialActive, finishTutorial, restartTutorial,
+  markTutorialSeen, tutorialMenuGate,
   grantTutorialReward, analyzeTarget, adoptTarget, kittenInSlot, growTarget, shelterTarget,
 } from './tutorial.js';
 export type { TutorStep } from './tutorial.js';

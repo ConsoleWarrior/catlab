@@ -35,6 +35,12 @@ import { t, tx } from '../../i18n.js';
 
 const APPROACH_MS = 900; // за это время перегородка поднимается, а коты сходятся
 
+// Цвета главных кнопок слота. Пастельные COLORS.primary/secondary на золотисто-розовой
+// полосе кнопок сливались с фоном, а darken() делал их пыльными — здесь нужны именно
+// СОЧНЫЕ тона: «Свести» — розовый, «Прогноз пары» — голубой.
+const BREED_BTN = 0xff6f9c;
+const FORECAST_BTN = 0x5b9dff;
+
 // ИИ-фоны боксов вязки (src/assets/slotbox/*_cut.webp) — вырезки с прозрачностью,
 // используются как полноценный фон всей карточки слота. Один вариант на все слоты.
 const SLOT_BOX_SPRITES = ['slotbox_glass_cut', 'slotbox_glass_cut', 'slotbox_glass_cut'];
@@ -615,27 +621,47 @@ export function createIncubator(ctx: UiContext): Room {
           // и обоим белая обводка-ореол, чтобы буквы отделялись от полосы.
           const warn = label(t(`⚠️ родство: ${kinshipName(kin)}`, `⚠️ kinship: ${kinshipName(kin)}`), 12,
             kin === 'critical' ? 0xd42a2a : 0x8a5a1e, '800', { color: 0xffffff, width: 3 });
-          fitLabel(warn, w - 12);
-          warn.position.set(w / 2, stripY + 36);
-          card.addChild(warn);
+          fitLabel(warn, w - 20);
+          // Предупреждение переехало на низ стекла (пустой край матраса, под лапами
+          // котов): всю полосу кнопок теперь занимают две крупные кнопки.
+          warn.position.set(w / 2, stripY - 14);
+          const warnPlate = new Graphics();
+          warnPlate.roundRect(w / 2 - warn.width / 2 - 9, stripY - 25, warn.width + 18, 22, 8)
+            .fill({ color: 0xffffff, alpha: 0.82 });
+          card.addChild(warnPlate, warn);
         }
-        // «Свести» + 🔮 прогноз пары (превью исходов — breedingOutcomes, система знаний)
-        const rowW = Math.round(w * 0.78);
-        const pvW = 46;
+        // Главные кнопки слота — «Свести» и «🔮 Прогноз пары» (превью исходов,
+        // breedingOutcomes). Раньше они делили одну строку, а прогноз был
+        // безымянным квадратиком 46 px — на телефоне две мелкие цели вплотную.
+        // Теперь обе идут друг под другом во всю ширину полосы.
+        const bw = Math.round(w - 16);
+        const btnY = stripY + 27;
+        // Ореол под главной кнопкой: на золотисто-розовой полосе пастельный
+        // розовый сливался с фоном, а это главное действие комнаты.
+        const glow = new Graphics();
+        glow.roundRect(w / 2 - bw / 2 - 2, btnY - 17, bw + 4, 44, 14)
+          .fill({ color: darken(BREED_BTN, 0.5), alpha: 0.3 });
+        glow.roundRect(w / 2 - bw / 2 - 3, btnY - 24, bw + 6, 48, 15)
+          .stroke({ width: 2.5, color: 0xffffff, alpha: 0.85 });
+        card.addChild(glow);
         const btn = new Button({
           text: t('Свести 🐾', 'Breed 🐾'),
-          w: rowW - pvW - 8, h: 38, color: COLORS.primary,
-          textColor: 0xffffff, fontSize: 15,
+          w: bw, h: 42, color: BREED_BTN, // сочный розовый: darken() давал пыльный оттенок
+          textColor: 0xffffff, fontSize: Math.max(14, Math.min(18, bw / 10.5)),
         });
-        btn.position.set(w / 2 - (pvW + 8) / 2, stripY + 64);
+        btn.position.set(w / 2, btnY);
         if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now(), ctx.rng);
           if (r.ok) { ctx.clearSelection(); ctx.commit(); sfxEvent('breed'); ctx.toast(t('Вязка началась 🐾', 'Breeding has started 🐾')); }
           else ctx.toast(r.reason);
         };
-        const pv = new Button({ text: '🔮', w: pvW, h: 38, color: COLORS.secondary, fontSize: 17 });
-        pv.position.set(w / 2 + rowW / 2 - pvW / 2, stripY + 64);
+        const pv = new Button({
+          text: t('🔮 Прогноз пары', '🔮 Pair forecast'),
+          w: bw, h: 32, color: FORECAST_BTN,
+          textColor: 0xffffff, fontSize: Math.max(10.5, Math.min(14, bw / 12.5)),
+        });
+        pv.position.set(w / 2, stripY + 67);
         if (i === 0) anchors.set('preview', pv); // якорь подсветки обучения
         pv.onTap = () => ctx.openPairPreview(mother!, father!);
         card.addChild(btn, pv);

@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { makeRng } from '../genetics/index.js';
 import {
   createInitialState, assignBreeder, startBreeding, collectReady,
-  freeAnalyzeCat, freeGrowKitten, adoptCat, moveCat, clearBreederSlot, setChampion,
-  tutorialStep, tutorialActive, finishTutorial, restartTutorial, markTutorialSeen, shelterTarget, growTarget,
+  freeAnalyzeCat, freeGrowKitten, adoptCat, moveCat, clearBreederSlot, setChampion, analyzeTarget,
+  tutorialStep, tutorialActive, finishTutorial, restartTutorial,
+  markTutorialSeen, tutorialMenuGate, shelterTarget, growTarget,
   isAdult, effGrowthMs,
   grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
@@ -23,9 +24,9 @@ function pair(s: GameState) {
   return { female, male };
 }
 
-/** Первый шаг (подарочный анализ) — не тема теста: проходим его и идём дальше. */
+/** Первый шаг (подарочный анализ обоих котов) — не тема теста: проходим его. */
 function skipAnalyze(s: GameState): void {
-  freeAnalyzeCat(s, s.cats[0]!.id);
+  for (const c of s.cats) freeAnalyzeCat(s, c.id);
 }
 
 describe('обучение новичка (шаги)', () => {
@@ -33,8 +34,32 @@ describe('обучение новичка (шаги)', () => {
     const s = createInitialState(makeRng(1), 0);
     expect(tutorialStep(s)).toBe('analyze');
     expect(tutorialActive(s)).toBe(true);
+    // изучить надо ОБОИХ: по одному родителю ни прогноза, ни родословной котёнка
+    freeAnalyzeCat(s, s.cats[0]!.id);
+    expect(tutorialStep(s)).toBe('analyze');
+    expect(analyzeTarget(s)?.id).toBe(s.cats[1]!.id); // подсветка перешла на второго
+    freeAnalyzeCat(s, s.cats[1]!.id);
+    expect(tutorialStep(s)).toBe('drag'); // изучены оба → тащим пару в слот
+  });
+
+  it('подарочные анализы кончились — шаг «изучи» пропускается (платить не заставляем)', () => {
+    const s = createInitialState(makeRng(24), 0);
+    s.freeAnalyzeLeft = 0;
+    expect(tutorialStep(s)).toBe('drag');
+  });
+
+  it('в меню кота на шаге остаётся ровно одна кнопка — та, о которой подсказка', () => {
+    const s = createInitialState(makeRng(25), 0);
+    const { female, male } = pair(s);
+    expect(tutorialMenuGate(s, female)).toEqual({ open: true, actions: ['analyze'] });
     skipAnalyze(s);
-    expect(tutorialStep(s)).toBe('drag'); // изучил кота → тащим пару в слот
+    // шаг 'drag' — это ЖЕСТ: меню не открывается вовсе, вместо него тост
+    expect(tutorialMenuGate(s, female)).toEqual({ open: false, actions: [] });
+    assignBreeder(s, 0, female.id, 0);
+    expect(tutorialMenuGate(s, male)).toEqual({ open: true, actions: ['slot'] });
+    // вне обучения меню обычное — ядро не вмешивается
+    finishTutorial(s);
+    expect(tutorialMenuGate(s, male)).toBeNull();
   });
 
   it('DEV-перезапуск возвращает обучение, подарки и отметки просмотров', () => {
@@ -81,7 +106,7 @@ describe('обучение новичка (шаги)', () => {
     expect(tutorialStep(s)).toBe('wait');
   });
 
-  it('после котёнка: вырастить → в питомник → отца в приют → «в добрые руки» → заказы → пьедестал', () => {
+  it('после котёнка: вырастить → в питомник → отца в приют → «в добрые руки» → заказы → генолаб → пьедестал', () => {
     const rng = makeRng(5);
     const s = createInitialState(rng, 0);
     const { female, male } = pair(s);
@@ -111,6 +136,8 @@ describe('обучение новичка (шаги)', () => {
     expect(tutorialStep(s, now)).toBe('orders');
 
     markTutorialSeen(s, 'orders');
+    expect(tutorialStep(s, now)).toBe('genolab');   // где Котодекс и рецепты — тоже показываем
+    markTutorialSeen(s, 'genolab');
     expect(tutorialStep(s, now)).toBe('champion');
 
     // мать осталась в слоте — забираем её и ставим на пьедестал
@@ -154,6 +181,7 @@ describe('обучение новичка (шаги)', () => {
     const kitten = collectReady(s, s.slots[0]!.readyAt, rng)[0]!.kitten!;
     moveCat(s, kitten.id, 'nursery');
     markTutorialSeen(s, 'orders');
+    markTutorialSeen(s, 'genolab');
     moveCat(s, kitten.id, 'shelter'); // кот снова в приюте, но шаг уже позади
     expect(tutorialStep(s)).toBe('champion');
   });
@@ -272,11 +300,11 @@ describe('подарок за пройденное обучение', () => {
     expect(s.crystals).toBe(TUTORIAL_REWARD_CRYSTALS);
   });
 
-  it('«пропустить» подсказки подарка не даёт', () => {
+  it('подарок ждёт до конца: пока шаги не пройдены, обучение активно', () => {
     const s = createInitialState(makeRng(17), 0);
-    finishTutorial(s);                           // крестик ✕ на плашке подсказки
-    expect(s.crystals).toBe(0);
+    expect(tutorialActive(s)).toBe(true);
     expect(s.tutorial.rewardTaken).toBe(false);
+    expect(s.crystals).toBe(0);                  // стартовых 💎 нет — они в подарке
   });
 });
 
@@ -288,14 +316,15 @@ describe('обучение в сейве', () => {
     s.freeGrowthLeft = 1;
     s.tutorial.previewSeen = true;
     s.tutorial.ordersSeen = true;
+    s.tutorial.genolabSeen = true;
     s.tutorial.adoptDone = true;
     s.tutorial.bornOnce = true;
     s.tutorial.rewardTaken = true;
     const back = deserialize(serialize(s));
     expect(back.tutorial).toEqual({
       done: true,
-      bornOnce: true, previewSeen: true, ordersSeen: true, adoptDone: true,
-      rewardTaken: true,
+      bornOnce: true, previewSeen: true, ordersSeen: true, genolabSeen: true,
+      adoptDone: true, rewardTaken: true,
     });
     expect(back.freeAnalyzeLeft).toBe(2);        // запасы подарков переживают сейв
     expect(back.freeGrowthLeft).toBe(1);

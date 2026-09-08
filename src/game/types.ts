@@ -189,6 +189,7 @@ export interface TutorialState {
   bornOnce: boolean;     // первый котёнок уже рождался (даже если его уже отдали)
   previewSeen: boolean;  // открывал 🔮 прогноз пары перед первой вязкой
   ordersSeen: boolean;   // открывал доску 📋 Заказы
+  genolabSeen: boolean;  // заглядывал в 🔬 Генолаб (вкладка 📖 Котодекс)
   adoptDone: boolean;    // отдал кота «в добрые руки» (adoptCat)
   rewardTaken: boolean;  // подарок за пройденное обучение (💰/💎) уже начислен
 }

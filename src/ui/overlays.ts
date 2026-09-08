@@ -21,7 +21,7 @@ import {
   FREEZE_COIN_COST, FREEZE_CRYSTAL_COST, FREEZE_AD_COOLDOWN_MS,
   analyzeCat, freeAnalyzeCat, analyzeCost, ANALYZE_CRYSTAL_COST, FREE_ANALYZE_COUNT, kinshipName,
   freeGrowKitten, FREE_GROWTH_COUNT,
-  TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
+  tutorialMenuGate, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   claimOfflineAdBonus, offlineAdBonus, OFFLINE_AD_BONUS,
   pedigreeHasFog, knownAncestorBreeds, buildBreedingContext, breedChanceMult,
   breedDiscovered, knownRecipesFor, outcomeRevealed,
@@ -1428,7 +1428,13 @@ export function buildResearchConfirm(ctx: UiContext, defId: string, close: () =>
  * взросления (заполняется в реальном времени). Имя/пол и действия вязки скрыты,
  * проявятся, когда котёнок повзрослеет. По взрослении карточка сама переключится.
  */
-type AddBtn = (text: string, color: number, enabled: boolean, onTap: () => void) => void;
+/**
+ * Добавить кнопку в меню кота. `id` — что это за действие (`analyze`, `slot`,
+ * `grow`, `nursery`, `shelter`, `adopt`, `rename`, `pedigree`): по нему обучение
+ * оставляет в меню РОВНО ту кнопку, о которой говорит подсказка, и прячет
+ * остальные (см. tutorialMenuGate). Вне обучения id ни на что не влияет.
+ */
+type AddBtn = (id: string, text: string, color: number, enabled: boolean, onTap: () => void) => void;
 
 /**
  * Кнопки переезда кота между комнатами. Кот, стоящий в слоте вязки, относится
@@ -1438,7 +1444,7 @@ type AddBtn = (text: string, color: number, enabled: boolean, onTap: () => void)
 function addMoveButtons(ctx: UiContext, cat: Cat, close: () => void, addBtn: AddBtn): void {
   const inSlot = isInSlot(ctx.state, cat.id);
   const move = (room: LiveRoom, text: string, color: number): void => {
-    addBtn(text, color, true, () => {
+    addBtn(room, text, color, true, () => {
       const r = moveCat(ctx.state, cat.id, room, ctx.now());
       if (!r.ok) { ctx.toast(r.reason); return; }
       clearBreederSlot(ctx.state, cat.id); // если стоял в слоте — снять со слота
@@ -1459,7 +1465,7 @@ function addMoveButtons(ctx: UiContext, cat: Cat, close: () => void, addBtn: Add
  */
 function addAdoptButton(ctx: UiContext, cat: Cat, addBtn: AddBtn): void {
   if (!isInSlot(ctx.state, cat.id) || isBusy(ctx.state, cat.id)) return;
-  addBtn(t('🤝 В добрые руки', '🤝 Give away'), COLORS.good, true, () => ctx.openAdoptConfirm(cat));
+  addBtn('adopt', t('🤝 В добрые руки', '🤝 Give away'), COLORS.good, true, () => ctx.openAdoptConfirm(cat));
 }
 
 function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container {
@@ -1511,7 +1517,9 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   // комнаты) + закрыть. Малыш не занимает место навсегда — его можно переселить.
   const controls: Container[] = [];
   const btnW = W - 60;
-  const addBtn: AddBtn = (text, color, _enabled, onTap) => {
+  const gate = tutorialMenuGate(ctx.state, cat, ctx.now());
+  const addBtn: AddBtn = (id, text, color, _enabled, onTap) => {
+    if (gate && !gate.actions.includes(id)) return; // обучение: только кнопка шага
     const b = new Button({ text, w: btnW, h: 42, color, fontSize: 15 });
     b.position.set(W / 2, y + 21);
     b.onTap = onTap;
@@ -1520,13 +1528,13 @@ function buildKittenCard(ctx: UiContext, cat: Cat, close: () => void): Container
   };
 
   if (cat.motherBreed || cat.fatherBreed) {
-    addBtn(t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
+    addBtn('pedigree', t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
   // Ускорение роста: одно подменю «Вырастить сейчас» — там подарок 🎁 (пока запас цел),
   // иначе выбор 📺 реклама или 💎 кристаллы. Счётчик подарков — сразу на кнопке.
   const growFree = ctx.state.freeGrowthLeft;
-  addBtn(growFree > 0
+  addBtn('grow', growFree > 0
     ? t(`🌱 Вырастить сейчас · 🎁 ${growFree}`, `🌱 Grow up now · 🎁 ${growFree}`)
     : t('🌱 Вырастить сейчас', '🌱 Grow up now'),
   COLORS.primary, true, () => ctx.openGrowConfirm(cat));
@@ -1688,16 +1696,28 @@ function mixColor(a: number, b: number, f: number): number {
 }
 
 /**
- * Дерево родословной кота — вертикальное: сам кот стоит корнем внизу, предки
- * растут кроной вверх (родители → деды → прадеды). Узел — круглый медальон с
- * мордочкой своей породы (вырезается из спрайта, см. ui/breedFace.ts) в кольце
- * цвета тира; чем ближе поколение к коту, тем медальон крупнее. Мать всегда
- * слева, отец справа — на медальоне это ещё и бейдж ♀/♂.
+ * Дерево родословной кота. Раскладку выбираем ПОД ЭКРАН — иначе на телефоне
+ * восемь прадедов в ряд оставляли на колонку ~75 виртуальных пикселей, название
+ * породы приходилось набирать кеглем 8-9, да ещё панель целиком ужимал
+ * fitOverlay (вместе с текстом):
+ *
+ *  • ВЕРТИКАЛЬНО (ПК, широкий экран) — кот корнем внизу, предки кроной вверх,
+ *    подпись под медальоном. Колонка растягивается по ширине окна.
+ *  • ГОРИЗОНТАЛЬНО (телефон) — кот слева, предки растут вправо, подпись СПРАВА
+ *    от медальона. Повёрнутое дерево отдаёт названию всю ширину колонки
+ *    поколения (~150 px вместо 75), а восемь прадедов уходят вниз столбиком.
+ *
+ * В обоих случаях геометрия считается от реального поля (ctx.roomW/roomH), чтобы
+ * панель вставала БЕЗ сжатия и заняла экран почти целиком.
+ *
+ * Узел — круглый медальон с мордочкой своей породы (вырезается из спрайта, см.
+ * ui/breedFace.ts) в кольце цвета тира; чем ближе поколение к коту, тем медальон
+ * крупнее. Мать всегда первая (слева/сверху), отец второй — на медальоне это ещё
+ * и бейдж ♀/♂.
  *
  * Туман родословной: рисуются только ИЗВЕСТНЫЕ узлы (known), неизвестный предок —
  * серый медальон с силуэтом и «?» БЕЗ намёка на тир, его ветка не раскрывается.
- * Вскрыть всё — Генетический анализ (кнопка внизу). Панель шире экрана? Game
- * вписывает её целиком (showOverlay → fitOverlay).
+ * Вскрыть всё — Генетический анализ (кнопка внизу).
  */
 export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void): Container {
   const root = new Container();
@@ -1705,24 +1725,12 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   const ped = catAncestors(cat);
   const subject: Ancestor = { id: cat.id, breed: cat.breed, known: true, mother: ped.mother, father: ped.father };
   const maxDepth = PEDIGREE_DEPTH; // 0=кот, 1=родители, 2=деды, 3=прадеды
-
-  // Геометрию дерева НЕ множим на UI_SCALE: полная родословная — это восемь
-  // прадедов в ряд, и на телефоне раздутую панель fitOverlay всё равно сжал бы
-  // обратно, только вместе с текстом. Растут (k) лишь подписи.
   const k = UI_SCALE;
-  const R = [38, 29, 25, 22];                                  // радиус медальона по поколению
-  const rOf = (d: number): number => R[Math.min(d, R.length - 1)]!;
-  const rowH = 112;                                            // шаг поколений
-  // Шаг соседей: в полном дереве восемь прадедов в ряд — там он минимальный, а в
-  // коротком (родители известны, деды ещё нет) медальонам дают больше воздуха.
-  const colW = pedigreeDepth(cat) >= 3 ? 80 : pedigreeDepth(cat) === 2 ? 90 : 106;
-  const padX = 14, padTop = 52;
-  const capH = 30;                                             // табличка с названием под медальоном
 
   // Раскладка — строгая генеалогическая сетка: у каждого узла свой слот (мать —
-  // левая половина отрезка отца-и-матери, отец — правая), поэтому дерево всегда
-  // симметрично, кот стоит ровно по центру, а пропуски (предок неизвестен либо
-  // его вовсе нет в данных) остаются честными пустотами, а не перекашивают ряды.
+  // первая половина отрезка отца-и-матери, отец — вторая), поэтому дерево всегда
+  // симметрично, кот стоит ровно по центру кроны, а пропуски (предок неизвестен
+  // либо его вовсе нет в данных) остаются честными пустотами, а не перекашивают ряды.
   type Placed = { node: Ancestor; depth: number; slot: number; isRoot: boolean; sex: 'female' | 'male' | null };
   const placed: Placed[] = [];
   const links: Array<[number, number, number]> = [];           // слот ребёнка, его глубина, слот родителя
@@ -1738,52 +1746,198 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
   };
   layout(subject, 0, 0, true, cat.genotype.sex === 'male' ? 'male' : 'female');
 
-  // ряд d считаем снизу вверх: 0 (кот) — самый нижний
-  const yOf = (d: number): number => padTop + (usedDepth - d) * rowH + rOf(0);
-  // ширина слота удваивается с каждым поколением вниз: корень занимает всю крону
-  const spanOf = (d: number): number => colW * Math.pow(2, usedDepth - d);
-  const treeW = padX * 2 + spanOf(0);
-  const W = Math.max(392, treeW);
-  const dx = (W - treeW) / 2;
-  const xOf = (d: number, slot: number): number => padX + dx + (slot + 0.5) * spanOf(d);
-  const treeBottom = yOf(0) + rOf(0) + capH + 6;
   const known = pedigreeDepth(cat); // поколений предков в данных (включая туман)
   const fog = pedigreeHasFog(cat);  // есть ли скрытые узлы — предложим анализ
+  const leaves = Math.pow(2, usedDepth); // узлов в самом дальнем поколении
+  const padX = 14, padTop = 52, capH = 30;
+  const availW = Math.max(360, ctx.roomW - 24);
+  const availH = Math.max(340, ctx.roomH - 24);
 
-  // полки-подложки поколений: мягкая полоса за каждым рядом (у корня — в цвет
-  // его тира), чтобы поколения читались рядами, а не россыпью кружков
-  const shelves = new Graphics();
-  const rootX = xOf(0, 0);
-  for (let d = 0; d <= usedDepth; d++) {
-    const r = rOf(d);
-    const yc = yOf(d);
-    if (d === 0) {
-      // у корня полка короткая — постамент под самим котом, а не пустая полоса
-      const w = Math.max(224, colW * 2);
-      shelves.roundRect(rootX - w / 2, yc - r - 10, w, r * 2 + capH + 14, 18)
-        .fill({ color: mixColor(COLORS.card, TIER_COLOR[tierOfBreed(cat.breed)], 0.2), alpha: 0.95 });
-    } else {
-      shelves.roundRect(padX, yc - r - 8, W - padX * 2, r * 2 + capH + 10, 16)
-        .fill({ color: COLORS.card, alpha: 0.6 });
-    }
+  // Вертикаль тянем, только если на колонку остаётся хотя бы ~92 px (ниже этого
+  // порога название породы уходит в нечитаемый кегль) И по высоте помещаются все
+  // поколения с табличками. Телефон не проходит ни по ширине (портрет), ни по
+  // высоте (ландшафт) — там дерево ложится набок.
+  const footEst = fog && !cat.analyzed ? 150 : 100;
+  const colWmax = (availW - padX * 2) / leaves;
+  const vertical = colWmax >= 92 && availH >= padTop + usedDepth * 105 + 76 + capH + 14 + footEst;
+
+  const W = vertical
+    ? Math.max(392, Math.min(availW, padX * 2 + Math.min(112, colWmax) * leaves))
+    : availW; // горизонталь занимает экран целиком — вся ширина уходит подписям
+
+  // --- Подвал строим ПЕРВЫМ: его высота нужна, чтобы подогнать дерево под экран.
+  const foot = new Container();
+  let fy = 0;
+  const footNote = (text: string, color: number): void => {
+    const note = new Text({
+      text,
+      style: {
+        fontFamily: FONT, fontSize: 11 * k, fontWeight: '600', fill: color,
+        align: 'center', wordWrap: true, wordWrapWidth: W - 28 * k, lineHeight: 15 * k,
+      },
+    });
+    note.anchor.set(0.5, 0);
+    note.position.set(W / 2, fy + 2);
+    foot.addChild(note);
+    fy += note.height + 8;
+  };
+
+  if (cat.analyzed) {
+    // анализ сделан: показываем «скрытые гены» как признаки, дремлющие в родословной
+    // (есть у предков, но не у самой породы кота) — материал родословных рецептов.
+    const hiddenGenes = dormantTraits(cat.breed, knownAncestorBreeds(cat));
+    footNote(
+      hiddenGenes.length > 0
+        ? t(`🧬 скрытые гены: ${hiddenGenes.map(traitTag).join(' · ')}`, `🧬 hidden genes: ${hiddenGenes.map(traitTag).join(' · ')}`)
+        : t('🧬 скрытых генов в роду нет — родословная чистая по признакам', '🧬 no hidden genes in the line — the pedigree is clean'),
+      hiddenGenes.length > 0 ? COLORS.ink : COLORS.inkSoft,
+    );
+  } else if (fog) {
+    footNote(t('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', '"???" nodes are hidden — a Genetic analysis reveals the whole pedigree and its hidden genes'), COLORS.inkSoft);
+  }
+  if (known < maxDepth) {
+    footNote(t('родословная пополняется с каждым поколением', 'the pedigree grows with every generation'), COLORS.inkSoft);
   }
 
-  // Ветки: от макушки ребёнка вверх, развилка идёт НИЗОМ коридора (сразу над
-  // ребёнком) и лишь потом поднимается к родителю. Так горизонталь не режет
-  // таблички с названиями — они висят под медальонами родителей, а концы веток
-  // прячутся под ними: медальоны рисуются поверх проводов.
-  const wires = new Graphics();
-  for (const [cSlot, cd, pSlot] of links) {
-    const x1 = xOf(cd, cSlot), x2 = xOf(cd + 1, pSlot);
-    const yTop = yOf(cd) - rOf(cd) - 2;          // макушка ребёнка
-    const yBot = yOf(cd + 1) + rOf(cd + 1) - 2;  // низ родителя (уходит под кольцо)
-    const yBand = yTop - 13;                     // полоса развилки
-    wires.moveTo(x1, yTop).lineTo(x1, yBand);
-    if (Math.abs(x2 - x1) < 1) {
-      wires.lineTo(x2, yBot);
+  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 160, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
+  closeBtn.onTap = close;
+  if (fog && !cat.analyzed) {
+    const anBtn = new Button({ text: t('🧬 Анализ', '🧬 Analyse'), w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
+    anBtn.onTap = () => ctx.openAnalyzeConfirm(cat);
+    if (vertical) {
+      anBtn.position.set(W / 2, fy + 20);
+      closeBtn.position.set(W / 2, fy + 68);
+      fy += 92;
     } else {
-      const rr = Math.min(14, Math.abs(x2 - x1) / 2, Math.max(2, (yBand - yBot) / 2));
-      wires.moveTo(x1, yBand).arcTo(x2, yBand, x2, yBot, rr).lineTo(x2, yBot);
+      // на телефоне каждая строка подвала отнимает высоту у дерева — кнопки в ряд
+      centerRow([anBtn, closeBtn], fy + 22, W, 14);
+      fy += 46;
+    }
+    foot.addChild(anBtn);
+  } else {
+    closeBtn.position.set(W / 2, fy + 24);
+    fy += 44;
+  }
+  foot.addChild(closeBtn);
+  const footH = fy;
+
+  // --- Геометрия дерева под выбранную раскладку.
+  const shelves = new Graphics();
+  const wires = new Graphics();
+  const R_V = [38, 29, 25, 22]; // радиусы медальонов по поколению (вертикаль)
+  const R_H = [21, 19, 18, 17]; // ...и в горизонтальной раскладке — там ряд узкий
+  let rOf: (d: number) => number;
+  let posOf: (p: Placed) => { x: number; y: number };
+  let capWOf: (p: Placed) => number;
+  let capFontOf: (p: Placed) => number;
+  let capMaxH = Infinity;      // сколько высоты есть у таблички (горизонталь: строка)
+  let capSide: 'below' | 'right';
+  let treeBottom = 0;
+
+  if (vertical) {
+    const colW = Math.min(112, (W - padX * 2) / leaves);
+    // Медальоны ужимаем ровно настолько, чтобы все поколения с табличками влезли
+    // в экран без общего сжатия панели: g выведен из «usedDepth рядов + подвал».
+    const gH = (availH - padTop - capH - 14 - footH - 38 * usedDepth) / (67 * usedDepth + 76);
+    const g = Math.max(0.62, Math.min(1, gH, colW / 80));
+    const R = R_V.map((r) => r * g);
+    rOf = (d: number): number => R[Math.min(d, R.length - 1)]!;
+    const rowH = Math.max(
+      rOf(0) + rOf(1) + capH + 8,
+      Math.min(118, (availH - padTop - rOf(0) * 2 - capH - 14 - footH) / Math.max(1, usedDepth)),
+    );
+    // ряд d считаем снизу вверх: 0 (кот) — самый нижний
+    const yOf = (d: number): number => padTop + (usedDepth - d) * rowH + rOf(0);
+    // ширина слота удваивается с каждым поколением вниз: корень занимает всю крону
+    const spanOf = (d: number): number => colW * Math.pow(2, usedDepth - d);
+    const dx = (W - (padX * 2 + spanOf(0))) / 2;
+    const xOf = (d: number, slot: number): number => padX + dx + (slot + 0.5) * spanOf(d);
+    posOf = (p: Placed): { x: number; y: number } => ({ x: xOf(p.depth, p.slot), y: yOf(p.depth) });
+    capSide = 'below';
+    capWOf = (p: Placed): number => (p.isRoot ? 160 : colW - 2);
+    capFontOf = (p: Placed): number => (p.isRoot ? 13 : Math.max(9.5, Math.min(12.5, colW * 0.115)));
+    treeBottom = yOf(0) + rOf(0) + capH + 6;
+
+    // полки-подложки поколений: мягкая полоса за каждым рядом (у корня — в цвет
+    // его тира), чтобы поколения читались рядами, а не россыпью кружков
+    const rootX = xOf(0, 0);
+    for (let d = 0; d <= usedDepth; d++) {
+      const r = rOf(d);
+      const yc = yOf(d);
+      if (d === 0) {
+        // у корня полка короткая — постамент под самим котом, а не пустая полоса
+        const pw = Math.max(224, colW * 2);
+        shelves.roundRect(rootX - pw / 2, yc - r - 10, pw, r * 2 + capH + 14, 18)
+          .fill({ color: mixColor(COLORS.card, TIER_COLOR[tierOfBreed(cat.breed)], 0.2), alpha: 0.95 });
+      } else {
+        shelves.roundRect(padX, yc - r - 8, W - padX * 2, r * 2 + capH + 10, 16)
+          .fill({ color: COLORS.card, alpha: 0.6 });
+      }
+    }
+
+    // Ветки: от макушки ребёнка вверх, развилка идёт НИЗОМ коридора (сразу над
+    // ребёнком) и лишь потом поднимается к родителю. Так горизонталь не режет
+    // таблички с названиями — они висят под медальонами родителей, а концы веток
+    // прячутся под ними: медальоны рисуются поверх проводов.
+    for (const [cSlot, cd, pSlot] of links) {
+      const x1 = xOf(cd, cSlot), x2 = xOf(cd + 1, pSlot);
+      const yTop = yOf(cd) - rOf(cd) - 2;          // макушка ребёнка
+      const yBot = yOf(cd + 1) + rOf(cd + 1) - 2;  // низ родителя (уходит под кольцо)
+      const yBand = yTop - 13;                     // полоса развилки
+      wires.moveTo(x1, yTop).lineTo(x1, yBand);
+      if (Math.abs(x2 - x1) < 1) {
+        wires.lineTo(x2, yBot);
+      } else {
+        const rr = Math.min(14, Math.abs(x2 - x1) / 2, Math.max(2, (yBand - yBot) / 2));
+        wires.moveTo(x1, yBand).arcTo(x2, yBand, x2, yBot, rr).lineTo(x2, yBot);
+      }
+    }
+  } else {
+    // Горизонталь: колонка = поколение, строка = слот. Медальон прижат к левому
+    // краю колонки, вся оставшаяся ширина — под название породы.
+    const colW = (W - padX * 2) / (usedDepth + 1);
+    const headH = 46;
+    const rowY = Math.max(34, Math.min(96, (availH - headH - footH - 12) / leaves));
+    const rs = Math.min(1, (rowY * 0.46) / R_H[0]!);
+    const R = R_H.map((r) => r * rs);
+    rOf = (d: number): number => R[Math.min(d, R.length - 1)]!;
+    const colX = (d: number): number => padX + d * colW;
+    const spanY = (d: number): number => rowY * Math.pow(2, usedDepth - d);
+    const yOf = (d: number, slot: number): number => headH + (slot + 0.5) * spanY(d);
+    posOf = (p: Placed): { x: number; y: number } => ({ x: colX(p.depth) + rOf(p.depth) + 5, y: yOf(p.depth, p.slot) });
+    capSide = 'right';
+    capWOf = (p: Placed): number => colW - rOf(p.depth) * 2 - 16;
+    capFontOf = (): number => Math.max(9.5, Math.min(15, colW * 0.085));
+    capMaxH = rowY - 6;
+    treeBottom = headH + rowY * leaves + 4;
+
+    // полки: за каждым поколением своя колонка-подложка, у корня — короткий
+    // постамент в цвет его тира (чтобы кот читался как «начало» дерева)
+    for (let d = 0; d <= usedDepth; d++) {
+      if (d === 0) {
+        const hRoot = Math.min(spanY(0), Math.max(rowY * 1.6, rOf(0) * 2 + 22));
+        shelves.roundRect(colX(0) + 2, yOf(0, 0) - hRoot / 2, colW - 8, hRoot, 16)
+          .fill({ color: mixColor(COLORS.card, TIER_COLOR[tierOfBreed(cat.breed)], 0.2), alpha: 0.95 });
+      } else {
+        shelves.roundRect(colX(d) + 2, headH - 4, colW - 8, rowY * leaves + 8, 16)
+          .fill({ color: COLORS.card, alpha: 0.6 });
+      }
+    }
+
+    // Ветки: вправо из-за таблички ребёнка, развилка вертикальная в зазоре между
+    // колонками, вход — в левый бок медальона родителя (конец прячется под кольцом).
+    for (const [cSlot, cd, pSlot] of links) {
+      const y1 = yOf(cd, cSlot), y2 = yOf(cd + 1, pSlot);
+      const xStart = colX(cd) + colW - 10;
+      const xEnd = colX(cd + 1) + rOf(cd + 1) * 0.4;
+      const xBand = xStart + Math.max(4, (xEnd - xStart) * 0.35);
+      wires.moveTo(xStart, y1).lineTo(xBand, y1);
+      if (Math.abs(y2 - y1) < 1) {
+        wires.lineTo(xEnd, y2);
+      } else {
+        const rr = Math.min(12, Math.abs(y2 - y1) / 2, Math.max(2, (xEnd - xBand) / 2));
+        wires.moveTo(xBand, y1).arcTo(xBand, y2, xEnd, y2, rr).lineTo(xEnd, y2);
+      }
     }
   }
   wires.stroke({ width: 2.5, color: mixColor(COLORS.cardEdge, COLORS.ink, 0.28), alpha: 1 });
@@ -1852,95 +2006,66 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
 
     // Табличка с названием: у корня — кличка кота, у предков — порода (в тумане
     // «???»). Плашка непрозрачная и рисуется поверх веток — конец провода уходит
-    // под неё, поэтому длинные названия не спорят с чертежом.
+    // под неё, поэтому длинные названия не спорят с чертежом. В вертикальной
+    // раскладке она под медальоном, в горизонтальной — справа от него.
     const name = hidden ? '???'
       : p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
     // Длинные породы («Домашняя короткошёрстная») уводило в три строки с разрывом
     // слова, и таблички соседей смыкались — поэтому кегль подбираем под две строки.
-    const capW = p.isRoot ? 160 : colW - 2;
+    const capW = Math.max(52, capWOf(p));
     const mkCap = (size: number): Text => new Text({
       text: name,
       style: {
         fontFamily: FONT, fontSize: size, fontWeight: p.isRoot ? '800' : '700',
         fill: hidden ? COLORS.inkSoft : COLORS.ink, wordWrap: true, breakWords: true,
-        wordWrapWidth: capW, lineHeight: size + 1.5, align: 'center',
+        wordWrapWidth: capW, lineHeight: size + 1.5, align: capSide === 'right' ? 'left' : 'center',
       },
     });
-    let cap = mkCap(p.isRoot ? 13 : p.depth >= 2 ? 10 : 10.5);
-    for (const size of [9.5, 8.5]) {
-      if (p.isRoot || cap.height <= (cap.style.lineHeight as number) * 2 + 1) break;
+    const subSize = capSide === 'right' ? 9.5 : 10;
+    const hasSub = p.isRoot && !!cat.name?.trim();
+    const capFits = (txt: Text): boolean =>
+      txt.height <= (txt.style.lineHeight as number) * 2 + 1
+      && txt.height + (hasSub ? subSize + 4 : 0) <= capMaxH;
+    let size = capFontOf(p);
+    let cap = mkCap(size);
+    while (!capFits(cap) && size > 8.5) {
+      size = Math.max(8.5, size - 0.75);
       cap.destroy();
       cap = mkCap(size);
     }
-    cap.anchor.set(0.5, 0);
-    cap.position.set(0, r + 6);
     // у кота с кличкой порода уходит второй строкой — иначе её негде прочитать
-    const sub = p.isRoot && cat.name?.trim()
-      ? label(breedName(p.node.breed), 10, COLORS.inkSoft, '700')
-      : null;
-    if (sub) { sub.anchor.set(0.5, 0); sub.position.set(0, r + 6 + cap.height + 2); }
+    const sub = hasSub ? label(breedName(p.node.breed), subSize, COLORS.inkSoft, '700') : null;
     const textH = cap.height + (sub ? sub.height + 2 : 0);
-    const plateW = Math.min(p.isRoot ? 180 : colW + 4, Math.max(cap.width, sub?.width ?? 0) + 14);
-    const plate = new Graphics()
-      .roundRect(-plateW / 2, r + 2, plateW, textH + 8, 8)
-      .fill({ color: COLORS.hud, alpha: 0.97 });
+    const plate = new Graphics();
+    if (capSide === 'below') {
+      cap.anchor.set(0.5, 0);
+      cap.position.set(0, r + 6);
+      if (sub) { sub.anchor.set(0.5, 0); sub.position.set(0, r + 6 + cap.height + 2); }
+      const plateW = Math.min(p.isRoot ? 180 : capW + 6, Math.max(cap.width, sub?.width ?? 0) + 14);
+      plate.roundRect(-plateW / 2, r + 2, plateW, textH + 8, 8).fill({ color: COLORS.hud, alpha: 0.97 });
+    } else {
+      cap.anchor.set(0, 0);
+      cap.position.set(r + 10, -textH / 2);
+      if (sub) { sub.anchor.set(0, 0); sub.position.set(r + 10, -textH / 2 + cap.height + 2); }
+      const plateW = Math.min(capW + 12, Math.max(cap.width, sub?.width ?? 0) + 14);
+      plate.roundRect(r + 5, -textH / 2 - 5, plateW, textH + 10, 8).fill({ color: COLORS.hud, alpha: 0.97 });
+    }
     c.addChild(plate, cap);
     if (sub) c.addChild(sub);
 
-    c.position.set(xOf(p.depth, p.slot), yOf(p.depth));
+    const at = posOf(p);
+    c.position.set(at.x, at.y);
     return c;
   };
 
   const title = label(t('🌳 Родословная', '🌳 Pedigree'), 18, COLORS.ink, '800');
   title.position.set(W / 2, 26 * k);
 
-  let y = treeBottom + 8;
-  const footer: Container[] = [];
-  const footNote = (text: string, color: number): void => {
-    const t = new Text({
-      text,
-      style: {
-        fontFamily: FONT, fontSize: 11 * k, fontWeight: '600', fill: color,
-        align: 'center', wordWrap: true, wordWrapWidth: W - 28 * k, lineHeight: 15 * k,
-      },
-    });
-    t.anchor.set(0.5, 0);
-    t.position.set(W / 2, y + 2);
-    footer.push(t);
-    y += t.height + 8;
-  };
-
-  if (cat.analyzed) {
-    // анализ сделан: показываем «скрытые гены» как признаки, дремлющие в родословной
-    // (есть у предков, но не у самой породы кота) — материал родословных рецептов.
-    const hidden = dormantTraits(cat.breed, knownAncestorBreeds(cat));
-    footNote(
-      hidden.length > 0
-        ? t(`🧬 скрытые гены: ${hidden.map(traitTag).join(' · ')}`, `🧬 hidden genes: ${hidden.map(traitTag).join(' · ')}`)
-        : t('🧬 скрытых генов в роду нет — родословная чистая по признакам', '🧬 no hidden genes in the line — the pedigree is clean'),
-      hidden.length > 0 ? COLORS.ink : COLORS.inkSoft,
-    );
-  } else if (fog) {
-    footNote(t('узлы «???» скрыты — Генетический анализ вскроет всю родословную и скрытые гены', '"???" nodes are hidden — a Genetic analysis reveals the whole pedigree and its hidden genes'), COLORS.inkSoft);
-    const anBtn = new Button({ text: t('🧬 Анализ', '🧬 Analyse'), w: 170, h: 40, color: COLORS.dna, fontSize: 14 });
-    anBtn.position.set(W / 2, y + 20);
-    anBtn.onTap = () => ctx.openAnalyzeConfirm(cat);
-    footer.push(anBtn);
-    y += 48;
-  }
-  if (known < maxDepth) {
-    footNote(t('родословная пополняется с каждым поколением', 'the pedigree grows with every generation'), COLORS.inkSoft);
-  }
-
-  const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 160, h: 40, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 14 });
-  closeBtn.position.set(W / 2, y + 24);
-  closeBtn.onTap = close;
-  y += 44;
-
-  const H = y;
+  foot.position.set(0, treeBottom + 8);
+  const H = treeBottom + 8 + footH;
   root.addChild(panel(W, H, COLORS.hud, 18), title, shelves, wires);
   for (const p of placed) root.addChild(medallion(p));
-  root.addChild(...footer, closeBtn);
+  root.addChild(foot);
   return root;
 }
 
@@ -2659,7 +2784,12 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   }
 
   const btnW = W - 48;
-  const addBtn = (text: string, color: number, enabled: boolean, onTap: () => void): void => {
+  // Обучение оставляет в меню ровно одну кнопку — ту, о которой говорит
+  // подсказка: свернуть со сценария (отдать не того кота, увести родителя не
+  // туда) должно быть нечем. Вне обучения gate === null и меню обычное.
+  const gate = tutorialMenuGate(ctx.state, cat, ctx.now());
+  const addBtn: AddBtn = (id, text, color, enabled, onTap) => {
+    if (gate && !gate.actions.includes(id)) return;
     const b = new Button({ text, w: btnW, h: 44, color, fontSize: 15 });
     b.enabled = enabled;
     b.onTap = onTap;
@@ -2671,7 +2801,7 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // Постановка на вязку: кнопкой «в свободный слот» (в группе «куда отправить кота»,
   // ниже) либо перетаскиванием — взять кота за шкирку и уронить на нужный слот
   // инкубатора. Переезд между комнатами — там же.
-  addBtn(named ? t('✏️ Переименовать', '✏️ Rename') : t('✏️ Дать имя', '✏️ Give a name'), COLORS.warn, true, () => {
+  addBtn('rename', named ? t('✏️ Переименовать', '✏️ Rename') : t('✏️ Дать имя', '✏️ Give a name'), COLORS.warn, true, () => {
     askText(t('Имя котика:', 'Cat name:'), cat.name ?? '', 16, (input) => {
       if (input === null) return;               // отмена — ничего не делаем
       const r = renameCat(ctx.state, cat.id, input);
@@ -2684,13 +2814,13 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
 
   // Родословная: дерево предков до прадедов (есть и у стартовых — скрытая, в тумане).
   if (cat.motherBreed || cat.fatherBreed || cat.pedigree) {
-    addBtn(t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
+    addBtn('pedigree', t('🌳 Родословная', '🌳 Pedigree'), COLORS.secondary, true, () => ctx.openPedigree(cat));
   }
 
   // Генетический анализ (система знаний): вскрыть родословную и скрытые гены.
   // Пока цел запас подарочных анализов — счётчик 🎁 прямо на кнопке (см. freeAnalyzeCat).
   if (!cat.analyzed && pedigreeHasFog(cat)) {
-    addBtn(analyzeBtnLabel(ctx), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
+    addBtn('analyze', analyzeBtnLabel(ctx), COLORS.dna, true, () => ctx.openAnalyzeConfirm(cat));
   }
 
   // Лечение (ветеринар-шприц) и заморозка (криокапсула) — только перетаскиванием кота
@@ -2702,7 +2832,7 @@ export function buildCatMenu(ctx: UiContext, cat: Cat, close: () => void): Conta
   // «Старого»/«Бесплодного» пускаем: свести его нельзя, но именно в слоте его лечит
   // шприц-ветеринар (см. assignBreeder).
   if (!busy && !isInSlot(ctx.state, cat.id)) {
-    addBtn(t('💞 В свободный слот вязки', '💞 To a free breeding slot'), COLORS.primary, true, () => {
+    addBtn('slot', t('💞 В свободный слот вязки', '💞 To a free breeding slot'), COLORS.primary, true, () => {
       const idx = freeBreedSlot(ctx.state, cat);
       if (idx < 0) { ctx.toast(t('Нет свободных слотов вязки 💞 — освободи слот в Инкубаторе', 'No free breeding slots 💞 — clear one in the Incubator')); return; }
       const r = assignBreeder(ctx.state, idx, cat.id, ctx.now());
@@ -3239,9 +3369,10 @@ export function buildCryoMenu(ctx: UiContext, cat: Cat, close: () => void): Cont
  * Выполнить заказ можно ТОЛЬКО котом из корзины: кнопка «Выполнить» активна лишь у строк,
  * под которые он подходит.
  *
- * РАСКЛАДКА строки: правая колонка сверху вниз — «Выполнить», таймер жизни, «📺 обновить».
- * Главная кнопка стоит отдельно сверху (её жали чаще всего и промахивались по соседней
- * 📺), а таймер жизни разделяет их прослойкой. 📺-обновление спрашивает подтверждение.
+ * РАСКЛАДКА строки: слева сверху вниз — кто нужен, награда за него и под ней строка
+ * «⏳ таймер жизни · 📺 обновить» (оба про смену заказа, поэтому стоят вместе). Справа —
+ * одна крупная кнопка «Выполнить заказ»: главное действие вынесено подальше от 📺, по
+ * которой промахивались, теряя присмотренную награду. 📺 спрашивает подтверждение.
  */
 export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const W = 620;
@@ -3279,12 +3410,13 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   adHelp.anchor.set(0.5, 0);
   adHelp.position.set(W / 2, basket.y + basket.height + 6);
 
-  // Карточка заказа поделена на две колонки: СЛЕВА — кто нужен и что за это дают,
-  // СПРАВА — таймер жизни, кнопка «Выполнить» и 📺-обновление. Раньше эти четыре
-  // элемента стояли крест-накрест по углам, и взгляд метался по карточке.
-  const rowH = V(108, 100);
+  // Карточка заказа поделена на две колонки: СЛЕВА — кто нужен, что за это дают и
+  // строка «таймер жизни · 📺 обновить»; СПРАВА — только кнопка «Выполнить заказ».
+  // Раньше все четыре элемента стояли крест-накрест по углам, а «Выполнить» и 📺
+  // соседствовали в одной колонке — по 📺 промахивались.
+  const rowH = V(120, 108);
   const cardW = W - 32;
-  const COL_W = V(196, 178);              // правая колонка (обе кнопки во всю её ширину)
+  const COL_W = V(200, 182);              // правая колонка — под главную кнопку
   const orders = ctx.state.orders;
   let y = adHelp.y + adHelp.height + 10;
   const rows = new Container();
@@ -3310,41 +3442,45 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     const req = new Text({
       text: `"${describeReq(order.req)}"`,
       style: {
-        fontFamily: FONT, fontSize: V(16.5, 16), fontWeight: '800',
+        fontFamily: FONT, fontSize: V(16, 15.5), fontWeight: '800',
         fill: V(darken(tc, 0.55), COLORS.ink),
-        wordWrap: true, wordWrapWidth: leftW, lineHeight: V(21, 20),
+        wordWrap: true, wordWrapWidth: leftW, lineHeight: V(20, 19),
       },
     });
     req.anchor.set(0, 0);
-    req.position.set(16, V(14, 12));
+    req.position.set(16, 12);
     row.addChild(req);
 
+    // награда — сразу под заголовком, а не прижата к низу: под ней теперь строка
+    // с таймером жизни и 📺-обновлением
+    const rewY = Math.max(req.y + req.height + 13, 54);
     if (VIVID) {
       const rew = rewardRow(order.reward, 14.5);
-      rew.position.set(16, Math.max(req.y + req.height + 14, ch - 26));
+      rew.position.set(16, rewY);
       row.addChild(rew);
     } else {
       const rew = label(t('Награда: ', 'Reward: ') + rewardText(order.reward), 13, COLORS.inkSoft, '700');
       rew.anchor.set(0, 0.5);
-      rew.position.set(16, 46);
+      rew.position.set(16, rewY);
       row.addChild(rew);
     }
 
-    // таймер жизни — между кнопками, в правой колонке (заодно разводит их по краям)
+    // нижняя строка левой колонки: сколько заказу осталось жить, а рядом — 📺
     const timer = label(t(`⏳ сменится через ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`, `⏳ changes in ${fmtHM(msUntilOrderExpiry(order, ctx.now()))}`), V(12, 11.5), V(INK_SOFT, COLORS.inkSoft), V('700', '600'));
-    timer.anchor.set(1, 0.5);
-    timer.position.set(cardW - 16, V(58, 70));
+    timer.anchor.set(0, 0.5);
+    const botY = ch - 22;
+    timer.position.set(16, botY);
     row.addChild(timer);
 
-    // главная кнопка «Выполнить» — в правой колонке сверху, подальше от 📺
-    const btnText = !cat ? t('нужен кот', 'need a cat') : busy ? t('кот занят', 'cat is busy') : fits ? t('Выполнить', 'Complete') : t('не подходит', 'does not match');
+    // главная кнопка «Выполнить заказ» — вся правая колонка, по центру её высоты
+    const btnText = !cat ? t('нужен кот', 'need a cat') : busy ? t('кот занят', 'cat is busy') : fits ? t('Выполнить заказ', 'Complete order') : t('не подходит', 'does not match');
     const btn = new Button({
-      text: btnText, w: V(COL_W, 150), h: V(36, 40),
+      text: btnText, w: COL_W, h: V(54, 48),
       color: ready ? V(COLORS.good, COLORS.primary) : COLORS.cardEdge,
-      textColor: ready ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 15,
+      textColor: ready ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: V(15.5, 15),
     });
     btn.enabled = ready;
-    btn.position.set(V(colCx, cardW - 16 - 75), V(29, 26));
+    btn.position.set(colCx, ch / 2);
     btn.onTap = () => {
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) {
@@ -3360,14 +3496,19 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     // 📺-обновление — в самом низу колонки, под таймером.
     // Кулдаун свой у каждого заказа, поэтому состояние кнопки считается по строке.
     const adAvail = canAdRefreshOrder(order, ctx.now());
+    const refW = V(178, 170);
     const refBtn = new Button({
       text: adAvail ? t('📺 Реклама · обновить', '📺 Ad · refresh') : `⏳ ${fmtMin(msUntilAdRefresh(order, ctx.now()))}`,
-      w: V(COL_W, 178), h: V(27, 28),
+      w: refW, h: V(30, 28),
       color: adAvail ? V(darken(COLORS.secondary, 0.1), COLORS.secondary) : COLORS.cardEdge,
       textColor: adAvail ? 0xffffff : V(INK_SOFT, COLORS.inkSoft), fontSize: 11,
     });
     refBtn.enabled = adAvail;
-    refBtn.position.set(V(colCx, 16 + 89), V(81, 70));
+    // встаёт справа от таймера, но не заезжает в колонку «Выполнить заказ»
+    refBtn.position.set(
+      Math.min(16 + timer.width + 12 + refW / 2, colCx - COL_W / 2 - 14 - refW / 2),
+      botY,
+    );
     // Не обновляем сразу: заказ вместе с наградой пропадает безвозвратно, а кнопка
     // соседствует с «Выполнить» — сначала спрашиваем (см. buildOrderRefreshConfirm).
     refBtn.onTap = () => { close(); ctx.openOrderRefreshConfirm(order.id); };

@@ -131,6 +131,9 @@ export function createGenolab(ctx: UiContext): Room {
   // пересборками комнаты — живёт в module-level `remembered`; у каждой свой)
   const scroll = remembered.scroll;
   let suppressTap = false;  // был свайп-скролл — гасим случайную покупку по тапу
+  // Узлы-якоря подсветки обучения (см. Room.anchor и ui/tutorial.ts): пока что
+  // нужна одна вкладка — 📖 Котодекс, с неё начинается знакомство с комнатой.
+  const anchors = new Map<string, Container>();
 
   function tabBar(): Container {
     const c = new Container();
@@ -149,8 +152,13 @@ export function createGenolab(ctx: UiContext): Room {
         textColor: active ? 0xffffff : V(INK, COLORS.ink), fontSize: 15.5,
       });
       b.position.set(bw / 2 + i * (bw + gap), 21);
+      if (d.id === 'codex') anchors.set('codex', b);
       b.onTap = () => {
         const moved = d.id !== section;
+        // Шаг обучения «загляни в Генолаб» закрывается именно тапом по вкладке:
+        // просто заехать в комнату свайпом можно и мимоходом, а вкладку игрок
+        // нажимает осознанно — и сразу видит, что за ней лежит.
+        if (d.id === 'codex') ctx.noteTutorialSeen('genolab');
         section = d.id; remembered.section = d.id; refresh();
         // тап по вкладке — неигровое действие (аналог кнопки «Магазин» в примерах
         // площадки): ролик приходит поверх уже переключённой вкладки
@@ -889,6 +897,7 @@ export function createGenolab(ctx: UiContext): Room {
 
   function refresh(): void {
     shell.body.removeChildren();
+    anchors.clear(); // узлы уничтожены вместе с телом комнаты
     recipeBar = null;
     recipeTime = null;
     sealedFlask = null;
@@ -926,5 +935,9 @@ export function createGenolab(ctx: UiContext): Room {
   return {
     id: 'genolab', title: t('🔬 Генолаб', '🔬 Genolab'), container: shell.container, refresh, tick,
     setSection: (id: string) => { section = id as Section; remembered.section = section; refresh(); },
+    anchor: (key) => {
+      const node = anchors.get(key);
+      return node && !node.destroyed ? node : null;
+    },
   };
 }
