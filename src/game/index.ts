@@ -82,8 +82,11 @@ export {
 export type { Result, BirthEvent, OfflineIncome } from './actions.js';
 export {
   tutorialStep, tutorialActive, finishTutorial, restartTutorial,
-  markTutorialSeen, tutorialMenuGate,
+  markTutorialSeen, markTutorialTab, tutorialMenuGate,
+  tutorialLock, tutorialAllows, tutorialAllowsCat, tutorialAllowsRoom,
+  TUTOR_GENOLAB_TABS, nextGenolabTab,
   grantTutorialReward, analyzeTarget, adoptTarget, kittenInSlot, growTarget, shelterTarget,
+  breederTarget, championTarget,
 } from './tutorial.js';
-export type { TutorStep } from './tutorial.js';
+export type { TutorStep, TutorLock, TutorGenolabTab } from './tutorial.js';
 export { canAskReview, noteReviewAsked } from './review.js';

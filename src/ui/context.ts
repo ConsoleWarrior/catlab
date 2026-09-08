@@ -5,7 +5,7 @@
 
 import type { Application, Container, Texture, FederatedPointerEvent } from 'pixi.js';
 import type { Recipe, Rng } from '../genetics/index.js';
-import type { Cat, GameState, BirthEvent } from '../game/index.js';
+import type { Cat, GameState, BirthEvent, TutorGenolabTab } from '../game/index.js';
 
 /** Параметры взятия котика «за шкирку» (живой котик в комнате). */
 export interface GrabOpts {
@@ -98,12 +98,24 @@ export interface UiContext {
    */
   readonly gestureAxis: 'none' | 'h' | 'v';
   /**
-   * Отметить «просмотровый» шаг обучения: открытие панели/вкладки состояние
-   * игры не меняет, вычислить такой шаг из состояния нельзя (см.
-   * game/tutorial.ts, markTutorialSeen). Комнаты зовут его для своих шагов —
-   * сейчас это вкладка 📖 Котодекс Генолаба. Вне обучения — пустышка.
+   * Отметить открытую вкладку Генолаба на его шаге обучения: обход идёт по всем
+   * трём по очереди (📖 Котодекс → 🔬 Улучшения → 🧪 Исследования). Переключение
+   * вкладки состояние игры не меняет, вычислить такой шаг нельзя — только флагом
+   * (см. game/tutorial.ts, markTutorialTab). Вне обучения — пустышка.
    */
-  noteTutorialSeen(what: 'genolab'): void;
+  noteTutorialTab(tab: TutorGenolabTab): void;
+  /**
+   * Обучение: разрешено ли сейчас это действие. `id` — кнопка комнаты/панели
+   * ('preview', 'breed', 'orders', 'toNursery', вкладки Генолаба) либо зона
+   * дропа ('slot', 'adopt', 'pedestal', 'basket', 'lab', 'cryo'). Вне обучения
+   * всегда true; на запрещённом действии повторяет подсказку тостом.
+   *
+   * Спрашивать ОБЯЗАТЕЛЬНО в каждой зоне дропа и у каждой кнопки, соседствующей
+   * с целью шага: затемнение с «окном» — это подсказка для глаз, а не защита
+   * (окно прямоугольное и захватывает соседей, а пока кота несут за шкирку, его
+   * нет вовсе). Настоящий запрет держит только этот гейт.
+   */
+  tutorAllows(id: string): boolean;
   openCatMenu(cat: Cat): void;
   /**
    * Кот, чьё инфо-меню сейчас открыто (или недавно закрылось). Пока `frozen` —

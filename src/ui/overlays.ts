@@ -3484,6 +3484,9 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     btn.enabled = ready;
     btn.position.set(colCx, ch / 2);
     btn.onTap = () => {
+      // Обучение: доску открывают, чтобы прочитать, — выполнять заказ на этом
+      // шаге нечем и незачем (кот в корзину не попадал: корзина закрыта).
+      if (!ctx.tutorAllows('orderClaim')) return;
       const r = claimOrder(ctx.state, order.id, ctx.now(), ctx.rng);
       if (r.ok) {
         sfxEvent('order');
@@ -3513,7 +3516,10 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
     );
     // Не обновляем сразу: заказ вместе с наградой пропадает безвозвратно, а кнопка
     // соседствует с «Выполнить» — сначала спрашиваем (см. buildOrderRefreshConfirm).
-    refBtn.onTap = () => { close(); ctx.openOrderRefreshConfirm(order.id); };
+    refBtn.onTap = () => {
+      if (!ctx.tutorAllows('orderRefresh')) return; // обучение: 📺-обновление не его тема
+      close(); ctx.openOrderRefreshConfirm(order.id);
+    };
     row.addChild(refBtn);
 
     row.position.set(16, y);

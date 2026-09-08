@@ -593,6 +593,9 @@ export function createIncubator(ctx: UiContext): Room {
         b.position.set(w / 2, yy);
         b.onTap = () => {
           if (!heldKitten) return;
+          // Обучение: пока малыш растёт, обе кнопки мертвы, а на шаге «освободи
+          // слот» живёт только «🏠 В питомник» — она стоит прямо над «🏚️ В приют».
+          if (!ctx.tutorAllows(room === 'shelter' ? 'toShelter' : 'toNursery')) return;
           const r = moveCat(ctx.state, heldKitten.id, room, ctx.now());
           if (!r.ok) { ctx.toast(r.reason); return; }
           ctx.commit();
@@ -652,6 +655,9 @@ export function createIncubator(ctx: UiContext): Room {
         btn.position.set(w / 2, btnY);
         if (i === 0) anchors.set('breed', btn); // якорь подсветки обучения
         btn.onTap = () => {
+          // Обучение: сначала шаг «посмотри 🔮 прогноз», и только потом «Свести».
+          // Кнопки стоят вплотную одна над другой — окна заслонки тут мало.
+          if (!ctx.tutorAllows('breed')) return;
           const r = startBreeding(ctx.state, i, mother!.id, father!.id, ctx.now(), ctx.rng);
           if (r.ok) { ctx.clearSelection(); ctx.commit(); sfxEvent('breed'); ctx.toast(t('Вязка началась 🐾', 'Breeding has started 🐾')); }
           else ctx.toast(r.reason);
@@ -663,7 +669,7 @@ export function createIncubator(ctx: UiContext): Room {
         });
         pv.position.set(w / 2, stripY + 67);
         if (i === 0) anchors.set('preview', pv); // якорь подсветки обучения
-        pv.onTap = () => ctx.openPairPreview(mother!, father!);
+        pv.onTap = () => { if (ctx.tutorAllows('preview')) ctx.openPairPreview(mother!, father!); };
         card.addChild(btn, pv);
       } else {
         const hint = label(t('Добавь котов для скрещивания', 'Add cats to breed'), 13, COLORS.inkSoft, '600');
@@ -1212,6 +1218,7 @@ Breeding${dots}`);
     for (const ls of live) {
       const p = ls.card.toLocal({ x: gx, y: gy }, ctx.uiRoot);
       if (p.x >= 0 && p.x <= ls.cardW && p.y >= 0 && p.y <= ls.cardH) {
+        if (!ctx.tutorAllows('slot')) return false; // обучение: слот принимает кота только на своём шаге
         const r = assignBreeder(ctx.state, ls.index, cat.id, ctx.now());
         if (!r.ok) { ctx.toast(r.reason); return false; }
         ctx.commit();

@@ -12,6 +12,7 @@ import {
   levelForReputation,
 } from './config.js';
 import { emptySlot, makeCatInstance } from './economy.js';
+import { TUTOR_GENOLAB_TABS } from './tutorial.js';
 import { attachHiddenPedigree, revealPedigree } from './pedigree.js';
 import { initOrders } from './orders.js';
 
@@ -56,7 +57,7 @@ export function createInitialState(rng: Rng, now: number): GameState {
     tutorial: {
       done: false,
       bornOnce: false, previewSeen: false, ordersSeen: false, genolabSeen: false,
-      adoptDone: false, rewardTaken: false,
+      genolabTabs: [], adoptDone: false, rewardTaken: false,
     },
     nextId: 1,
   };
@@ -158,7 +159,7 @@ export function deserialize(json: string): GameState {
     data.tutorial = {
       done: true,
       bornOnce: true, previewSeen: true, ordersSeen: true, genolabSeen: true,
-      adoptDone: true, rewardTaken: true,
+      genolabTabs: [...TUTOR_GENOLAB_TABS], adoptDone: true, rewardTaken: true,
     };
   } else {
     const t = data.tutorial;
@@ -174,6 +175,10 @@ export function deserialize(json: string): GameState {
     if (typeof t.previewSeen !== 'boolean') t.previewSeen = t.done;
     if (typeof t.ordersSeen !== 'boolean') t.ordersSeen = t.done;
     if (typeof t.genolabSeen !== 'boolean') t.genolabSeen = t.done;
+    // Шаг «Генолаб» раньше закрывался одной вкладкой (📖 Котодекс), теперь ведёт
+    // по всем трём. Кто его уже прошёл — считается обошедшим все, остальным
+    // список пуст: обход начнётся с Котодекса, как и у новой игры.
+    if (!Array.isArray(t.genolabTabs)) t.genolabTabs = t.genolabSeen ? [...TUTOR_GENOLAB_TABS] : [];
     if (typeof t.adoptDone !== 'boolean') t.adoptDone = t.done;
     // Обучение стало обязательным и непропускаемым (см. game/tutorial.ts), поэтому
     // «свёрнутые подсказки» из промежуточной версии вычищаем из сейва.

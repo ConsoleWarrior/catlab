@@ -316,7 +316,7 @@ export function createNursery(ctx: UiContext): Room {
       color: V(ORDERS_TINT, COLORS.warn), textColor: V(0xffffff, COLORS.ink), fontSize: 13.5,
     });
     btn.position.set(cx, cy);
-    btn.onTap = () => ctx.openOrders();
+    btn.onTap = () => { if (ctx.tutorAllows('orders')) ctx.openOrders(); };
     ordersBtn = btn;
     ordersLayer.addChild(btn);
 
@@ -841,6 +841,7 @@ export function createNursery(ctx: UiContext): Room {
     const fromBasket = isInBasket(ctx.state, cat.id); // кота тащат ИЗ корзины
     // корзина заказов (слева под названием): кот в ней — «предъявленный клиенту»
     if (basketZone.contains(lp.x, lp.y)) {
+      if (!ctx.tutorAllows('basket')) return false; // обучение: корзина закрыта до конца сценария
       if (fromBasket) return false; // вернули на место — endGrab покажет кота в корзине
       // Корзина — отдельное место: putCatInBasket сам снимет кота с пьедестала или из
       // слота вязки, пол ему при этом не нужен (место в комнате он не занимает).
@@ -852,6 +853,7 @@ export function createNursery(ctx: UiContext): Room {
       return true;
     }
     if (idx >= 0) {
+      if (!ctx.tutorAllows('pedestal')) return false; // обучение: выставка ждёт своего шага
       if (idx >= championSlots(ctx.state)) { ctx.toast(t('Пьедестал заперт 🔒', 'The pedestal is locked 🔒')); return false; }
       if (championAt(ctx.state, idx)?.id === cat.id) return false; // вернулся на свой же пьедестал
       const r = setChampion(ctx.state, cat.id, idx, ctx.now());
@@ -868,6 +870,7 @@ export function createNursery(ctx: UiContext): Room {
     // тост говорит, где её открыть (как у биобанка в Приюте).
     // (Ветеринар отсюда убран — теперь это шприц в Инкубаторе, на кота в слоте вязки.)
     if (cryoZone.contains(lp.x, lp.y)) {
+      if (!ctx.tutorAllows('cryo')) return false; // обучение: криокапсула не его тема
       if (!cryoUnlocked(ctx.state)) {
         ctx.toast(t('Открой «❄️ Криогенетику» в Генолабе 🔬', 'Unlock "❄️ Cryogenetics" in the Genolab 🔬'));
         return false;

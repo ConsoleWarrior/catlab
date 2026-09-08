@@ -16,9 +16,19 @@
  *  - свайп между комнатами выключен (см. Game.installInput).
  * Кнопки «пропустить» нет: подарок за прохождение получает каждый.
  *
+ * ⚠️ ЗАСЛОНКА — ПОДСКАЗКА ДЛЯ ГЛАЗ, А НЕ ЗАЩИТА. Её окно прямоугольное (в него
+ * попадает и соседняя кнопка), а на шагах-жестах, пока кота несут за шкирку, её
+ * нет вовсе — и до 08.09.2026 этого хватало, чтобы одним движением уронить кота
+ * в 🧺 корзину и продать посреди обучения. Настоящий запрет держит ЗАМОК ядра
+ * (`tutorialLock`): он же решает, кого можно тапнуть, кого взять за шкирку, куда
+ * опустить, куда уйти и какие кнопки живы. Всё, что здесь рисуется, обязано
+ * совпадать с замком — цели подсказки берём из тех же функций ядра
+ * (analyzeTarget / breederTarget / championTarget и т.д.).
+ *
  * ⚠️ ВАЖНО: заслонка включается ТОЛЬКО когда цель шага найдена на экране. Нет
  * узла (комната пересобирается, открыт оверлей, кота несут в руке) — гасим её
- * целиком: намертво залипший экран хуже, чем лишняя секунда свободы.
+ * целиком: намертво залипший экран хуже, чем лишняя секунда свободы. Игру это
+ * больше не подставляет — запреты живут в замке, а не в заслонке.
  *
  * ⚠️ Все ДЕКОРАТИВНЫЕ узлы слоя (кольцо, рука, подложка и текст плашки) обязаны
  * иметь `eventMode = 'none'`. Одного `'passive'` на самом слое НЕ хватает: в
@@ -38,10 +48,9 @@
  */
 
 import { Container, Graphics, Text } from 'pixi.js';
-import type { Cat } from '../game/index.js';
 import {
-  tutorialStep, isInSlot, isAdult, isOld, isChampion, analyzeTarget, adoptTarget,
-  growTarget, shelterTarget,
+  tutorialStep, isInSlot, analyzeTarget, adoptTarget,
+  growTarget, shelterTarget, breederTarget, championTarget, nextGenolabTab,
   FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
 } from '../game/index.js';
 import type { TutorStep } from '../game/index.js';
@@ -87,6 +96,13 @@ export interface TutorHost {
    * кнопками (Выполнить / 📺 / Закрыть) не говорит игроку, куда жать дальше.
    */
   overlayAnchor(label: string): Container | null;
+  /**
+   * Прямоугольник (координаты сцены), который заслонка НЕ перекрывает никогда:
+   * кнопка ⚙️ Настроек. Обучение жёсткое и непропускаемое, но выключить звук
+   * игрок вправе на любом его шаге — иначе единственным выходом остаётся
+   * закрыть вкладку.
+   */
+  freeRect(): { x: number; y: number; w: number; h: number };
   /**
    * Игрок ткнул мимо цели (в затемнение). Обучение обязательное, уйти с маршрута
    * нельзя — вместо молчания повторяем подсказку тостом, чтобы тап не выглядел
@@ -379,6 +395,9 @@ export class Tutorial {
     // иначе из dev-сборки не выключить обучение, которое сама же и блокирует.
     // В релизе DEVTOOLS выключен, и исключения нет.
     if (DEVTOOLS && y < this.host.ctx.topInset) return true;
+    // ⚙️ Настройки открыты на любом шаге: выключить звук игрок вправе всегда.
+    const f = this.host.freeRect();
+    if (x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h) return true;
     const h = this.hole;
     return !!h && Math.abs(x - h.x) <= h.w / 2 && Math.abs(y - h.y) <= h.h / 2;
   }
@@ -633,7 +652,7 @@ export class Tutorial {
               text: t('Не отпускай! Веди котика к левому краю — лаборатория пролистнётся в Инкубатор', 'Do not let go! Carry the cat to the left edge — the lab will scroll to the Incubator'),
             };
         }
-        const cat = this.firstBreeder();
+        const cat = breederTarget(ctx.state, ctx.now());
         return {
           room: 'nursery',
           key: cat ? `cat:${cat.id}` : null,
@@ -642,7 +661,7 @@ export class Tutorial {
         };
       }
       case 'menu': {
-        const cat = this.firstBreeder();
+        const cat = breederTarget(ctx.state, ctx.now());
         return {
           room: 'nursery',
           key: cat ? `cat:${cat.id}` : null,
@@ -763,20 +782,39 @@ export class Tutorial {
           ),
         };
       }
-      case 'genolab':
-        return {
-          room: 'genolab', key: 'codex', gesture: 'tap',
-          text: t(
-            '🔬 Генолаб — мозг лаборатории, три вкладки: 📖 Котодекс (все породы и рецепты — '
-              + 'кто от кого получается), 🔬 Улучшения (постоянные апгрейды за 🧬 ДНК) и '
-              + '🧪 Исследования (стол рецептов: вскрывает рецепты новых пород). '
-              + 'Загляни в 📖 Котодекс — оттуда ты и будешь узнавать, кого с кем сводить',
-            '🔬 The Genolab is the brain of the lab, with three tabs: 📖 the Catdex (every breed '
-              + 'and recipe — who comes from whom), 🔬 Upgrades (permanent upgrades for 🧬 DNA) and '
-              + '🧪 Research (the recipe bench: it uncovers recipes for new breeds). '
-              + 'Open the 📖 Catdex — that is where you learn which cats to pair',
-          ),
-        };
+      case 'genolab': {
+        // Комната из трёх экранов, и обучение проводит по каждому: одного
+        // Котодекса мало, чтобы понять, зачем сюда возвращаться. Порядок держит
+        // ядро (nextGenolabTab), здесь только текст и цель кольца.
+        const tab = nextGenolabTab(ctx.state) ?? 'codex';
+        const text = tab === 'codex'
+          ? t(
+            '🔬 Генолаб — мозг лаборатории, и вкладок здесь три. Начнём с 📖 Котодекса: '
+              + 'это каталог всех пород и рецептов — кто от кого получается. Оттуда ты и '
+              + 'будешь узнавать, кого с кем сводить. Нажми 📖 Котодекс',
+            '🔬 The Genolab is the brain of the lab, and it has three tabs. Start with the '
+              + '📖 Catdex: a catalogue of every breed and recipe — who comes from whom. That is '
+              + 'where you learn which cats to pair. Tap 📖 Catdex',
+          )
+          : tab === 'research'
+            ? t(
+              'Теперь 🔬 Улучшения — дерево постоянных апгрейдов за 🧬 ДНК: больше места в '
+                + 'комнатах, быстрее вязка, дешевле корм. ДНК капает с котов, которых ты сдаёшь '
+                + 'в биобанк. Нажми 🔬 Улучшения',
+              'Now 🔬 Upgrades — a tree of permanent upgrades bought with 🧬 DNA: more room space, '
+                + 'faster breeding, cheaper food. DNA comes from the cats you send to the biobank. '
+                + 'Tap 🔬 Upgrades',
+            )
+            : t(
+              'И последняя — 🧪 Исследования, стол рецептов: ставишь колбу и через время '
+                + 'получаешь рецепт новой породы. Без него редкие породы не вывести. '
+                + 'Нажми 🧪 Исследования',
+              'And the last one — 🧪 Research, the recipe bench: put a flask on it and after a '
+                + 'while you get the recipe for a new breed. Rare breeds cannot be bred without it. '
+                + 'Tap 🧪 Research',
+            );
+        return { room: 'genolab', key: tab, gesture: 'tap', text };
+      }
       case 'champion':
       default: {
         if (ctx.carrying()) {
@@ -785,7 +823,7 @@ export class Tutorial {
             text: t('Опусти котика на пьедестал 🏆 — над тумбой загорится золотая зона', 'Drop the cat onto a pedestal 🏆 — a golden zone lights up above it'),
           };
         }
-        const cat = this.championTarget();
+        const cat = championTarget(ctx.state, ctx.now());
         if (!cat) {
           return {
             room: 'incubator', key: 'slot', gesture: 'tap', overOverlay: true,
@@ -810,28 +848,4 @@ export class Tutorial {
     }
   }
 
-  /** Кот из питомника, которого сейчас логично отправить в слот вязки. */
-  private firstBreeder(): Cat | null {
-    const s = this.host.ctx.state;
-    const now = Date.now();
-    const slot = s.slots[0];
-    // если один уже в слоте — ведём к коту противоположного пола (пара ♀+♂)
-    const need = slot?.motherId ? 'male' : slot?.fatherId ? 'female' : null;
-    const fit = s.cats.filter((c) => c.location === 'nursery'
-      && !isInSlot(s, c.id) && isAdult(c, now) && !isOld(c)
-      && (!need || c.genotype.sex === need));
-    return fit[0] ?? null;
-  }
-
-  /**
-   * Кот для пьедестала: взрослый (котёнка выставка не примет), гуляет по
-   * Питомнику и ещё не чемпион. Пусто — значит все взрослые заперты в окошке
-   * вязки, и подсказка сначала ведёт забрать их оттуда.
-   */
-  private championTarget(): Cat | null {
-    const s = this.host.ctx.state;
-    const now = Date.now();
-    return s.cats.find((c) => c.location === 'nursery' && isAdult(c, now)
-      && !isInSlot(s, c.id) && !isChampion(s, c.id)) ?? null;
-  }
 }

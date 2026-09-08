@@ -262,6 +262,7 @@ export function createShelter(ctx: UiContext): Room {
     // gx/gy — координаты виртуальной сцены; зоны — в локальных координатах комнаты
     const lp = shell.container.toLocal({ x: gx, y: gy }, ctx.uiRoot);
     if (labZone.contains(lp.x, lp.y)) {
+      if (!ctx.tutorAllows('lab')) return false; // обучение ведёт только на станцию 🤝
       if (!isUnlocked(ctx.state, 'labStation')) {
         ctx.toast(t('Открой станцию «В биобанк» в Генолабе 🔬', 'Unlock the "To the biobank" station in the Genolab 🔬'));
         return false;             // заперто → кот вернётся на своё место
@@ -272,6 +273,7 @@ export function createShelter(ctx: UiContext): Room {
       return true;
     }
     if (adoptZone.contains(lp.x, lp.y)) {
+      if (!ctx.tutorAllows('adopt')) return false; // обучение: пристройство — свой шаг
       ctx.commit();
       standByStation(cat, 'right'); // откажешься отдавать — кот остаётся у переноски
       ctx.openAdoptConfirm(cat);   // «Отдать котика в добрые руки?» (Да → adoptCat)

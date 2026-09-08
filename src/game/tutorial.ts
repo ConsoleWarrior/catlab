@@ -5,11 +5,22 @@
  * слот, отправив в Питомник → отвести родителя в Приют → пристройство «в добрые
  * руки» → доска заказов (📋 в Питомнике) → 🔬 Генолаб (Котодекс) → кот на пьедестале выставки.
  *
- * Обучение ОБЯЗАТЕЛЬНОЕ и НЕПРОПУСКАЕМОЕ: пока оно идёт, UI гасит всё, кроме
- * цели текущего шага (затемнение с «окном» — см. ui/tutorial.ts), меню кота
- * показывает только нужную кнопку (`tutorialMenuGate`), свайп между комнатами
- * выключен. Ошибиться негде, сломать сценарий нечем, а награда за прохождение
- * достаётся каждому — кнопки «пропустить» нет вовсе.
+ * Обучение ОБЯЗАТЕЛЬНОЕ и НЕПРОПУСКАЕМОЕ, и с 08.09.2026 — ещё и ГЕРМЕТИЧНОЕ.
+ * Затемнения с «окном» вокруг цели (ui/tutorial.ts) для этого мало: окно —
+ * прямоугольник (в него попадает и соседняя кнопка), а стоит взять кота за
+ * шкирку, как заслонка гаснет совсем — и кота можно было унести в корзину
+ * заказов и продать, оборвав сценарий на середине. Поэтому решает не заслонка,
+ * а ЗАМОК — `tutorialLock`: он говорит, с каким котом можно работать, тапом
+ * или жестом, куда этого кота разрешено опустить, в какую комнату разрешено
+ * уйти и какие кнопки живые. Заслонка осталась подсказкой для глаз, запрет
+ * держит замок, и проверяют его все точки входа игрока:
+ *  - `startGrab` / `openCatMenu` (game.ts) — взять за шкирку и тапнуть;
+ *  - `tryDropCat` каждой комнаты — зоны дропа (слот, 🤝, пьедестал, 🧺, 🧬, 🧊);
+ *  - `navRoom` и `carryEdgeScroll` — переходы между комнатами;
+ *  - `ctx.tutorAllows(id)` — кнопки внутри комнат и панелей.
+ * Ошибиться негде, сломать сценарий нечем, а награда за прохождение достаётся
+ * каждому — кнопки «пропустить» нет вовсе. Одно исключение: ⚙️ Настройки
+ * открыты всегда (звук игрок обязан иметь возможность выключить).
  *
  * Активный шаг — ЧИСТАЯ ФУНКЦИЯ ОТ СОСТОЯНИЯ, а не счётчик в сейве: игрок,
  * который сделал действие другим способом, автоматически проскакивает шаг, а
@@ -19,15 +30,15 @@
  * Исключение — «просмотровые» шаги (🔮 прогноз пары, 📋 доска заказов,
  * 🔬 Генолаб) и пристройство: открытие панели состояние не меняет, а
  * пристроенный кот из него исчезает. Такие шаги отмечены флагами в
- * `state.tutorial` (previewSeen / ordersSeen / genolabSeen / adoptDone) — их
- * ставят `markTutorialSeen` и `adoptCat`.
+ * `state.tutorial` (previewSeen / ordersSeen / genolabTabs / adoptDone) — их
+ * ставят `markTutorialSeen`, `markTutorialTab` и `adoptCat`.
  * Пристройство засчитывается уже по ОТКРЫТИЮ диалога «в добрые руки» (кота
  * донесли до станции 🤝): механику игрок увидел, а расставаться с котом ради
  * подсказки его никто не заставляет — «Отмена» шаг не отматывает назад.
  */
 
 import type { Cat, GameState } from './types.js';
-import { isInSlot, isChampion, isInBasket, isAdult } from './economy.js';
+import { isInSlot, isChampion, isInBasket, isAdult, isOld } from './economy.js';
 import {
   TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
@@ -49,7 +60,7 @@ import {
  * - `adopt`    — в Приюте есть кот: доносим его до станции 🤝 «в добрые руки»
  *                (шаг закрывается открытием диалога, соглашаться необязательно);
  * - `orders`   — открываем доску 📋 Заказы (кнопка слева в Питомнике);
- * - `genolab`  — заглядываем в 🔬 Генолаб: где он в ряду комнат и что за три вкладки;
+ * - `genolab`  — обходим 🔬 Генолаб по всем трём вкладкам: 📖 Котодекс → 🔬 Улучшения → 🧪 Исследования;
  * - `champion` — ставим взрослого кота на пьедестал выставки в Питомнике.
  */
 export type TutorStep =
@@ -110,8 +121,9 @@ function afterBirthStep(state: GameState, now: number): TutorStep | null {
   if (!t.ordersSeen) return 'orders';
   // Генолаб — единственная комната, мимо которой петля обучения проходила
   // стороной: игрок доходил до конца, ни разу не узнав, где лежат Котодекс,
-  // Улучшения и стол рецептов. Шаг «просмотровый» (открытие вкладки состояние
-  // не меняет) — отмечается флагом genolabSeen, см. markTutorialSeen.
+  // Улучшения и стол рецептов. Поэтому шаг ведёт по ВСЕМ ТРЁМ вкладкам по
+  // очереди (genolabTabs, см. markTutorialTab): открытие вкладки состояние не
+  // меняет, вычислить такой шаг из игры нельзя — только флагом.
   if (!t.genolabSeen) return 'genolab';
   if (!state.champions?.some(Boolean)) return 'champion';
   return null; // всё пройдено — показ закрывает обучение (finishTutorial)
@@ -179,6 +191,176 @@ export function shelterTarget(state: GameState): Cat | null {
     && !isInSlot(state, c.id) && !isChampion(state, c.id)) ?? null;
 }
 
+/**
+ * Кот, которого шаги `drag`/`menu` ведут в окошко вязки: взрослый, не старый,
+ * гуляет по Питомнику. Если один из пары уже в слоте — берём кота
+ * ПРОТИВОПОЛОЖНОГО пола: вязка бывает только ♀+♂, и подсветить второго
+ * однополого значило бы завести игрока в тупик.
+ */
+export function breederTarget(state: GameState, now = Date.now()): Cat | null {
+  const slot = state.slots[0];
+  const need = slot?.motherId ? 'male' : slot?.fatherId ? 'female' : null;
+  return state.cats.find((c) => c.location === 'nursery' && !isInSlot(state, c.id)
+    && isAdult(c, now) && !isOld(c) && (!need || c.genotype.sex === need)) ?? null;
+}
+
+/**
+ * Кот для пьедестала: взрослый (котёнка выставка не примет), гуляет по Питомнику
+ * и ещё не чемпион. Пусто — значит все взрослые заперты в окошке вязки, и шаг
+ * сперва ведёт забрать оттуда любого (см. slotCats).
+ */
+export function championTarget(state: GameState, now = Date.now()): Cat | null {
+  return state.cats.find((c) => c.location === 'nursery' && isAdult(c, now)
+    && !isInSlot(state, c.id) && !isChampion(state, c.id)) ?? null;
+}
+
+/** Id котов, стоящих сейчас в окошках вязки (родители и оставленный малыш). */
+function slotCats(state: GameState): string[] {
+  const ids: string[] = [];
+  for (const slot of state.slots) {
+    for (const id of [slot.motherId, slot.fatherId, slot.kittenId]) {
+      if (id && state.cats.some((c) => c.id === id)) ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Вкладки Генолаба в том порядке, в каком их обходит обучение: комната — это три
+ * разных экрана, и одного Котодекса мало, чтобы понять, зачем сюда возвращаться
+ * (📖 что из кого выводится, 🔬 куда девать 🧬 ДНК, 🧪 где добывать рецепты).
+ */
+export const TUTOR_GENOLAB_TABS = ['codex', 'research', 'recipes'] as const;
+export type TutorGenolabTab = typeof TUTOR_GENOLAB_TABS[number];
+
+/** Какую вкладку Генолаба обучение ждёт следующей (null — все три открыты). */
+export function nextGenolabTab(state: GameState): TutorGenolabTab | null {
+  const seen = state.tutorial?.genolabTabs ?? [];
+  return TUTOR_GENOLAB_TABS.find((tab) => !seen.includes(tab)) ?? null;
+}
+
+/**
+ * Засчитать открытую вкладку Генолаба. Порядок жёсткий: вкладка идёт в зачёт,
+ * только когда до неё дошла очередь (остальные UI и так не пускает — см.
+ * `tutorialAllows`). Собраны все три — шаг закрывается флагом `genolabSeen`.
+ */
+export function markTutorialTab(state: GameState, tab: TutorGenolabTab): boolean {
+  if (state.tutorial?.done !== false) return false;
+  if (tab !== nextGenolabTab(state)) return false;
+  (state.tutorial.genolabTabs ??= []).push(tab);
+  if (!nextGenolabTab(state)) state.tutorial.genolabSeen = true;
+  return true;
+}
+
+/**
+ * ЗАМОК обучения — что игроку разрешено прямо сейчас. Это единственный источник
+ * правды о запретах: подсветка (ui/tutorial.ts) только показывает цель, а
+ * держат сценарий проверки замка на всех входах игрока (см. шапку файла).
+ * Правило на каждом шаге одно: РОВНО ОДНО действие.
+ */
+export interface TutorLock {
+  step: TutorStep;
+  /** Коты, с которыми разрешено взаимодействие (пусто — ни с кем). */
+  cats: readonly string[];
+  /** Разрешён тап по такому коту (откроется меню кота). */
+  tap: boolean;
+  /** Разрешено взять такого кота за шкирку. */
+  grab: boolean;
+  /**
+   * Разрешённые действия — кнопки интерфейса и зоны дропа одним списком:
+   * 'slot' | 'adopt' | 'pedestal' (зоны), 'preview' | 'breed' | 'orders' |
+   * 'toNursery' | 'codex' | 'research' | 'recipes' (кнопки). Всё, чего в списке
+   * нет, на этом шаге мертво — включая 🧺 корзину, 🧬 биобанк и 🧊 криокапсулу.
+   */
+  allow: readonly string[];
+  /** Комнаты, куда разрешено уйти (та, где игрок стоит, разрешена всегда). */
+  rooms: readonly string[];
+}
+
+/** Замок текущего шага или null — обучение пройдено, всё работает как обычно. */
+export function tutorialLock(state: GameState, now = Date.now()): TutorLock | null {
+  const step = tutorialStep(state, now);
+  if (!step) return null;
+  const lock = (extra: Partial<TutorLock>): TutorLock => ({
+    step, cats: [], tap: false, grab: false, allow: [], rooms: [], ...extra,
+  });
+  const one = (cat: Cat | null): string[] => (cat ? [cat.id] : []);
+  switch (step) {
+    // ТАПОМ и только тапом: кота на этих шагах не двигают вовсе — «взял за
+    // шкирку» уводит его из-под подсказки (в корзину, в чужую комнату, на пьедестал).
+    case 'analyze':
+      return lock({ cats: one(analyzeTarget(state)), tap: true, rooms: ['nursery'] });
+    case 'menu':
+      return lock({ cats: one(breederTarget(state, now)), tap: true, rooms: ['nursery'] });
+    case 'grow': {
+      const kid = growTarget(state, now);
+      const room = kid && !isInSlot(state, kid.id) ? kid.location : 'incubator';
+      return lock({ cats: one(kid), tap: true, rooms: [room] });
+    }
+    case 'kitten':
+      return lock({ cats: one(kittenInSlot(state)), tap: true, allow: ['toNursery'], rooms: ['incubator'] });
+    case 'toShelter': {
+      const cat = shelterTarget(state);
+      const room = cat && isInSlot(state, cat.id) ? 'incubator' : 'nursery';
+      return lock({ cats: one(cat), tap: true, rooms: [room] });
+    }
+    // ЖЕСТОМ и только жестом: одна разрешённая зона дропа, одна комната-цель.
+    case 'drag':
+      return lock({
+        cats: one(breederTarget(state, now)), grab: true,
+        allow: ['slot'], rooms: ['nursery', 'incubator'],
+      });
+    case 'adopt':
+      return lock({ cats: one(adoptTarget(state)), grab: true, allow: ['adopt'], rooms: ['shelter'] });
+    // КНОПКОЙ: 🔮 прогноз и «Свести» стоят вплотную одна под другой — живёт ровно
+    // одна из них, промахнуться мимо и свести вслепую больше нельзя.
+    case 'preview':
+      return lock({ allow: ['preview'], rooms: ['incubator'] });
+    case 'breed':
+      return lock({ allow: ['breed'], rooms: ['incubator'] });
+    case 'wait':
+      return lock({ rooms: ['incubator'] });
+    case 'orders':
+      return lock({ allow: ['orders'], rooms: ['nursery'] });
+    case 'genolab': {
+      const tab = nextGenolabTab(state);
+      return lock({ allow: tab ? [tab] : [], rooms: ['genolab'] });
+    }
+    case 'champion':
+    default: {
+      const cat = championTarget(state, now);
+      // Все взрослые ещё стоят в окошке вязки — сперва забираем оттуда любого
+      // кнопкой «🏠 В питомник», и только потом несём на пьедестал.
+      if (!cat) return lock({ cats: slotCats(state), tap: true, allow: ['toNursery'], rooms: ['incubator'] });
+      return lock({ cats: [cat.id], grab: true, allow: ['pedestal'], rooms: ['nursery'] });
+    }
+  }
+}
+
+/**
+ * Разрешено ли обучением действие `id` — кнопка интерфейса или зона дропа
+ * (см. TutorLock.allow). Вне обучения разрешено всё.
+ */
+export function tutorialAllows(state: GameState, id: string, now = Date.now()): boolean {
+  const lock = tutorialLock(state, now);
+  return !lock || lock.allow.includes(id);
+}
+
+/** Разрешено ли обучением трогать кота: `tap` — тапнуть, `grab` — взять за шкирку. */
+export function tutorialAllowsCat(
+  state: GameState, catId: string, what: 'tap' | 'grab', now = Date.now(),
+): boolean {
+  const lock = tutorialLock(state, now);
+  if (!lock) return true;
+  return lock.cats.includes(catId) && (what === 'tap' ? lock.tap : lock.grab);
+}
+
+/** Разрешён ли обучением переход в комнату `roomId` (вне обучения — куда угодно). */
+export function tutorialAllowsRoom(state: GameState, roomId: string, now = Date.now()): boolean {
+  const lock = tutorialLock(state, now);
+  return !lock || lock.rooms.includes(roomId);
+}
+
 /** Обучение идёт прямо сейчас (для гейтов: подарки новичку, подсказки и т.п.). */
 export function tutorialActive(state: GameState, now = Date.now()): boolean {
   return tutorialStep(state, now) !== null;
@@ -190,26 +372,26 @@ export function tutorialActive(state: GameState, now = Date.now()): boolean {
  * обучения — пустышка, лишний раз сейв не пачкаем.
  */
 export function markTutorialSeen(
-  state: GameState, what: 'preview' | 'orders' | 'genolab' | 'adopt',
+  state: GameState, what: 'preview' | 'orders' | 'adopt',
 ): boolean {
   if (state.tutorial?.done !== false) return false;
   const key = what === 'preview' ? 'previewSeen'
-    : what === 'orders' ? 'ordersSeen'
-      : what === 'genolab' ? 'genolabSeen' : 'adoptDone';
+    : what === 'orders' ? 'ordersSeen' : 'adoptDone';
   if (state.tutorial[key]) return false;
   state.tutorial[key] = true;
   return true;
 }
 
 /**
- * Что разрешено в меню кота, пока идёт обучение. Меню — единственное место, где
- * игрок мог бы свернуть со сценария (отдать не того кота, увести родителя не в ту
- * комнату), поэтому на каждом шаге в нём остаётся РОВНО ОДНА кнопка — та, о которой
- * говорит подсказка, плюс «Закрыть».
+ * Что разрешено в меню кота, пока идёт обучение. Меню — самое соблазнительное
+ * место свернуть со сценария (отдать не того кота, увести родителя не в ту
+ * комнату), поэтому на каждом шаге в нём остаётся РОВНО ОДНА кнопка — та, о
+ * которой говорит подсказка, плюс «Закрыть».
  *
  * `null` — обучение не идёт, меню работает как обычно.
- * `open: false` — на этом шаге меню не открывается вовсе: нужен ЖЕСТ (донести кота
- * за шкирку), и вместо меню UI показывает тост с той же подсказкой.
+ * `open: false` — меню не открывается вовсе: либо шаг требует ЖЕСТА (донести
+ * кота за шкирку), либо это ЧУЖОЙ кот — не тот, на который показывает подсказка.
+ * Вместо меню UI показывает тост с той же подсказкой.
  *
  * Ключи кнопок совпадают с id в `buildCatMenu` / `buildKittenCard`
  * (`analyze`, `slot`, `grow`, `nursery`, `shelter`).
@@ -217,21 +399,23 @@ export function markTutorialSeen(
 export function tutorialMenuGate(
   state: GameState, cat: Cat, now = Date.now(),
 ): { open: boolean; actions: readonly string[] } | null {
-  const step = tutorialStep(state, now);
-  if (!step) return null;
-  const menu = (...actions: string[]): { open: boolean; actions: string[] } => ({ open: true, actions });
-  switch (step) {
+  const lock = tutorialLock(state, now);
+  if (!lock) return null;
+  const shut = { open: false, actions: [] as readonly string[] };
+  // Не тот кот или шаг вообще не про тап — меню закрыто. Именно эта проверка не
+  // даёт «выбрать другого котика» на любом шаге, где меню в принципе открывается.
+  if (!lock.tap || !lock.cats.includes(cat.id)) return shut;
+  const menu = (...actions: string[]): { open: boolean; actions: readonly string[] } => ({ open: true, actions });
+  switch (lock.step) {
     case 'analyze': return menu('analyze');
     case 'menu': return menu('slot');
     case 'grow': return menu('grow');
     case 'kitten': return menu('nursery');
     case 'toShelter': return menu('shelter');
-    // Финальный шаг двойной: родителя из окошка вязки забирают кнопкой, а кота с
-    // пола Питомника несут на пьедестал руками — там меню только мешает.
-    case 'champion': return isInSlot(state, cat.id) ? menu('nursery') : { open: false, actions: [] };
-    // 'drag' и 'adopt' — чистые жесты (донести до слота / до станции 🤝);
-    // на остальных шагах коты вообще ни при чём.
-    default: return { open: false, actions: [] };
+    // Подшаг финала: родителя из окошка вязки забирают кнопкой (на пьедестал
+    // кота с пола Питомника несут руками — там меню только мешает).
+    case 'champion': return menu('nursery');
+    default: return shut;
   }
 }
 
@@ -266,7 +450,7 @@ export function restartTutorial(state: GameState): void {
   state.tutorial = {
     done: false,
     bornOnce: false, previewSeen: false, ordersSeen: false, genolabSeen: false,
-    adoptDone: false, rewardTaken: false,
+    genolabTabs: [], adoptDone: false, rewardTaken: false,
   };
   state.freeAnalyzeLeft = FREE_ANALYZE_COUNT;
   state.freeGrowthLeft = FREE_GROWTH_COUNT;

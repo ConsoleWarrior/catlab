@@ -4,7 +4,9 @@ import {
   createInitialState, assignBreeder, startBreeding, collectReady,
   freeAnalyzeCat, freeGrowKitten, adoptCat, moveCat, clearBreederSlot, setChampion, analyzeTarget,
   tutorialStep, tutorialActive, finishTutorial, restartTutorial,
-  markTutorialSeen, tutorialMenuGate, shelterTarget, growTarget,
+  markTutorialSeen, markTutorialTab, tutorialMenuGate, shelterTarget, growTarget,
+  tutorialLock, tutorialAllows, tutorialAllowsCat, tutorialAllowsRoom,
+  TUTOR_GENOLAB_TABS, nextGenolabTab, breederTarget, championTarget,
   isAdult, effGrowthMs,
   grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   FREE_ANALYZE_COUNT, FREE_GROWTH_COUNT,
@@ -136,8 +138,12 @@ describe('обучение новичка (шаги)', () => {
     expect(tutorialStep(s, now)).toBe('orders');
 
     markTutorialSeen(s, 'orders');
-    expect(tutorialStep(s, now)).toBe('genolab');   // где Котодекс и рецепты — тоже показываем
-    markTutorialSeen(s, 'genolab');
+    // Генолаб показываем ЦЕЛИКОМ — все три вкладки по очереди
+    expect(tutorialStep(s, now)).toBe('genolab');
+    for (const tab of TUTOR_GENOLAB_TABS) {
+      expect(nextGenolabTab(s)).toBe(tab);
+      expect(markTutorialTab(s, tab)).toBe(true);
+    }
     expect(tutorialStep(s, now)).toBe('champion');
 
     // мать осталась в слоте — забираем её и ставим на пьедестал
@@ -181,7 +187,7 @@ describe('обучение новичка (шаги)', () => {
     const kitten = collectReady(s, s.slots[0]!.readyAt, rng)[0]!.kitten!;
     moveCat(s, kitten.id, 'nursery');
     markTutorialSeen(s, 'orders');
-    markTutorialSeen(s, 'genolab');
+    for (const tab of TUTOR_GENOLAB_TABS) markTutorialTab(s, tab);
     moveCat(s, kitten.id, 'shelter'); // кот снова в приюте, но шаг уже позади
     expect(tutorialStep(s)).toBe('champion');
   });
@@ -210,6 +216,199 @@ describe('обучение новичка (шаги)', () => {
     // собрал пару и свёл, ни разу не дождавшись подсказки (и не изучив кота)
     startBreeding(s, 0, female.id, male.id, 0);
     expect(tutorialStep(s)).toBe('wait'); // не 'analyze', не 'drag' и не 'menu'
+  });
+});
+
+/**
+ * Замок обучения: на каждом шаге разрешено РОВНО ОДНО действие. Раньше запреты
+ * держала одна лишь заслонка UI (затемнение с окном вокруг цели), и её обходили
+ * в одно движение: взял кота за шкирку — заслонка погасла — уронил в 🧺 корзину
+ * и продал посреди обучения. Теперь запрет живёт в ядре, и эти тесты стерегут
+ * именно его: что нельзя ни взять чужого кота, ни уронить своего не туда, ни
+ * нажать соседнюю кнопку, ни уйти в чужую комнату.
+ */
+describe('замок обучения (что разрешено на шаге)', () => {
+  /** Провести партию до второй половины обучения: помёт собран, малыш растёт. */
+  function afterBirth(seed: number) {
+    const rng = makeRng(seed);
+    const s = createInitialState(rng, 0);
+    const { female, male } = pair(s);
+    startBreeding(s, 0, female.id, male.id, 0, rng);
+    const now = s.slots[0]!.readyAt;
+    const kitten = collectReady(s, now, rng)[0]!.kitten!;
+    return { s, now, female, male, kitten };
+  }
+
+  it('шаг «анализ»: только тап по подсвеченному коту — ни жеста, ни зон дропа', () => {
+    const s = createInitialState(makeRng(31), 0);
+    const { female, male } = pair(s);
+    const lock = tutorialLock(s)!;
+    expect(lock.step).toBe('analyze');
+    expect(lock.cats).toEqual([female.id]);
+    expect(tutorialAllowsCat(s, female.id, 'tap')).toBe(true);
+    expect(tutorialAllowsCat(s, female.id, 'grab')).toBe(false); // «за шкирку» нельзя
+    expect(tutorialAllowsCat(s, male.id, 'tap')).toBe(false);    // и другого не выбрать
+    for (const zone of ['slot', 'basket', 'pedestal', 'adopt', 'lab', 'cryo']) {
+      expect(tutorialAllows(s, zone)).toBe(false);
+    }
+    expect(tutorialAllowsRoom(s, 'shelter')).toBe(false);
+  });
+
+  it('шаг «в слот»: кота только несут, и только в окошко вязки', () => {
+    const s = createInitialState(makeRng(32), 0);
+    skipAnalyze(s);
+    const target = breederTarget(s)!;
+    expect(tutorialStep(s)).toBe('drag');
+    expect(tutorialAllowsCat(s, target.id, 'grab')).toBe(true);
+    expect(tutorialAllowsCat(s, target.id, 'tap')).toBe(false); // меню тут не открыть
+    expect(tutorialAllows(s, 'slot')).toBe(true);
+    // ровно тот случай, которым обучение и ломали: корзина, пьедестал, криокапсула
+    for (const zone of ['basket', 'pedestal', 'cryo', 'adopt', 'lab']) {
+      expect(tutorialAllows(s, zone)).toBe(false);
+    }
+    // нести можно только между Питомником и Инкубатором (краевое листание)
+    expect(tutorialAllowsRoom(s, 'incubator')).toBe(true);
+    expect(tutorialAllowsRoom(s, 'nursery')).toBe(true);
+    expect(tutorialAllowsRoom(s, 'shelter')).toBe(false);
+  });
+
+  it('шаг «второй кнопкой»: только тап, и только по коту противоположного пола', () => {
+    const s = createInitialState(makeRng(33), 0);
+    skipAnalyze(s);
+    const { female, male } = pair(s);
+    assignBreeder(s, 0, female.id, 0);
+    expect(tutorialStep(s)).toBe('menu');
+    expect(tutorialAllowsCat(s, male.id, 'tap')).toBe(true);
+    expect(tutorialAllowsCat(s, male.id, 'grab')).toBe(false);
+    expect(tutorialAllowsCat(s, female.id, 'tap')).toBe(false);
+  });
+
+  it('🔮 прогноз и «Свести» живут по очереди — кнопки стоят вплотную', () => {
+    const s = createInitialState(makeRng(34), 0);
+    skipAnalyze(s);
+    const { female, male } = pair(s);
+    assignBreeder(s, 0, female.id, 0);
+    assignBreeder(s, 0, male.id, 0);
+    expect(tutorialStep(s)).toBe('preview');
+    expect(tutorialAllows(s, 'preview')).toBe(true);
+    expect(tutorialAllows(s, 'breed')).toBe(false);
+    markTutorialSeen(s, 'preview');
+    expect(tutorialStep(s)).toBe('breed');
+    expect(tutorialAllows(s, 'breed')).toBe(true);
+    expect(tutorialAllows(s, 'preview')).toBe(false); // назад к прогнозу уже нельзя
+  });
+
+  it('шаг «вырасти»: малыша нельзя ни двигать, ни пристраивать; родителей — трогать', () => {
+    const { s, now, female, male, kitten } = afterBirth(35);
+    expect(tutorialStep(s, now)).toBe('grow');
+    expect(tutorialAllowsCat(s, kitten.id, 'tap', now)).toBe(true);
+    expect(tutorialAllowsCat(s, kitten.id, 'grab', now)).toBe(false);
+    expect(tutorialAllowsCat(s, female.id, 'tap', now)).toBe(false);
+    expect(tutorialAllowsCat(s, male.id, 'grab', now)).toBe(false);
+    // обе кнопки карточки малыша («🏠 В питомник» / «🏚️ В приют») мертвы
+    expect(tutorialAllows(s, 'toNursery', now)).toBe(false);
+    expect(tutorialAllows(s, 'toShelter', now)).toBe(false);
+  });
+
+  it('шаг «освободи слот»: только в Питомник, в Приют — нельзя', () => {
+    const { s, now, kitten } = afterBirth(36);
+    freeGrowKitten(s, kitten.id, now);
+    expect(tutorialStep(s, now)).toBe('kitten');
+    expect(tutorialAllows(s, 'toNursery', now)).toBe(true);
+    expect(tutorialAllows(s, 'toShelter', now)).toBe(false);
+    expect(tutorialMenuGate(s, kitten, now)).toEqual({ open: true, actions: ['nursery'] });
+    expect(tutorialAllowsCat(s, kitten.id, 'grab', now)).toBe(false);
+  });
+
+  it('шаг «в приют»: только тап по подсвеченному коту, таскать нельзя', () => {
+    const { s, now, male, kitten } = afterBirth(37);
+    freeGrowKitten(s, kitten.id, now);
+    moveCat(s, kitten.id, 'nursery');
+    expect(tutorialStep(s, now)).toBe('toShelter');
+    expect(shelterTarget(s)?.id).toBe(male.id);
+    expect(tutorialAllowsCat(s, male.id, 'tap', now)).toBe(true);
+    expect(tutorialAllowsCat(s, male.id, 'grab', now)).toBe(false);
+    expect(tutorialAllowsCat(s, kitten.id, 'tap', now)).toBe(false);
+    expect(tutorialMenuGate(s, male, now)).toEqual({ open: true, actions: ['shelter'] });
+  });
+
+  it('шаг «в добрые руки»: только станция 🤝 и только в Приюте', () => {
+    const { s, now, male, kitten } = afterBirth(38);
+    freeGrowKitten(s, kitten.id, now);
+    moveCat(s, kitten.id, 'nursery');
+    moveCat(s, male.id, 'shelter');
+    clearBreederSlot(s, male.id);
+    expect(tutorialStep(s, now)).toBe('adopt');
+    expect(tutorialAllowsCat(s, male.id, 'grab', now)).toBe(true);
+    expect(tutorialAllows(s, 'adopt', now)).toBe(true);
+    expect(tutorialAllows(s, 'lab', now)).toBe(false);   // биобанк рядом — мимо него
+    expect(tutorialAllowsRoom(s, 'nursery', now)).toBe(false); // и унести некуда
+  });
+
+  it('шаг «заказы»: доску открывают, чтобы прочитать, — выполнять нечего', () => {
+    const { s, now, male, kitten } = afterBirth(39);
+    freeGrowKitten(s, kitten.id, now);
+    moveCat(s, kitten.id, 'nursery');
+    moveCat(s, male.id, 'shelter');
+    clearBreederSlot(s, male.id);
+    markTutorialSeen(s, 'adopt');
+    expect(tutorialStep(s, now)).toBe('orders');
+    expect(tutorialAllows(s, 'orders', now)).toBe(true);
+    expect(tutorialAllows(s, 'orderClaim', now)).toBe(false);
+    expect(tutorialAllows(s, 'orderRefresh', now)).toBe(false);
+    expect(tutorialAllows(s, 'basket', now)).toBe(false);
+    expect(tutorialAllowsCat(s, kitten.id, 'grab', now)).toBe(false);
+  });
+
+  it('шаг «Генолаб»: вкладки открываются строго по очереди', () => {
+    const { s, now, male, kitten } = afterBirth(40);
+    freeGrowKitten(s, kitten.id, now);
+    moveCat(s, kitten.id, 'nursery');
+    moveCat(s, male.id, 'shelter');
+    clearBreederSlot(s, male.id);
+    markTutorialSeen(s, 'adopt');
+    markTutorialSeen(s, 'orders');
+    expect(tutorialStep(s, now)).toBe('genolab');
+    // очередь Котодекса — остальные две мертвы, и в зачёт не идут
+    expect(tutorialAllows(s, 'codex', now)).toBe(true);
+    expect(tutorialAllows(s, 'research', now)).toBe(false);
+    expect(markTutorialTab(s, 'recipes')).toBe(false);
+    expect(markTutorialTab(s, 'codex')).toBe(true);
+    expect(tutorialAllows(s, 'research', now)).toBe(true);
+    expect(markTutorialTab(s, 'research')).toBe(true);
+    expect(tutorialStep(s, now)).toBe('genolab');     // одной вкладки мало
+    expect(markTutorialTab(s, 'recipes')).toBe(true);
+    expect(s.tutorial.genolabSeen).toBe(true);
+    expect(tutorialStep(s, now)).toBe('champion');
+  });
+
+  it('шаг «пьедестал»: кота только несут на тумбу — не тапают и не в корзину', () => {
+    const { s, now, female, male, kitten } = afterBirth(41);
+    freeGrowKitten(s, kitten.id, now);
+    moveCat(s, kitten.id, 'nursery');
+    moveCat(s, male.id, 'shelter');
+    clearBreederSlot(s, male.id);
+    clearBreederSlot(s, female.id);
+    markTutorialSeen(s, 'adopt');
+    markTutorialSeen(s, 'orders');
+    for (const tab of TUTOR_GENOLAB_TABS) markTutorialTab(s, tab);
+    expect(tutorialStep(s, now)).toBe('champion');
+    const target = championTarget(s, now)!;
+    expect(tutorialAllowsCat(s, target.id, 'grab', now)).toBe(true);
+    expect(tutorialAllowsCat(s, target.id, 'tap', now)).toBe(false);
+    expect(tutorialAllows(s, 'pedestal', now)).toBe(true);
+    expect(tutorialAllows(s, 'basket', now)).toBe(false);
+    expect(tutorialAllows(s, 'cryo', now)).toBe(false);
+    expect(tutorialAllowsRoom(s, 'shelter', now)).toBe(false);
+  });
+
+  it('вне обучения замка нет — игра ничего не запрещает', () => {
+    const s = createInitialState(makeRng(42), 0);
+    finishTutorial(s);
+    expect(tutorialLock(s)).toBeNull();
+    expect(tutorialAllows(s, 'basket')).toBe(true);
+    expect(tutorialAllowsRoom(s, 'shelter')).toBe(true);
+    expect(tutorialAllowsCat(s, s.cats[0]!.id, 'grab')).toBe(true);
   });
 });
 
@@ -317,6 +516,7 @@ describe('обучение в сейве', () => {
     s.tutorial.previewSeen = true;
     s.tutorial.ordersSeen = true;
     s.tutorial.genolabSeen = true;
+    s.tutorial.genolabTabs = [...TUTOR_GENOLAB_TABS];
     s.tutorial.adoptDone = true;
     s.tutorial.bornOnce = true;
     s.tutorial.rewardTaken = true;
@@ -324,7 +524,7 @@ describe('обучение в сейве', () => {
     expect(back.tutorial).toEqual({
       done: true,
       bornOnce: true, previewSeen: true, ordersSeen: true, genolabSeen: true,
-      adoptDone: true, rewardTaken: true,
+      genolabTabs: [...TUTOR_GENOLAB_TABS], adoptDone: true, rewardTaken: true,
     });
     expect(back.freeAnalyzeLeft).toBe(2);        // запасы подарков переживают сейв
     expect(back.freeGrowthLeft).toBe(1);

@@ -22,12 +22,13 @@ import {
   finishRecipeResearch, refreshExpiredOrders,
   grantCrystals, isKnownPack, allBreedsBred, canAskReview, noteReviewAsked,
   tutorialActive, tutorialStep, finishTutorial, restartTutorial,
-  markTutorialSeen, tutorialMenuGate,
+  markTutorialSeen, markTutorialTab, tutorialMenuGate,
+  tutorialAllows, tutorialAllowsCat, tutorialAllowsRoom,
   grantTutorialReward, TUTORIAL_REWARD_COINS, TUTORIAL_REWARD_CRYSTALS,
   OFFLINE_REPORT_MIN_MS,
 } from '../game/index.js';
 import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
-import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
+import type { Cat, GameState, BirthEvent, Ancestor, TutorGenolabTab } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label, setUiBlocked } from './theme.js';
 import {
@@ -225,7 +226,10 @@ export class Game implements UiContext {
   private catInfoFocus: { id: string; frozen: boolean; iconUntil: number } | null = null;
 
   // взятие котика за шкирку
-  private pendingGrab: { opts: GrabOpts; sx: number; sy: number } | null = null;
+  // `noDrag` — кота можно только тапнуть: так обучение держит шаги, где кота
+  // двигать нельзя (см. startGrab). Тап при этом работает как обычно —
+  // «потянул и отпустил» просто открывает меню, а не уносит кота со сцены.
+  private pendingGrab: { opts: GrabOpts; sx: number; sy: number; noDrag: boolean } | null = null;
   private grab: {
     opts: GrabOpts; sprite: Container; glow?: Sprite; baseScale: number;
     x: number; y: number; cx: number; cy: number; vx: number; t: number; pop: number;
@@ -245,6 +249,9 @@ export class Game implements UiContext {
   private hudPad = 0;            // левый отступ ряда ресурсов
   private hudGap = 0;            // зазор между ресурсами в ряду
   private hudBgTex?: Texture;    // текстурный фон топ-бара
+  // Прямоугольник кнопки ⚙️ в координатах сцены: заслонка обучения оставляет его
+  // открытым, чтобы звук можно было выключить на любом шаге (см. buildHud).
+  private gearRect = { x: 0, y: 0, w: 0, h: 0 };
 
   // прочее
   private incomeAcc = 0;
@@ -417,15 +424,11 @@ export class Game implements UiContext {
         walk(root);
         return found;
       },
+      // Кнопка ⚙️ — единственное, что заслонка не гасит никогда (см. buildHud).
+      freeRect: () => this.gearRect,
       // Тап мимо цели: обучение обязательное, уйти с маршрута нельзя — просто
       // повторяем подсказку тостом, чтобы тап не выглядел «игра зависла».
-      nudge: () => {
-        const step = tutorialStep(this.state, this.now());
-        // тост ещё висит — второй тап подряд не перебиваем
-        if (!step || this.toastUntil > this.now()) return;
-        this.toast(tutorialGestureHint(step)
-          || t('Сейчас доступно только подсвеченное действие 👆', 'Only the highlighted action is available right now 👆'));
-      },
+      nudge: () => this.tutorNudge(),
       finish: () => {
         // Обучение закрываем сразу (иначе Tutorial.update звал бы finish каждый кадр),
         // а поздравление с подарком ставим в очередь: покажем панелью, когда экран
@@ -650,6 +653,10 @@ export class Game implements UiContext {
           this.openPedigree(demo);
         },
         closeOverlay: () => this.closeOverlay(),
+        // Чем сейчас занят игрок — для скриптов-проверок обучения (_verify_tutor_*):
+        // «кот в руках» и номер открытой комнаты извне иначе не видны.
+        carrying: () => !!this.carrying(),
+        room: () => this.currentRoom,
         give: (c = 5000, x = 50, d = 500) => { this.state.coins += c; this.state.crystals += x; this.state.dna += d; this.commit(); },
         xp: (n = 200) => { addReputation(this.state, n); this.commit(); }, // +опыт → проверка уровней/HUD/замков
 
@@ -760,7 +767,7 @@ export class Game implements UiContext {
     const cy = this.roomH / 2;
     this.pendingGrab = {
       opts: { cat, displayH: 130, hide: () => {}, show: () => {}, onTap: () => {}, onDrop: () => {} },
-      sx: cx, sy: cy,
+      sx: cx, sy: cy, noDrag: false,
     };
     this.beginGrab(cx, cy);
     if (this.grab) { this.grab.x = cx; this.grab.y = cy - 30; }
@@ -1105,12 +1112,42 @@ export class Game implements UiContext {
   }
 
   /**
-   * Отметка «просмотрового» шага обучения из комнаты (вкладка 📖 Котодекс).
-   * Панель/вкладка состояние игры не меняет, вычислить такой шаг из состояния
-   * нельзя — см. game/tutorial.ts. Вне обучения — пустышка.
+   * Отметить открытую вкладку Генолаба на его шаге обучения: обход идёт по всем
+   * трём по очереди (📖 Котодекс → 🔬 Улучшения → 🧪 Исследования). Переключение
+   * вкладки состояние игры не меняет, вычислить такой шаг нельзя — только
+   * флагом, см. game/tutorial.ts. Вне обучения — пустышка.
    */
-  noteTutorialSeen(what: 'genolab'): void {
-    if (markTutorialSeen(this.state, what)) this.save();
+  noteTutorialTab(tab: TutorGenolabTab): void {
+    if (markTutorialTab(this.state, tab)) this.save();
+  }
+
+  /**
+   * Обучение: разрешено ли сейчас действие `id` — кнопка комнаты/панели или зона
+   * дропа (см. game/tutorial.ts, TutorLock.allow). Вне обучения — всегда true.
+   *
+   * Запрещённое действие не молчит, а повторяет подсказку тостом: мёртвая кнопка
+   * без единого слова читается как «игра сломалась». Гейт нужен там, где одной
+   * заслонки мало: её «окно» — прямоугольник вокруг цели, и соседняя кнопка
+   * (🔮 прогноз под «Свести», «🏚️ В приют» под «🏠 В питомник») попадает в него
+   * заодно с целью; а пока кота несут за шкирку, заслонки нет вовсе.
+   */
+  tutorAllows(id: string): boolean {
+    if (tutorialAllows(this.state, id, this.now())) return true;
+    this.tutorNudge();
+    return false;
+  }
+
+  /**
+   * Повторить подсказку текущего шага тостом — ответ на любую попытку сделать
+   * то, чего обучение сейчас не разрешает (тап мимо цели, чужая кнопка, кот,
+   * уроненный не в ту зону).
+   */
+  private tutorNudge(): void {
+    const step = tutorialStep(this.state, this.now());
+    // тост ещё висит — второй тап подряд не перебиваем
+    if (!step || this.toastUntil > this.now()) return;
+    this.toast(tutorialGestureHint(step)
+      || t('Сейчас доступно только подсвеченное действие 👆', 'Only the highlighted action is available right now 👆'));
   }
 
   openOrders(): void {
@@ -1248,7 +1285,13 @@ export class Game implements UiContext {
   startGrab(opts: GrabOpts, e: FederatedPointerEvent): void {
     if (this.overlayOpen) return;
     const p = this.root.toLocal(e.global); // окно → виртуальные координаты сцены
-    this.pendingGrab = { opts, sx: p.x, sy: p.y };
+    // Обучение: «за шкирку» разрешено только там, где шаг этого и просит, и
+    // только тому коту, на которого показывает подсказка. Иначе жест вырождается
+    // в тап — меню (само по себе гейтованное) откроется, а кот с места не сойдёт.
+    // Раньше запрета не было вовсе, и любой шаг обходился одним движением:
+    // взял кота за шкирку → уронил в 🧺 корзину → продал, сценарий оборван.
+    const noDrag = !tutorialAllowsCat(this.state, opts.cat.id, 'grab', this.now());
+    this.pendingGrab = { opts, sx: p.x, sy: p.y, noDrag };
   }
 
   carrying(): { cat: Cat; x: number; y: number } | null {
@@ -1318,9 +1361,17 @@ export class Game implements UiContext {
     if (this.rooms[this.currentRoom]?.blocksEdgeScroll?.(g.x, g.y)) return;
     const lo = this.roomIndex('incubator');
     const hi = this.roomIndex('shelter');
+    // Обучение ведёт кота по одному-единственному маршруту: в Инкубатор со
+    // слотом, в правый угол Приюта, на пьедестал. Всё остальное краевое листание
+    // на время обучения выключено — иначе кота уносило из-под подсказки в
+    // соседнюю комнату (и там его ждали корзина, биобанк и криокапсула).
+    const canGo = (i: number): boolean => {
+      const id = this.rooms[i]?.id;
+      return !!id && tutorialAllowsRoom(this.state, id, this.now());
+    };
     // 2 c между сменами комнат — чтобы не проскакивать центральную комнату насквозь
-    if (g.x < edge && this.currentRoom > lo) { this.goRoom(this.currentRoom - 1); g.edgeCd = 2; }
-    else if (g.x > this.roomW - edge && this.currentRoom < hi) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
+    if (g.x < edge && this.currentRoom > lo && canGo(this.currentRoom - 1)) { this.goRoom(this.currentRoom - 1); g.edgeCd = 2; }
+    else if (g.x > this.roomW - edge && this.currentRoom < hi && canGo(this.currentRoom + 1)) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
   }
 
   /**
@@ -1576,11 +1627,14 @@ export class Game implements UiContext {
     const btnGap = 8;
     let rx = w - pad; // правый край текущей кнопки
 
-    // Настройки (громкость и пр.) — всегда доступны.
+    // Настройки (громкость и пр.) — всегда доступны. «Всегда» здесь буквально:
+    // заслонка обучения обязана оставить их живыми (см. TutorHost.freeRect),
+    // иначе игрок, попавший в жёсткий сценарий, не смог бы даже выключить звук.
     const gear = new Button({ text: '⚙️', w: btnW, h: bh, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: fs + 2 });
     gear.position.set(rx - btnW / 2, ti / 2);
     gear.onTap = () => this.openSettings();
     this.hud.addChild(gear);
+    this.gearRect = { x: rx - btnW, y: (ti - bh) / 2, w: btnW, h: bh };
     rx -= btnW + btnGap;
 
     // ⚠️ ВРЕМЕННОЕ: кнопка режима разработчика (валюты/уровень). Только на dev-сервере и
@@ -1811,6 +1865,12 @@ export class Game implements UiContext {
   private navRoom(index: number): void {
     const to = Math.max(0, Math.min(this.rooms.length - 1, index));
     const moved = to !== this.currentRoom;
+    // Обучение: уйти можно только в комнату шага. Остаться на месте разрешено
+    // всегда (тап по своей же точке ничего не меняет).
+    if (moved && !tutorialAllowsRoom(this.state, this.rooms[to]?.id ?? '', this.now())) {
+      this.tutorNudge();
+      return;
+    }
     this.goRoom(to);                 // комната меняется сразу, ролик приходит поверх неё
     if (moved) this.tryInterstitial();
   }
@@ -1975,7 +2035,7 @@ export class Game implements UiContext {
       if (this.adPaused || this.overlayOpen) return;
       const p = this.root.toLocal(e.global); // окно → виртуальные координаты сцены
       // взятие котика за шкирку (приоритетнее свайпа)
-      if (this.pendingGrab && !this.grab) {
+      if (this.pendingGrab && !this.grab && !this.pendingGrab.noDrag) {
         const dx = p.x - this.pendingGrab.sx;
         const dy = p.y - this.pendingGrab.sy;
         if (dx * dx + dy * dy > 64) this.beginGrab(p.x, p.y);

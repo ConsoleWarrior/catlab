@@ -131,8 +131,8 @@ export function createGenolab(ctx: UiContext): Room {
   // пересборками комнаты — живёт в module-level `remembered`; у каждой свой)
   const scroll = remembered.scroll;
   let suppressTap = false;  // был свайп-скролл — гасим случайную покупку по тапу
-  // Узлы-якоря подсветки обучения (см. Room.anchor и ui/tutorial.ts): пока что
-  // нужна одна вкладка — 📖 Котодекс, с неё начинается знакомство с комнатой.
+  // Узлы-якоря подсветки обучения (см. Room.anchor и ui/tutorial.ts): все три
+  // вкладки, обучение обходит их по очереди (см. tabBar).
   const anchors = new Map<string, Container>();
 
   function tabBar(): Container {
@@ -152,13 +152,15 @@ export function createGenolab(ctx: UiContext): Room {
         textColor: active ? 0xffffff : V(INK, COLORS.ink), fontSize: 15.5,
       });
       b.position.set(bw / 2 + i * (bw + gap), 21);
-      if (d.id === 'codex') anchors.set('codex', b);
+      anchors.set(d.id, b); // подсветка обучения ведёт по всем трём вкладкам
       b.onTap = () => {
         const moved = d.id !== section;
-        // Шаг обучения «загляни в Генолаб» закрывается именно тапом по вкладке:
-        // просто заехать в комнату свайпом можно и мимоходом, а вкладку игрок
-        // нажимает осознанно — и сразу видит, что за ней лежит.
-        if (d.id === 'codex') ctx.noteTutorialSeen('genolab');
+        // Шаг обучения «загляни в Генолаб» закрывается не входом в комнату
+        // (заехать сюда свайпом можно и мимоходом), а осознанным тапом по каждой
+        // из трёх вкладок по очереди: 📖 Котодекс → 🔬 Улучшения → 🧪 Исследования.
+        // Пока идёт обучение, живая ровно одна — та, чья очередь.
+        if (!ctx.tutorAllows(d.id)) return;
+        ctx.noteTutorialTab(d.id);
         section = d.id; remembered.section = d.id; refresh();
         // тап по вкладке — неигровое действие (аналог кнопки «Магазин» в примерах
         // площадки): ролик приходит поверх уже переключённой вкладки
