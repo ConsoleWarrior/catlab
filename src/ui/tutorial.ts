@@ -81,6 +81,13 @@ export interface TutorHost {
    */
   overlayRect(): { x: number; y: number; w: number; h: number } | null;
   /**
+   * Узел ВНУТРИ открытого оверлея по его `.label` (панель сама метит нужную
+   * кнопку) или null. Нужен шагам вроде «Заказы»: доска — не комната, обычный
+   * `anchorIn` до её кнопок не достаёт, а без подсветки панель с несколькими
+   * кнопками (Выполнить / 📺 / Закрыть) не говорит игроку, куда жать дальше.
+   */
+  overlayAnchor(label: string): Container | null;
+  /**
    * Игрок ткнул мимо цели (в затемнение). Обучение обязательное, уйти с маршрута
    * нельзя — вместо молчания повторяем подсказку тостом, чтобы тап не выглядел
    * «игра зависла».
@@ -102,6 +109,12 @@ interface Hint {
    * прочих шагах открытая панель прячет подсказку целиком — она там только мешает.
    */
   overOverlay?: boolean;
+  /**
+   * Кольцо ищет узел ВНУТРИ оверлея по `.label` (см. `TutorHost.overlayAnchor`),
+   * а не в комнате — только пока панель открыта. Комнатный `key` при этом
+   * игнорируется.
+   */
+  overlayKey?: string;
 }
 
 /**
@@ -260,14 +273,17 @@ export class Tutorial {
     const roomIdx = this.host.roomIndexById(hint.room);
     const here = this.host.currentRoomIndex() === roomIdx;
 
-    // Игрок ушёл в другую комнату — ведём обратно: подсвечиваем точку навигации.
-    const node = here && hint.key ? this.host.anchorIn(roomIdx, hint.key) : null;
-    const navNode = here ? null : this.host.navDot(roomIdx);
+    // Цель ВНУТРИ открытой панели (см. overlayKey) — комната ни при чём, ищем
+    // узел по метке прямо в оверлее. Иначе — обычная комнатная цель, а ушёл
+    // игрок в другую комнату — ведём обратно: подсвечиваем точку навигации.
+    const node = overlay && hint.overlayKey ? this.host.overlayAnchor(hint.overlayKey)
+      : here && hint.key ? this.host.anchorIn(roomIdx, hint.key) : null;
+    const navNode = !overlay && !here ? this.host.navDot(roomIdx) : null;
     const target = node ?? navNode;
 
-    // Цель шага сменилась (другая комната или другой якорь) — плашке разрешено
+    // Цель шага сменилась (другая комната, якорь или оверлей) — плашке разрешено
     // выбрать сторону заново. Внутри одной цели она стоит на месте, см. pickSide.
-    const aim = `${hint.room}/${hint.key ?? ''}`;
+    const aim = `${hint.room}/${hint.key ?? ''}/${hint.overlayKey ?? ''}`;
     if (aim !== this.plateAim) { this.plateAim = aim; this.sideFixed = false; this.overlapT = 0; }
 
     // Кота держат за шкирку: сам он висит в руке, а его узел на полу остался
@@ -277,9 +293,11 @@ export class Tutorial {
     const dragging = !!this.host.ctx.carrying() && !!hint.key?.startsWith('cat:');
 
     this.layer.visible = true;
-    // Пока открыт оверлей, кольцо/рука бессмысленны — цель под панелью. Плашку
-    // оставляем: она и объясняет, какую кнопку в этом меню нажать.
-    const showPointer = !overlay && !dragging && !!target;
+    // Пока открыт оверлей, кольцо/рука обычно бессмысленны — цель под панелью,
+    // плашка одна объясняет, какую кнопку нажать. Исключение — overlayKey: цель
+    // САМА лежит в оверлее (кнопка «Закрыть» доски заказов), кольцо на неё
+    // ставим как обычно, а не только текстом.
+    const showPointer = !dragging && !!target && (!overlay || !!hint.overlayKey);
 
     this.ring.visible = showPointer;
     this.hand.visible = showPointer;
@@ -294,15 +312,22 @@ export class Tutorial {
       const r = this.drawRing(p.x, p.y, w, h);
       this.moveHand(p.x, p.y, r, here ? hint.gesture : 'tap');
       this.pickSide(p.y, Math.max(r, h / 2), dt);
-      // Окно заслонки — по нарисованному кольцу (плюс запас под палец): кольцо
-      // должно целиком лежать в светлом, иначе подсветка выглядит обрезанной.
-      // Заслонка работает ТОЛЬКО когда цель найдена: не нашли узел (комната
-      // пересобирается, панель закрывается) — гасим её целиком, иначе экран
-      // залип бы намертво.
-      this.setHole({
-        x: this.ringBox.x, y: this.ringBox.y,
-        w: Math.max(this.ringBox.w, 56) + HOLE_PAD, h: Math.max(this.ringBox.h, 56) + HOLE_PAD,
-      });
+      if (overlay) {
+        // Заслонку не ставим, пока цель лежит ВНУТРИ оверлея: у панели уже есть
+        // своё затемнение и свои кнопки (Выполнить / 📺), гасить их поверх кольца
+        // незачем — оно тут просто подсказка, а не единственный проход к цели.
+        this.setHole(null);
+      } else {
+        // Окно заслонки — по нарисованному кольцу (плюс запас под палец): кольцо
+        // должно целиком лежать в светлом, иначе подсветка выглядит обрезанной.
+        // Заслонка работает ТОЛЬКО когда цель найдена: не нашли узел (комната
+        // пересобирается, панель закрывается) — гасим её целиком, иначе экран
+        // залип бы намертво.
+        this.setHole({
+          x: this.ringBox.x, y: this.ringBox.y,
+          w: Math.max(this.ringBox.w, 56) + HOLE_PAD, h: Math.max(this.ringBox.h, 56) + HOLE_PAD,
+        });
+      }
     } else {
       // Оверлей (у панели своё затемнение и свои кнопки), кот в руках (несём его
       // через весь экран) или цель не найдена — заслонка не нужна.
@@ -693,7 +718,12 @@ export class Tutorial {
         if (ctx.carrying()) {
           return {
             room: 'shelter', key: 'adopt', gesture: 'tap',
-            text: t('Отпусти котика на станцию 🤝 в правом углу — за него дадут 💰 и опыт ⭐', 'Drop the cat onto the 🤝 station in the right corner — you get 💰 and ⭐ XP for it'),
+            text: t(
+              'Отпусти котика на станцию 🤝 в правом углу — откроется диалог: '
+                + 'соглашаться необязательно, в нём можно нажать «Нет» — этого кота продавать сейчас не обязательно',
+              'Drop the cat onto the 🤝 station in the right corner — a dialog opens: '
+                + 'agreeing is optional, you can tap "No" — you do not have to give this particular cat away right now',
+            ),
           };
         }
         const cat = adoptTarget(ctx.state);
@@ -701,13 +731,25 @@ export class Tutorial {
           room: 'shelter', key: cat ? `cat:${cat.id}` : null, gesture: 'hold',
           text: t(
             'Простых и лишних котиков отдают «в добрые руки»: возьми котика за шкирку '
-              + 'и тащи в правый угол, на станцию 🤝. Породистых так не отдавай — им место в Питомнике',
+              + 'и тащи в правый угол, на станцию 🤝. Породистых так не отдавай — им место в Питомнике. '
+              + 'Диалог можно отменить — сейчас можешь и не продавать',
             'Plain and spare cats are given away: pick a cat up by the scruff '
-              + 'and drag it to the 🤝 station in the right corner. Do not give pedigreed cats away — they belong in the Cattery',
+              + 'and drag it to the 🤝 station in the right corner. Do not give pedigreed cats away — they belong in the Cattery. '
+              + 'The dialog can be cancelled — you do not have to sell right now',
           ),
         };
       }
-      case 'orders':
+      case 'orders': {
+        // Доску можно разглядывать сколько угодно — шаг завершается только по
+        // ЗАКРЫТИЮ (см. Game.openOrders), поэтому пока панель открыта, кольцо
+        // переезжает на её кнопку «Закрыть»: без этого игрок остаётся один на
+        // один с доской заказов (Выполнить / 📺 / Закрыть) и не знает, куда жать.
+        if (this.host.overlayOpen()) {
+          return {
+            room: 'nursery', key: null, overlayKey: 'tutorClose', gesture: 'tap', overOverlay: true,
+            text: t('Вот доска заказов! Дочитал — жми «Закрыть», обучение продолжится', 'Here is the order board! Once you are done reading, hit "Close" to continue'),
+          };
+        }
         return {
           room: 'nursery', key: 'orders', gesture: 'tap',
           text: t(
@@ -720,6 +762,7 @@ export class Tutorial {
               + 'An order lives 6 hours and then changes by itself. Open the board',
           ),
         };
+      }
       case 'genolab':
         return {
           room: 'genolab', key: 'codex', gesture: 'tap',

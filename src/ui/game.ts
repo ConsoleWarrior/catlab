@@ -403,6 +403,20 @@ export class Game implements UiContext {
         const c = this.overlayContent;
         return c ? { x: c.x, y: c.y, w: c.width, h: c.height } : null;
       },
+      // Узел ВНУТРИ открытой панели по `.label` — панель сама метит нужную
+      // кнопку (напр. closeBtn.label = 'tutorClose' в buildOrdersPanel).
+      overlayAnchor: (lbl) => {
+        const root = this.overlayContent;
+        if (!root) return null;
+        let found: Container | null = null;
+        const walk = (n: Container): void => {
+          if (found) return;
+          if (n.label === lbl) { found = n; return; }
+          for (const c of n.children) walk(c as Container);
+        };
+        walk(root);
+        return found;
+      },
       // Тап мимо цели: обучение обязательное, уйти с маршрута нельзя — просто
       // повторяем подсказку тостом, чтобы тап не выглядел «игра зависла».
       nudge: () => {
@@ -1100,9 +1114,15 @@ export class Game implements UiContext {
   }
 
   openOrders(): void {
-    // шаг обучения «загляни на доску заказов» — открытие панели состояние не меняет
-    if (markTutorialSeen(this.state, 'orders')) this.save();
-    const close = (): void => this.closeOverlay();
+    // Шаг обучения «загляни на доску заказов» засчитывается по ЗАКРЫТИЮ, а не
+    // открытию: пока доска на экране, кольцо обучения стоит на её кнопке
+    // «Закрыть» (см. ui/tutorial.ts hintFor('orders')) — если пометить шаг
+    // пройденным сразу при открытии, подсказка спрыгнет на следующий шаг
+    // (Генолаб) прямо под открытой панелью, и кнопка останется без подсветки.
+    const close = (): void => {
+      if (markTutorialSeen(this.state, 'orders')) this.save();
+      this.closeOverlay();
+    };
     this.showOverlay(buildOrdersPanel(this, close), { adOnClose: true });
   }
 
@@ -1126,33 +1146,27 @@ export class Game implements UiContext {
     this.showOverlay(buildPrivacyPanel(this, () => this.closeOverlay()));
   }
 
-  /** Подтверждение сброса прогресса (⚙️ Настройки → «🗑 Сбросить прогресс»). */
+  /** Подтверждение сброса прогресса (⚠️ ВРЕМЕННОЕ DEV: ⚙️ Настройки → «🗑 Сбросить прогресс»). */
   openResetConfirm(): void {
     const close = (): void => this.closeOverlay();
     this.showOverlay(buildResetConfirm(this, close, () => void this.resetProgress()));
   }
 
   /**
-   * Начать игру заново по требованию игрока. Обещание «прогресс можно удалить»
-   * стоит в политике конфиденциальности (п. 3.5), и раньше единственным способом
-   * его сдержать была чистка данных браузера — на телефоне это нереально.
+   * Дев-сброс: начать партию с чистого листа. Игроку такой кнопки не даём (её
+   * рисует только DEVTOOLS-ветка настроек), это инструмент для прогона обучения
+   * и проверок с нуля, поэтому сбрасывается ВСЁ состояние без исключений —
+   * включая кристаллы 💎 и флаг бонуса первой покупки: «сохранить донат» здесь
+   * только мешало бы проверять экономику и магазин.
    *
    * Порядок важен: сначала подменяем состояние и пересобираем сцену (комнаты
    * держат ссылки на прежние объекты котов), и только потом ждём хранилище —
-   * облачная запись может идти секунды, а игрок должен увидеть результат сразу.
+   * облачная запись может идти секунды, а результат должен быть виден сразу.
    * Пишем именно новое состояние, а не «удаляем сейв»: пустое облако при
    * следующем запуске уступило бы старому локальному сейву (см. resetSave).
    */
   private async resetProgress(): Promise<void> {
-    // Донат-остаток переживает сброс (так и обещано в окне подтверждения): 💎
-    // куплены за реальные деньги, сжигать их при «начать заново» нечестно. Флаг
-    // бонуса первой покупки переносим вместе с ними — иначе +50% можно было бы
-    // получать снова и снова, сбрасывая прогресс перед каждой покупкой.
-    const keptCrystals = this.state.crystals;
-    const keptFirstPurchase = this.state.firstPurchaseDone;
     this.state = createInitialState(this.rng, this.now());
-    this.state.crystals = keptCrystals;
-    this.state.firstPurchaseDone = keptFirstPurchase;
     this.freshGame = true;
     this.shownLevel = this.state.level;
     this.wasStarving = isStarving(this.state);
@@ -1282,7 +1296,7 @@ export class Game implements UiContext {
     this.app.canvas.style.cursor = 'default';
 
     // пристроить кота в текущей комнате (слот вязки / приют / питомник)
-    if (this.handleCatDrop(opts.cat, gx, gy)) return; // успех → commit пересобрал комнаты
+    if (this.handleCatDrop(opts.cat, gx, gy, originRoom)) return; // успех → commit пересобрал комнаты
     // не пристроили — кот возвращается назад, в свою комнату
     if (this.currentRoom !== originRoom) this.goRoom(originRoom);
     opts.show();
@@ -1309,13 +1323,27 @@ export class Game implements UiContext {
     else if (g.x > this.roomW - edge && this.currentRoom < hi) { this.goRoom(this.currentRoom + 1); g.edgeCd = 2; }
   }
 
-  /** Куда уронили кота: Инкубатор → слот вязки, Приют → переноска (пристройство), Приют/Питомник → переезд. */
-  private handleCatDrop(cat: Cat, gx: number, gy: number): boolean {
+  /**
+   * Куда уронили кота: Инкубатор → слот вязки, Приют → переноска (пристройство),
+   * Приют/Питомник → переезд. `originRoom` — комната, откуда кота взяли.
+   *
+   * Пока идёт обучение, «обычный переезд» в ЧУЖУЮ комнату (не ту, откуда кота
+   * взяли) отключён: несли кота к цели, промахнулись мимо неё и заодно
+   * заскроллили не туда краевым автолистанием (см. carryEdgeScroll) — кот тихо
+   * телепортировался бы в третью комнату, а подсказка искала бы его совсем не
+   * там (баг с теста 08.09.2026: подсветка указывала в пустоту, вернуть кота
+   * было неоткуда — заслонка держит только один жёсткий маршрут). Промах В ТОЙ
+   * ЖЕ комнате, откуда кота взяли, по-прежнему просто ставит его рядом — это
+   * не путает обучение, ведь целевая функция ищет кота по id в любом месте
+   * комнаты.
+   */
+  private handleCatDrop(cat: Cat, gx: number, gy: number, originRoom: number): boolean {
     const room = this.rooms[this.currentRoom];
     if (!room) return false;
     // спец-зона комнаты (слот вязки в Инкубаторе / переноска в Приюте). Не сработала —
     // ниже обычный переезд по комнате.
     if (room.tryDropCat?.(cat, gx, gy)) return true;
+    if (tutorialActive(this.state) && this.currentRoom !== originRoom) return false;
     if (room.id === 'shelter') return this.relocateCat(cat, 'shelter');
     if (room.id === 'nursery') return this.relocateCat(cat, 'nursery');
     return false; // Генолаб и пр. — ставить некуда

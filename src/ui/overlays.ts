@@ -452,9 +452,10 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
   y += 52;
 
   // Сброс прогресса — ТОЛЬКО в dev-сборке (DEVTOOLS): нужен для прогона обучения
-  // и проверок с нуля. В релизе кнопки нет — слишком дорогая ошибка в один тап,
-  // а политика (п. 3.5) обещает удаление прогресса через очистку данных сайта и
-  // настройки аккаунта платформы, а не через кнопку в игре.
+  // и проверок с нуля, поэтому обнуляет всё подчистую, включая кристаллы 💎.
+  // В релизе кнопки нет — слишком дорогая ошибка в один тап, а политика (п. 3.5)
+  // обещает удаление прогресса через очистку данных сайта и настройки аккаунта
+  // платформы, а не через кнопку в игре.
   // Кнопка нарочно неприметная (цвет карточки, не акцент) и ведёт в отдельное
   // подтверждение.
   if (DEVTOOLS) {
@@ -478,12 +479,12 @@ export function buildSettingsPanel(ctx: UiContext, close: () => void): Container
 }
 
 /**
- * Подтверждение сброса прогресса (⚙️ Настройки → «🗑 Сбросить прогресс»).
+ * Подтверждение дев-сброса (⚠️ ВРЕМЕННОЕ DEV: ⚙️ Настройки → «🗑 Сбросить прогресс»).
  *
- * Действие необратимое и затирает в том числе облачную копию, поэтому здесь —
- * честная сводка того, что теряется, а «Отмена» стоит акцентной кнопкой. Сам
- * сброс делает Game (onConfirm): он же пересобирает сцену и ждёт записи в облако,
- * поэтому на время ожидания кнопки гаснут, а панель закрывает Game.
+ * Действие необратимое и затирает в том числе облачную копию и кристаллы 💎,
+ * поэтому здесь — честная сводка того, что теряется, а «Отмена» стоит акцентной
+ * кнопкой. Сам сброс делает Game (onConfirm): он же пересобирает сцену и ждёт
+ * записи в облако, поэтому на время ожидания кнопки гаснут, а панель закрывает Game.
  */
 export function buildResetConfirm(ctx: UiContext, close: () => void, onConfirm: () => void): Container {
   const W = 340;
@@ -495,19 +496,20 @@ export function buildResetConfirm(ctx: UiContext, close: () => void, onConfirm: 
 
   const cats = ctx.state.cats.length;
   const sub = label(
-    t(`Сейчас: ⭐ Ур. ${ctx.state.level},  🐱 ${cats}`, `Now: ⭐ Lv. ${ctx.state.level},  🐱 ${cats}`),
+    t(`Сейчас: ⭐ Ур. ${ctx.state.level},  🐱 ${cats},  💎 ${ctx.state.crystals}`,
+      `Now: ⭐ Lv. ${ctx.state.level},  🐱 ${cats},  💎 ${ctx.state.crystals}`),
     13, COLORS.inkSoft, '700',
   );
   sub.position.set(W / 2, 54);
 
   const body = new Text({
     text: t(
-      'Игра начнётся с нуля: котики, монеты, гены, уровень лаборатории, открытые породы и рецепты пропадут.\n\n'
-      + 'Сбрасывается и облачная копия — вернуть прогресс с другого устройства будет нельзя. '
-      + 'Кристаллы 💎 на счету сохранятся, но потраченные не возвращаются.',
-      'The game starts over: cats, coins, genes, lab level, discovered breeds and recipes will be gone.\n\n'
-      + 'The cloud copy is reset too — progress cannot be restored from another device. '
-      + 'Your 💎 balance carries over, but spent crystals are not refunded.',
+      'Дев-сброс: обнуляется ВСЁ. Котики, монеты, гены, кристаллы 💎, уровень лаборатории, '
+      + 'открытые породы и рецепты пропадут, обучение начнётся заново.\n\n'
+      + 'Сбрасывается и облачная копия — вернуть прогресс с другого устройства будет нельзя.',
+      'Dev reset: EVERYTHING is wiped. Cats, coins, genes, 💎 crystals, lab level, discovered '
+      + 'breeds and recipes will be gone, and the tutorial starts over.\n\n'
+      + 'The cloud copy is reset too — progress cannot be restored from another device.',
     ),
     style: {
       fontFamily: FONT, fontSize: 13, fontWeight: '600', fill: COLORS.ink,
@@ -3522,6 +3524,9 @@ export function buildOrdersPanel(ctx: UiContext, close: () => void): Container {
   const closeBtn = new Button({ text: t('Закрыть', 'Close'), w: 160, h: 42, color: COLORS.cardEdge, textColor: COLORS.ink, fontSize: 15 });
   closeBtn.position.set(W / 2, y + 26);
   closeBtn.onTap = close;
+  // Якорь подсветки обучения (см. TutorHost.overlayAnchor в ui/tutorial.ts):
+  // на шаге «Заказы» кольцо, пока доска открыта, стоит именно на этой кнопке.
+  closeBtn.label = 'tutorClose';
 
   const H = y + 56;
   root.addChild(panel(W, H, COLORS.hud, 18));
