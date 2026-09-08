@@ -11,7 +11,7 @@
 
     python scripts/optimize_assets.py                   # dry-run: только отчёт
     python scripts/optimize_assets.py --apply           # записать .webp рядом с .png
-    python scripts/optimize_assets.py --apply --music   # + перекодировать музыку (нужен ffmpeg)
+    python scripts/optimize_assets.py --apply --music   # + перекодировать звук (нужен ffmpeg)
 
 Новые спрайты пород кладутся в src/assets/breeds как PNG 1024×1024 и
 прогоняются этим же скриптом.
@@ -37,8 +37,15 @@ PROFILES = {
     'hud':    (None, 90, True),  # плашка топ-бара
 }
 
-# Фоновая музыка: исходники были 256 kbps — для зацикленного эмбиента избыточно.
-MUSIC_KBPS = 112
+# Звук: битрейт и число каналов по папкам. Исходники с Pixabay сведены «как для
+# альбома» (до 256 kbps стерео), а в игре это либо фон на 22% громкости, либо
+# короткий эффект, либо мурчание на 6% — такой запас слышен только счётчику
+# трафика. Звуки событий (ui) не трогаем: они уже сведены вручную и коротки.
+AUDIO_PROFILES = {
+    'background': (112, 2),  # зацикленный эмбиент — стерео, тише всего слышна полоса
+    'meow':       (128, 1),  # самый заметный звук игры: мяу на каждый тап по коту
+    'purr':       (48, 1),   # 24-секундные петли на громкости 0.06 — хор, не солист
+}
 
 
 def convert(path: str, max_side: int | None, quality: int, alpha: bool, apply: bool) -> tuple[int, int]:
@@ -62,34 +69,37 @@ def convert(path: str, max_side: int | None, quality: int, alpha: bool, apply: b
 
 
 def music(apply: bool) -> tuple[int, int]:
-    """Фоновая музыка: перекодировать в MUSIC_KBPS (нужен ffmpeg в PATH).
+    """Перекодировать звук по AUDIO_PROFILES (нужен ffmpeg в PATH).
 
     В отличие от картинок здесь замена идёт НА МЕСТЕ (расширение то же), поэтому
     ffmpeg пишет во временный файл, и только успешный результат встаёт на место
     оригинала. Откат — `git checkout src/assets/sounds`.
     """
-    files = sorted(glob.glob(os.path.join(ROOT, 'src', 'assets', 'sounds', 'background', '*.mp3')))
     before = after = 0
-    for f in files:
-        size = os.path.getsize(f)
-        before += size
-        if not apply:
-            # оценка по текущему битрейту: уже сжатый файл не «похудеет вдвое» ещё раз
+    for folder, (kbps_want, channels) in AUDIO_PROFILES.items():
+        files = sorted(glob.glob(os.path.join(ROOT, 'src', 'assets', 'sounds', folder, '*.mp3')))
+        for f in files:
+            size = os.path.getsize(f)
+            before += size
             probe = subprocess.run(
                 ['ffprobe', '-v', 'error', '-show_entries', 'format=bit_rate', '-of', 'csv=p=0', f],
                 capture_output=True, text=True, check=True,
             )
             kbps = int(probe.stdout.strip() or 0) / 1000
-            after += round(size * MUSIC_KBPS / kbps) if kbps > MUSIC_KBPS else size
-            continue
-        tmp = os.path.join(tempfile.gettempdir(), os.path.basename(f))
-        subprocess.run(
-            ['ffmpeg', '-y', '-loglevel', 'error', '-i', f,
-             '-c:a', 'libmp3lame', '-b:a', f'{MUSIC_KBPS}k', '-ar', '44100', tmp],
-            check=True,
-        )
-        shutil.move(tmp, f)
-        after += os.path.getsize(f)
+            if kbps <= kbps_want:  # уже не толще нужного — пересжатие только испортит
+                after += size
+                continue
+            if not apply:
+                after += round(size * kbps_want / kbps)
+                continue
+            tmp = os.path.join(tempfile.gettempdir(), os.path.basename(f))
+            subprocess.run(
+                ['ffmpeg', '-y', '-loglevel', 'error', '-i', f, '-c:a', 'libmp3lame',
+                 '-b:a', f'{kbps_want}k', '-ac', str(channels), '-ar', '44100', tmp],
+                check=True,
+            )
+            shutil.move(tmp, f)
+            after += os.path.getsize(f)
     return before, after
 
 
@@ -97,7 +107,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true', help='записать .webp рядом с .png')
     ap.add_argument('--only', help='обработать только эту папку')
-    ap.add_argument('--music', action='store_true', help='ещё и перекодировать фоновую музыку')
+    ap.add_argument('--music', action='store_true', help='ещё и перекодировать звук (см. AUDIO_PROFILES)')
     args = ap.parse_args()
 
     total_before = total_after = 0
@@ -124,8 +134,10 @@ def main() -> int:
         if mb:
             total_before += mb
             total_after += ma
-            print(f'{"музыка":<8} {len(glob.glob(os.path.join(ROOT, "src", "assets", "sounds", "background", "*.mp3"))):>4} файлов  '
-                  f'{mb / 1024 / 1024:>7.1f} МБ → {ma / 1024 / 1024:>6.1f} МБ  ({MUSIC_KBPS} kbps)')
+            n = sum(len(glob.glob(os.path.join(ROOT, 'src', 'assets', 'sounds', d, '*.mp3')))
+                    for d in AUDIO_PROFILES)
+            print(f'{"звук":<8} {n:>4} файлов  '
+                  f'{mb / 1024 / 1024:>7.1f} МБ -> {ma / 1024 / 1024:>6.1f} МБ  (см. AUDIO_PROFILES)')
 
     if total_before:
         print(f'\nИТОГО: {total_before / 1024 / 1024:.1f} МБ → {total_after / 1024 / 1024:.1f} МБ '

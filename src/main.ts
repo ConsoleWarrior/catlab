@@ -5,8 +5,13 @@
  */
 
 import { Game } from './ui/game.js';
+import { DEVTOOLS } from './ui/devTools.js'; // ⚠️ ВРЕМЕННОЕ DEV — см. devTools.ts
 
-const reset = new URLSearchParams(location.search).has('reset');
+// ?reset — дев-сброс для скриншотов и проверок. В релизном архиве он выключен:
+// это не кнопка в меню, а адресная строка, и случайно унесённый в закладку
+// параметр стёр бы игроку и локальный, и облачный прогресс (п. 1.13.3).
+// Работает на дев-сервере и в сборке `npm run build:test` (dist-test).
+const reset = DEVTOOLS && new URLSearchParams(location.search).has('reset');
 // start() сам разбирается с ошибками старта и в любом случае снимает лоадер
 // платформы (п. 1.19.2). Этот catch — последний рубеж, чтобы в консоль не улетал
 // необработанный промис, если сломается уже сам обработчик ошибки.

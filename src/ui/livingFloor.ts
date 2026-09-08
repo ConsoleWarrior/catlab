@@ -27,7 +27,7 @@ import { isBusy, growthScale, isAdult } from '../game/index.js';
 import { breedName } from '../genetics/index.js';
 import type { UiContext } from './context.js';
 import type { FloorPlane, ShelfPlane } from './rooms/shell.js';
-import { catSprite, aiSitSpriteFor, rarityGlow, GLOW_OUT, catSizeFactor } from './catTextures.js';
+import { catSprite, aiSitSpriteFor, catArtTexture, rarityGlow, GLOW_OUT, catSizeFactor } from './catTextures.js';
 import { attachBlink, type Blinker } from './eyeBlink.js';
 import { sfxMeow, sfxPurrSync } from './sound.js';
 import { COLORS, FONT, label, stackWords, TIER_COLOR } from './theme.js';
@@ -598,6 +598,12 @@ export function createLivingFloor(
       cat.isNew ? 1 : 0,
       cat.name ?? '',
       cat.rarityTier,
+      cat.breed,
+      // Арт породы грузится лениво (catTextures): кот, родившийся раньше, чем
+      // доехал его спрайт, сидит на полу процедурным. Признак «арт уже есть»
+      // держим в слепке — тогда приезд текстур пересоберёт ровно таких котов, а
+      // остальную толпу не тронет. Заодно этот вызов и заказывает недостающее.
+      catArtTexture(cat) ? 1 : 0,
     ].join('|');
   }
 

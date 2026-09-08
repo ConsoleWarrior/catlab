@@ -9,3 +9,4 @@ screens/
 dist-test/
 *.zip
 video/
+__pycache__/

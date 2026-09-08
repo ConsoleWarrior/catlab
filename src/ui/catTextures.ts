@@ -13,7 +13,7 @@
  * (ассет не загрузился) — отдаём процедурного кота как запасной вариант.
  */
 
-import { BlurFilter, ColorMatrixFilter, Rectangle, Sprite } from 'pixi.js';
+import { Assets, BlurFilter, ColorMatrixFilter, Rectangle, Sprite } from 'pixi.js';
 import type { Application, Texture } from 'pixi.js';
 import { expressPhenotype, breedTraits } from '../genetics/index.js';
 import type { RarityTier } from '../genetics/index.js';
@@ -134,21 +134,118 @@ const texKey = new Map<number, string>();
 /** Имя файла спрайта по его текстуре (`<breed>__<n>`), либо undefined. */
 export function textureKeyOf(t: Texture): string | undefined { return texKey.get(t.uid); }
 
-/**
- * Зарегистрировать вариант-текстуру породы. Имя файла `<breed>__<n>`: порода —
- * всё до `__`, дальше номер варианта. Пол в имени не участвует.
- */
-export function setAiBreedTexture(fileKey: string, t: Texture): void {
+// --- Ленивая загрузка арта пород ---------------------------------------------
+//
+// Коллекция пород — это 8 МБ картинок, и грузить их все до первого кадра значит
+// держать игрока перед лоадером портала лишние десять секунд (замер:
+// scripts/loadtime.mjs). Поэтому на старте игра ждёт ТОЛЬКО породы котов, которые
+// у игрока есть прямо сейчас, а остальное догружает фоном, пока он играет.
+//
+// Реестр адресов собирается в game.ts из import.meta.glob: там строки-URL, байты
+// по ним не качаются, пока не позовут Assets.load. Порода, которой ещё нет,
+// рисуется процедурным фолбэком и одновременно встаёт в очередь на загрузку —
+// когда текстуры приедут, игра перерисует видимые комнаты (см. artArrived).
+
+const breedFiles = new Map<string, [key: string, url: string][]>(); // порода → варианты
+const breedReady = new Set<string>();                 // породы с загруженным артом
+const breedLoading = new Map<string, Promise<void>>(); // идущие загрузки
+let artArrived: (() => void) | null = null;
+
+/** Запомнить адрес варианта породы (`<breed>__<n>.webp`), НЕ загружая его. */
+export function registerBreedArt(fileKey: string, url: string): void {
   const breed = fileKey.split('__')[0]!;
-  const list = breedTex.get(breed) ?? [];
-  list.push(t);
-  breedTex.set(breed, list);
-  texKey.set(t.uid, fileKey);
+  const list = breedFiles.get(breed) ?? [];
+  list.push([fileKey, url]);
+  breedFiles.set(breed, list);
+}
+
+/** Кому сообщить, что доехал новый арт (игра перерисует видимые комнаты). */
+export function setArtArrivedHandler(fn: () => void): void { artArrived = fn; }
+
+/** Все породы, для которых есть арт (в порядке реестра). */
+export function artBreedKeys(): string[] { return [...breedFiles.keys()]; }
+
+/**
+ * Загрузить арт одной породы. Варианты кладутся в реестр ЦЕЛИКОМ и в порядке
+ * имени файла: `pickVariant` выбирает вариант по остатку от длины списка, и
+ * подкладывать их по мере приезда нельзя — облик кота менялся бы на глазах.
+ */
+function loadBreedArt(breed: string): Promise<void> {
+  if (breedReady.has(breed)) return Promise.resolve();
+  const going = breedLoading.get(breed);
+  if (going) return going;
+  const files = breedFiles.get(breed);
+  if (!files) { breedReady.add(breed); return Promise.resolve(); } // нет арта — процедурный кот
+  const p = Promise.all([...files].sort((a, b) => a[0].localeCompare(b[0]))
+    .map(async ([key, url]) => {
+      try { return [key, await Assets.load<Texture>(url)] as const; } catch { /* повтор ниже */ }
+      // Один запрос из четверти тысячи может и не доехать (мобильная сеть). Повтор
+      // делаем по слегка другому адресу: Pixi кэширует обещание загрузки по URL и на
+      // повторный запрос того же адреса просто отдаёт ту же ошибку.
+      try { return [key, await Assets.load<Texture>(`${url}?retry=1`)] as const; } catch { return null; }
+    }))
+    .then((pairs) => {
+      const list: Texture[] = [];
+      for (const pair of pairs) {
+        if (!pair) continue;
+        list.push(pair[1]);
+        texKey.set(pair[1].uid, pair[0]);
+      }
+      if (list.length) breedTex.set(breed, list);
+      // Помечаем «отработано» в любом случае: если арт не доехал и со второй
+      // попытки, кот этой породы рисуется процедурно — дёргать сеть на каждой
+      // пересборке комнаты незачем.
+      breedReady.add(breed);
+      breedLoading.delete(breed);
+    });
+  breedLoading.set(breed, p);
+  return p;
+}
+
+/** Дождаться арта перечисленных пород (старт игры: породы котов в сейве). */
+export function ensureBreedArt(breeds: Iterable<string>): Promise<void> {
+  return Promise.all([...new Set(breeds)].map(loadBreedArt)).then(() => undefined);
+}
+
+// На экране сейчас есть процедурный фолбэк вместо спрайта: только в этом случае
+// пересборка комнаты чему-то поможет. Без этого флага фоновая догрузка дёргала бы
+// пересборку после каждой пачки — семнадцать раз подряд на ровном месте.
+let missedArt = false;
+
+/** Поставить породу в очередь и перерисовать сцену, когда арт доедет. */
+function requestBreedArt(breed: string): void {
+  if (breedReady.has(breed)) return;   // арт уже загружен (или его вовсе нет)
+  missedArt = true;
+  if (breedLoading.has(breed)) return; // уже едет — перерисуемся, когда доедет
+  void loadBreedArt(breed).then(notifyArt);
+}
+
+/** Перерисовать сцену, если на ней остался процедурный фолбэк. */
+function notifyArt(): void {
+  if (!missedArt) return;
+  missedArt = false;
+  artArrived?.();
+}
+
+/**
+ * Догрузить оставшийся арт фоном. `first` — породы, которые понадобятся раньше
+ * прочих (уже открытые в Котодексе). Грузим пачками: канал занимать целиком
+ * нельзя, по нему же идут звуки и — на портале — реклама.
+ */
+export async function preloadRestBreedArt(first: readonly string[] = []): Promise<void> {
+  const queue = [...new Set([...first, ...breedFiles.keys()])].filter((b) => !breedReady.has(b));
+  const BATCH = 4;
+  for (let i = 0; i < queue.length; i += BATCH) {
+    await ensureBreedArt(queue.slice(i, i + BATCH));
+    notifyArt(); // сработает, только если игрок реально смотрит на фолбэк
+  }
 }
 
 /** Текстура-миниатюра породы для Котодекса (первый вариант), null → нет арта. */
 export function breedThumbTexture(breedKey: string): Texture | null {
-  return breedTex.get(breedKey)?.[0] ?? null;
+  const list = breedTex.get(breedKey);
+  if (!list) { requestBreedArt(breedKey); return null; } // приедет — перерисуем
+  return list[0] ?? null;
 }
 
 /** Стабильный хеш id → неотрицательное число (для выбора варианта базы). */
@@ -166,10 +263,12 @@ function pickVariant(list: Texture[], id: string): Texture | null {
 /** Текстура породы для кота (вариант по id), null → процедурный фолбэк. */
 function breedTexFor(cat: Cat): Texture | null {
   const breed = cat.breed || 'moggie';
+  const list = breedTex.get(breed);
+  if (!list) { requestBreedArt(breed); return null; } // фолбэк, пока арт в пути
   // Сид выбора варианта — artId (клон наследует его от оригинала, чтобы облик
   // совпал), иначе собственный id. Стабилен между перерисовками.
   const seed = cat.artId ?? cat.id;
-  return pickVariant(breedTex.get(breed) ?? [], seed);
+  return pickVariant(list, seed);
 }
 
 /** Арт-текстура варианта кота из коллекции (тот же вариант, что на полу), либо null. */

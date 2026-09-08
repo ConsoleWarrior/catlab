@@ -246,6 +246,11 @@ let gameplayOn = false;
  */
 export function loadingReady(): void {
   if (readyDone) return;
+  if (!readyWanted) {
+    // Отметка «игра готова к игроку» — по ней меряется время первой загрузки
+    // (scripts/loadtime.mjs). Стандартный Performance API, в игре ничего не меняет.
+    try { performance.mark('catlab:ready'); } catch { /* нет Performance API */ }
+  }
   readyWanted = true;
   const api = sdk?.features?.LoadingAPI;
   if (!api) return; // SDK ещё нет — вызовем в flushLifecycle(), как только появится

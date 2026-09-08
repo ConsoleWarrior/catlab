@@ -29,7 +29,10 @@ import { isBusy, isInSlot, isAdult, freezeCat } from '../game/index.js';
 import type { Cat, GameState, BirthEvent, Ancestor } from '../game/index.js';
 import type { GrabOpts, Room, UiContext } from './context.js';
 import { Button, COLORS, fmt, label, setUiBlocked } from './theme.js';
-import { catTexture, setAiBreedTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT } from './catTextures.js';
+import {
+  catTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT,
+  registerBreedArt, ensureBreedArt, preloadRestBreedArt, setArtArrivedHandler,
+} from './catTextures.js';
 import { loadEyeData } from './eyeBlink.js';
 import { initSfx, sfxEvent, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
@@ -52,6 +55,7 @@ import {
 } from './overlays.js';
 import type { OfflineReport, LevelUpInfo } from './overlays.js';
 import { buildRoomHelpPanel } from './roomHelp.js';
+import { bootStep, bootDone } from './bootScreen.js';
 import {
   initPlatform, loadingReady, gameplayStart, gameplayStop, setPlatformPauseHandler, platformLang,
   setLatePlayerHandler,
@@ -96,6 +100,46 @@ const MAX_ASPECT = IS_TOUCH ? 3.2 : 2;
 // грузятся дольше, чем на стенде, а снятый раньше времени лоадер показал бы
 // игроку пустую сцену.
 const START_FAILSAFE_MS = 25_000;
+
+/**
+ * Породы, чей арт нужен игроку прямо на старте: его собственные коты (в комнатах
+ * и в крио-банке) и котёнок, уже брошенный в слоте вязки. Всё остальное грузится
+ * фоном (см. preloadRestBreedArt) — иначе первый запуск ждёт всю коллекцию.
+ */
+function breedsOnScreen(state: GameState): string[] {
+  const keys = new Set<string>(['moggie']); // база: фолбэк-порода и стартовая пара
+  for (const c of state.cats) keys.add(c.breed || 'moggie');
+  for (const c of state.cryo) keys.add(c.breed || 'moggie');
+  for (const sl of state.slots) if (sl.plannedBreed) keys.add(sl.plannedBreed);
+  return [...keys];
+}
+
+/**
+ * Обстановка комнат: фоны, декор, боксы слотов инкубатора и плашка топ-бара.
+ * Всё одной пачкой и параллельно — группы независимы, а лишний круг ожидания на
+ * каждой стоит целого сетевого пинга. Чего не хватило — просто не нарисуется:
+ * у фонов процедурная коробка, у декора пропуск спрайта (см. roomShell/decorArt).
+ */
+async function loadStaticArt(setHudBg: (t: Texture) => void): Promise<void> {
+  const rooms = import.meta.glob('../assets/rooms/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+  const decor = import.meta.glob('../assets/decor/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+  // Боксы слотов вязки (slotbox_*) и кнопки усилителей (boost_<id>) — тот же реестр decorArt.
+  const incu = import.meta.glob('../assets/{slotbox,boost}/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+  const hud = import.meta.glob('../assets/hud/*.webp', { eager: true, query: '?url', import: 'default' }) as Record<string, string>;
+  const fileKey = (path: string): string => path.split('/').pop()!.replace('.webp', '');
+
+  await Promise.all([
+    ...Object.entries(rooms).map(async ([path, url]) => {
+      try { setRoomBg(fileKey(path), await Assets.load(url)); } catch { /* фолбэк на коробку */ }
+    }),
+    ...Object.entries({ ...decor, ...incu }).map(async ([path, url]) => {
+      try { setDecorTexture(fileKey(path), await Assets.load(url)); } catch { /* спрайт пропустится */ }
+    }),
+    ...Object.values(hud).slice(0, 1).map(async (url) => {
+      try { setHudBg(await Assets.load(url)); } catch { /* останется белый фон */ }
+    }),
+  ]);
+}
 
 export class Game implements UiContext {
   readonly app = new Application();
@@ -233,6 +277,9 @@ export class Game implements UiContext {
     } finally {
       clearTimeout(failsafe);
       loadingReady(); // идемпотентно: повторный вызов ничего не делает
+      // Тем же правилом снимается и свой экран загрузки: при любом исходе игрок
+      // должен увидеть либо сцену, либо сообщение об ошибке — но не заставку.
+      bootDone();
     }
   }
 
@@ -260,6 +307,11 @@ export class Game implements UiContext {
   }
 
   private async boot(reset: boolean): Promise<void> {
+    // Экран загрузки уже на виду (index.html) — дальше по ходу старта двигаем его
+    // полоску: на холодном кэше сборка занимает секунды, и игрок должен видеть,
+    // что идёт загрузка, а не гадать, зависло ли.
+    bootStep(0.06);
+
     // SDK платформы поднимаем параллельно со шрифтом и ассетами: его ждёт только
     // загрузка сейва (облако), всему остальному он не нужен.
     const platform = initPlatform();
@@ -274,65 +326,46 @@ export class Game implements UiContext {
       autoDensity: true,
     });
     document.getElementById('app')!.appendChild(this.app.canvas);
+    bootStep(0.2); // шрифт и рендерер готовы
+
+    // Готовый арт коллекции: варианты всех пород `<breed>__<n>.webp` (включая
+    // базовые T1: moggie и домашних), без привязки к полу. Здесь только адреса —
+    // байты качаются по требованию (см. catTextures: ленивая загрузка арта).
+    // Нет ассета → кот рисуется процедурно (фолбэк).
+    const breedAssets = import.meta.glob('../assets/breeds/*.webp', {
+      eager: true, query: '?url', import: 'default',
+    }) as Record<string, string>;
+    for (const [path, url] of Object.entries(breedAssets)) {
+      registerBreedArt(path.split('/').pop()!.replace('.webp', ''), url); // <breed>__<n>
+    }
+
+    // Обстановка (фоны комнат, декор, боксы инкубатора, плашка HUD) от сейва не
+    // зависит — начинаем тянуть её ЗДЕСЬ, параллельно с подъёмом платформы и
+    // загрузкой облачного сейва. Раньше всё шло цепочкой, и пока SDK ходил за
+    // сейвом в сеть, канал простаивал.
+    const staticArt = Promise.all([
+      loadStaticArt((t) => { this.hudBgTex = t; }),
+      // «Дворовый» — и стартовая пара новичка, и фолбэк-порода: его арт нужен
+      // почти всегда, так что не ждём ради него ответа облачного сейва.
+      ensureBreedArt(['moggie']),
+    ]);
 
     await platform;
     initLang(platformLang()); // язык игрока из SDK (п. 2.14) — сразу после подъёма платформы
     await this.loadState(reset);
     this.shownLevel = this.state.level; // база для баннера повышения уровня
     this.wasStarving = isStarving(this.state); // не спамить тостом «корм закончился» на первом кадре
+    bootStep(0.45); // платформа поднялась, сейв на руках
 
-    initSfx(); // звуки грузятся в фоне, ждать не нужно — до первого тапа успеют
-
-    // Готовый арт коллекции: варианты всех пород `<breed>__<n>.webp` (включая
-    // базовые T1: moggie и домашних), без привязки к полу. Грузим до сборки комнат;
-    // вис делаем из той же текстуры. Нет ассета → кот рисуется процедурно (фолбэк).
-    const breedAssets = import.meta.glob('../assets/breeds/*.webp', {
-      eager: true, query: '?url', import: 'default',
-    }) as Record<string, string>;
-
-    await Promise.all(Object.entries(breedAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.webp', ''); // <breed>__<n>
-      try { setAiBreedTexture(name, await Assets.load(url)); } catch { /* фолбэк */ }
-    }));
-    await loadEyeData(); // свежая разметка глаз (DEV) до сборки комнат
-
-    // Готовые фоны комнат («комната-коробка» в нашей перспективе) — по имени файла
-    // = id комнаты. Нет фона → процедурная коробка (фолбэк в roomShell).
-    const roomAssets = import.meta.glob('../assets/rooms/*.webp', {
-      eager: true, query: '?url', import: 'default',
-    }) as Record<string, string>;
-    await Promise.all(Object.entries(roomAssets).map(async ([path, url]) => {
-      const id = path.split('/').pop()!.replace('.webp', '');
-      try { setRoomBg(id, await Assets.load(url)); } catch { /* фолбэк на коробку */ }
-    }));
-
-    // Декор комнат (интерьерные спрайты, расставленные в Декор-лабе) — по имени файла
-    // = ключ текстуры. Расстановка задана в decorArt.ts; нет текстуры → спрайт пропускается.
-    const decorAssets = import.meta.glob('../assets/decor/*.webp', {
-      eager: true, query: '?url', import: 'default',
-    }) as Record<string, string>;
-    await Promise.all(Object.entries(decorAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.webp', '');
-      try { setDecorTexture(name, await Assets.load(url)); } catch { /* спрайт пропустится */ }
-    }));
-
-    // ИИ-текстуры инкубатора: фоны-боксы слотов вязки (slotbox_*) и текстуры
-    // кнопок усилителей (boost_<id>). Тот же реестр decorArt, ключ = имя файла.
-    const incubatorAssets = import.meta.glob('../assets/{slotbox,boost}/*.webp', {
-      eager: true, query: '?url', import: 'default',
-    }) as Record<string, string>;
-    await Promise.all(Object.entries(incubatorAssets).map(async ([path, url]) => {
-      const name = path.split('/').pop()!.replace('.webp', '');
-      try { setDecorTexture(name, await Assets.load(url)); } catch { /* фолбэк на процедурный вид */ }
-    }));
-
-    // Текстура фона топ-бара HUD (пергамент/винтаж) — заменяет белый procedural fill.
-    const hudAssets = import.meta.glob('../assets/hud/*.webp', {
-      eager: true, query: '?url', import: 'default',
-    }) as Record<string, string>;
-    for (const url of Object.values(hudAssets)) {
-      try { this.hudBgTex = await Assets.load(url); break; } catch { /* останется белый фон */ }
-    }
+    // Ждём только тех пород, которых игрок увидит на первом же экране: своих
+    // котов (включая замороженных и «заказанного» котёнка в слоте вязки). Вся
+    // остальная коллекция — 8 МБ — догрузится фоном после снятия лоадера.
+    await Promise.all([
+      ensureBreedArt(breedsOnScreen(this.state)),
+      loadEyeData(), // свежая разметка глаз (DEV)
+      staticArt,
+    ]);
+    bootStep(0.8); // арт первого экрана и обстановка комнат на месте
 
     this.app.stage.eventMode = 'static';
     this.app.stage.addChild(this.root);
@@ -388,9 +421,20 @@ export class Game implements UiContext {
     // При ?reset (скриншоты) не трогаем ни то, ни другое.
     if (this.freshGame && !reset) this.goRoom(this.roomIndex('nursery'));
 
-    // сцена собрана и отвечает на тапы — платформе можно убрать свой лоадер
+    // сцена собрана и отвечает на тапы — платформе можно убрать свой лоадер,
+    // а нам показать канвас из-под своего экрана загрузки
+    bootStep(1);
+    bootDone();
     loadingReady();
     gameplayStart();
+
+    // Дальше — всё, что игроку прямо сейчас не нужно, и потому не должно держать
+    // лоадер портала: звуки (до первого тапа браузер их всё равно не пустит) и
+    // остальная коллекция пород. Порядок очереди — от уже открытых в Котодексе
+    // пород к прочим: их арт понадобится раньше.
+    initSfx();
+    setArtArrivedHandler(() => this.refreshArt());
+    void preloadRestBreedArt(this.state.discoveredBreeds);
 
     // Отчёт «С возвращением» (посчитан в applyOffline при загрузке сейва) — с
     // небольшой паузой, чтобы игрок сначала увидел свою лабораторию, а уже потом
@@ -767,6 +811,17 @@ export class Game implements UiContext {
   }
 
   // --- UiContext ---
+
+  /**
+   * Доехал арт, которого не было в момент сборки комнаты (ленивая загрузка пород,
+   * см. catTextures): пересобираем видимую комнату, чтобы процедурный фолбэк
+   * сменился на спрайт. Дешевле commit(): ни сейва, ни проверок уровня.
+   */
+  private refreshArt(): void {
+    if (!this.rooms.length) return;
+    this.roomDirty = this.rooms.map(() => true);
+    this.refreshVisibleRooms();
+  }
 
   commit(): void {
     // Пересобираем только то, что игрок сейчас видит. Остальные комнаты помечаем

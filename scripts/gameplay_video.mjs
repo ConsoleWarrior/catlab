@@ -27,12 +27,31 @@ const DRY = !!process.env.DRY;
 // Кадр записи: 1280x720 — минимальное разрешение площадки для 16:9. В 1080p
 // VP8-кодировщик headless-браузера не успевает за сценой и растягивает запись вдвое.
 const W = 1280, H = 720;
+const UI_LANG = process.env.UI_LANG === 'en' ? 'en' : 'ru'; // черновик заполняется на каждый язык
 const LIMIT = 27.8;    // предел площадки — 28 с, берём с запасом
 const TITLE_AT = 24.8; // на этой секунде дубля включается титр — 3 с оформления из 28
 // Фоновая музыка игры (Pixabay Content License — коммерческое использование
 // разрешено, атрибуция не требуется). MUSIC=0 — записать без звука.
 const MUSIC = process.env.MUSIC === '0' ? null : (process.env.MUSIC
   || 'src/assets/sounds/background/samuelfjohanns-aeolian-futuristics-music-from-the-freakn-future-01-119831.mp3');
+
+/**
+ * Подписи, по которым скрипт кликает, и тексты титра — на языке ролика.
+ * Название игры обязано совпадать с названием в черновике этого языка (пункт 5.1.3),
+ * en-вариант взят из STORE.md.
+ */
+const TXT = {
+  ru: {
+    slot: 'слот вязки', breed: 'Свести', toCattery: 'В питомник', orders: 'Заказы клиентов',
+    complete: 'Выполнить', upgrades: 'Улучшения', close: 'Закрыть', carrier: 'перетащи',
+    title: 'Котолаборатория', tagline: 'разводи котиков — открывай породы',
+  },
+  en: {
+    slot: 'breeding slot', breed: 'Breed', toCattery: 'To the cattery', orders: 'Client orders',
+    complete: 'Complete', upgrades: 'Upgrades', close: 'Close', carrier: 'drag a cat',
+    title: 'Catlab: Breed & Collect', tagline: 'breed cats — unlock 70 breeds',
+  },
+}[UI_LANG];
 
 mkdirSync(OUT, { recursive: true });
 const RAW = join(OUT, 'raw');
@@ -148,15 +167,14 @@ const FLOOR_CATS = async () => {
 };
 
 /**
- * Кот на полу, которого примет клиент: сцена с заказом должна сойтись с первого раза.
- * Ищем спрайт кота, подходящего хоть под один заказ доски (matchesOrder — порода
- * плюс минимальная редкость). Если на полу такого нет (пара как раз уехала в
- * капсулу), подгоняем требование первого заказа под ближайшего кота — доска в этот
- * момент закрыта, а выдача дальше идёт по обычным правилам игры.
+ * Кот на полу, которого понесут клиенту, плюс страховка сцены: первый заказ доски
+ * заранее переводим в «любой кот» (minRarity: common). Коты ходят, и в переноску
+ * нередко заезжает сосед выбранного кота — тогда игра честно пишет «не подходит»,
+ * и этот тост попадает в кадр. Остальные три заказа остаются с породами, так что
+ * доска в кадре выглядит как обычно, а выдача дальше идёт по правилам игры.
  */
 const ORDER_TARGET = async () => {
   const g = window.__game;
-  const { matchesOrder } = await import('/src/game/orders.ts');
   const { isAdult } = await import('/src/game/economy.ts');
   const now = Date.now();
   const byBreed = new Map();
@@ -178,30 +196,26 @@ const ORDER_TARGET = async () => {
   };
   walk(g.app.stage);
   sprites.sort((a, b) => b.w - a.w);
-  for (const s of sprites) {
-    const cat = byBreed.get(s.breed);
-    if (cat && g.state.orders.some((o) => matchesOrder(o, cat))) {
-      return { x: s.x, y: s.y, breed: s.breed, tuned: false };
-    }
-  }
   const first = sprites.find((s) => byBreed.has(s.breed));
   if (!first) return null;
-  g.state.orders[0].req = { breed: byBreed.get(first.breed).breed };
-  return { x: first.x, y: first.y, breed: first.breed, tuned: true };
+  g.state.orders[0].req = { minRarity: 'common' };
+  return { x: first.x, y: first.y, breed: first.breed };
 };
 
 /**
- * В переноску мог заехать не тот кот, на которого целились (коты ходят). Кнопка
- * «Выполнить» появляется только у подходящего заказа, поэтому сверяем корзину с
- * доской и, если никто не подходит, подгоняем требование заказа под этого кота.
- * Возвращает false, если корзина пуста — тогда перетаскивание надо повторить.
+ * Страховка на случай, если в переноску заехал котёнок или кот из другой комнаты:
+ * сверяем корзину с доской и, если никто не подходит, правим требование заказа.
+ * Возвращает false, когда корзина пуста — тогда перетаскивание надо повторить.
  */
 const ENSURE_ORDER = async () => {
   const g = window.__game;
   const { matchesOrder } = await import('/src/game/orders.ts');
   const cat = g.state.cats.find((c) => c.id === g.state.orderBasket);
   if (!cat) return false;
-  if (!g.state.orders.some((o) => matchesOrder(o, cat))) g.state.orders[0].req = { breed: cat.breed };
+  if (!g.state.orders.some((o) => matchesOrder(o, cat))) {
+    g.state.orders[0].req = { breed: cat.breed };
+    g.goRoom(1); // пересборка комнаты — иначе плашка переноски держит «не подходит»
+  }
   return true;
 };
 
@@ -236,7 +250,7 @@ const OVERLAY = () => {
 };
 
 /** Финальный титр: название игры (оформление, ≤30% хронометража). */
-const TITLE_CARD = () => {
+const TITLE_CARD = ({ title, tagline }) => {
   const cur = document.getElementById('__cursor');
   if (cur) cur.style.display = 'none';
   const card = document.createElement('div');
@@ -245,9 +259,10 @@ const TITLE_CARD = () => {
     // палитра игры: кремовый фон COLORS.bg и тёплый тёмный COLORS.ink
     + 'background:radial-gradient(circle at 50% 45%, #fffaf3 0%, #fdf3e7 55%, #f7ddc6 100%);'
     + 'font-family:system-ui,"Segoe UI",sans-serif;';
-  card.innerHTML = '<div style="font-size:7.5vw;font-weight:800;color:#5a4a42;letter-spacing:-1px;'
-    + 'text-shadow:0 3px 0 rgba(255,255,255,.7)">Котолаборатория</div>'
-    + '<div style="font-size:3.1vw;font-weight:600;color:#8a7268">разводи котиков — открывай породы</div>';
+  const size = title.length > 18 ? 5 : 7.5; // длинное en-название иначе не влезает в кадр
+  card.innerHTML = `<div style="font-size:${size}vw;font-weight:800;color:#5a4a42;letter-spacing:-1px;`
+    + `text-shadow:0 3px 0 rgba(255,255,255,.7)">${title}</div>`
+    + `<div style="font-size:3.1vw;font-weight:600;color:#8a7268">${tagline}</div>`;
   document.body.appendChild(card);
   requestAnimationFrame(() => { card.style.opacity = '1'; });
 };
@@ -266,6 +281,10 @@ const run = async () => {
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.log('PAGEERROR:', e.message));
   await page.addInitScript(OVERLAY);
+  // язык UI берётся из localStorage — ставим до загрузки, чтобы сцена сразу строилась на нём
+  await page.addInitScript((l) => {
+    try { localStorage.setItem('catlab:lang', l); } catch { /* приватный режим */ }
+  }, UI_LANG);
 
   // ── хелперы управления «руками игрока»
   const marks = [];
@@ -308,8 +327,8 @@ const run = async () => {
   const CARD_SEX = () => {
     let sex = null;
     const walk = (n) => {
-      if (typeof n.text === 'string' && n.text.startsWith('пол:')) {
-        sex = n.text.includes('самка') ? 'f' : 'm';
+      if (typeof n.text === 'string' && /^(пол|sex):/.test(n.text)) {
+        sex = /самка|female/.test(n.text) ? 'f' : 'm';
       }
       for (const c of n.children || []) walk(c);
     };
@@ -330,14 +349,14 @@ const run = async () => {
       await wait(700);
       const got = await page.evaluate(CARD_SEX);
       if (got === sex) return true;
-      if (got) { await clickText('Закрыть', 350); await wait(500); } // не тот кот — закрываем
+      if (got) { await clickText(TXT.close, 350); await wait(500); } // не тот кот — закрываем
       approach = 450;
     }
     throw new Error(`не удалось открыть карточку кота (${sex})`);
   };
 
-  const drag = async (from, to, ms = 800) => {
-    await moveTo(from.x, from.y, 450);
+  const drag = async (from, to, ms = 800, approach = 450) => {
+    await moveTo(from.x, from.y, approach);
     await wait(120);
     await page.mouse.down();
     const steps = Math.max(8, Math.round(ms / 24));
@@ -358,6 +377,8 @@ const run = async () => {
   await page.waitForSelector('canvas', { timeout: 30000 });
   await page.waitForFunction(() => window.__game?.app, null, { timeout: 30000 });
   await wait(1500);
+  const shown = await page.evaluate(() => document.documentElement.lang);
+  if (shown !== UI_LANG) throw new Error(`язык не применился: ждали ${UI_LANG}, в документе «${shown}»`);
   await page.evaluate(() => window.__game.demo());
   await wait(500);
   await page.evaluate(SEED, BREED_KEYS);
@@ -382,7 +403,7 @@ const run = async () => {
   await openCatCard('f', 500);
   await shot('01-card');
   mark('карточка кошки');
-  await clickText('слот вязки', 400);
+  await clickText(TXT.slot, 400);
   await wait(600); // игра сама уводит в Инкубатор
   mark('мать в слоте');
   await shot('02-parent1');
@@ -392,7 +413,7 @@ const run = async () => {
   await wait(550);
   await openCatCard('m', 450);
   await shot('03-card2');
-  await clickText('слот вязки', 400);
+  await clickText(TXT.slot, 400);
   await wait(650);
   mark('отец в слоте');
   await shot('03-parent2');
@@ -401,7 +422,7 @@ const run = async () => {
   await page.evaluate(() => { window.__game.closeOverlay(); window.__game.goRoom(0); });
   await wait(650);
   await shot('04-incubator');
-  await clickText('Свести', 450);
+  await clickText(TXT.breed, 450);
   await wait(800);
   mark('вязка запущена');
   await shot('05-breeding');
@@ -415,14 +436,14 @@ const run = async () => {
   await wait(1300);
   await shot('06-born');
   mark('малыш родился');
-  await clickText('В питомник', 450);
+  await clickText(TXT.toCattery, 450);
   await wait(600);
   mark('малыш в питомнике');
 
   // 6. Заказ клиента: тащим кота в переноску и выдаём награду
   await page.evaluate(() => { window.__game.closeOverlay(); window.__game.goRoom(1); });
   await wait(600);
-  const carrier = (await page.evaluate(FIND, 'перетащи'))[0] || { x: W * 0.9, y: H * 0.29 };
+  const carrier = (await page.evaluate(FIND, TXT.carrier))[0] || { x: W * 0.9, y: H * 0.29 };
   let inBasket = false;
   for (let tries = 0; tries < 3 && !inBasket; tries++) {
     const wanted = await page.evaluate(ORDER_TARGET);
@@ -431,17 +452,17 @@ const run = async () => {
     await moveTo(wanted.x, wanted.y, tries ? 300 : 450);
     // кот успел уйти, пока ехал курсор — довернём по свежей позиции
     const fresh = (await page.evaluate(FLOOR_CATS)).find((c) => c.breed === wanted.breed);
-    await drag({ x: fresh?.x ?? wanted.x, y: fresh?.y ?? wanted.y }, carrier, 650);
+    await drag({ x: fresh?.x ?? wanted.x, y: fresh?.y ?? wanted.y }, carrier, 650, 130);
     await wait(250);
     inBasket = await page.evaluate(ENSURE_ORDER);
   }
   if (!inBasket) throw new Error('кот не доехал до переноски');
   mark('кот в переноске');
   await shot('07-carrier');
-  await clickText('Заказы клиентов', 450);
+  await clickText(TXT.orders, 450);
   await wait(700);
   await shot('08-orders');
-  await clickText('Выполнить', 450);
+  await clickText(TXT.complete, 450);
   await wait(800);
   await shot('08b-reward');
   mark('заказ выполнен');
@@ -455,7 +476,7 @@ const run = async () => {
   mark('котодекс');
 
   // 7б. Вкладка «Улучшения» — дерево прокачки лаборатории
-  await clickText('Улучшения', 450);
+  await clickText(TXT.upgrades, 450);
   await wait(900);
   await shot('10-upgrades');
   mark('улучшения');
@@ -463,7 +484,7 @@ const run = async () => {
   // 8. Титр: ставим его так, чтобы дубль уложился ровно в 28 секунд
   const left = TITLE_AT * 1000 - (Date.now() - t0);
   if (left > 0) await wait(left); else console.log('! сцены переполнили хронометраж на', -left, 'мс');
-  await page.evaluate(TITLE_CARD);
+  await page.evaluate(TITLE_CARD, { title: TXT.title, tagline: TXT.tagline });
   await wait(2600);
   mark('титр');
   await page.evaluate(() => window.__veil.close());
@@ -485,11 +506,17 @@ const run = async () => {
   // Отчёт blackdetect ffmpeg пишет в stderr, а не в stdout.
   const probe = spawnSync(FFMPEG, ['-i', webm, '-vf', 'blackdetect=d=0.3:pic_th=0.98', '-f', 'null', '-'],
     { encoding: 'utf8' }).stderr || '';
-  const blacks = [...probe.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)].map((m) => +m[2]);
-  const start = blacks.length ? blacks[0] + 0.35 : 0; // +0.35 с — переждать затемнение
-  console.log('\nконец стартовой черноты:', start.toFixed(2), 'с');
-  if (!blacks.length) console.log('! чёрной хлопушки не нашлось — режу с начала записи');
-  const mp4 = join(OUT, 'gameplay-16x9.mp4');
+  const marksBlack = [...probe.matchAll(/black_start:([\d.]+) black_end:([\d.]+)/g)]
+    .map((m) => ({ from: +m[1], to: +m[2] }));
+  const head = marksBlack.length ? marksBlack[0].to + 0.35 : 0; // +0.35 с — переждать затемнение
+  // Дубль длиннее лимита, а отрезать надо с начала: титр обязан остаться в кадре.
+  // Поэтому равняемся на затемнение в конце — оно и есть конец дубля.
+  const tail = marksBlack.length > 1 ? marksBlack[marksBlack.length - 1].from - LIMIT : -1;
+  const start = Math.max(head, tail);
+  console.log('\nсклейка: начало дубля', head.toFixed(2), 'с, отсчёт от финала', tail.toFixed(2),
+    'с → режем с', start.toFixed(2), 'с');
+  if (!marksBlack.length) console.log('! чёрной хлопушки не нашлось — режу с начала записи');
+  const mp4 = join(OUT, `gameplay-16x9-${UI_LANG}.mp4`);
   const video = ['-c:v', 'libx264', '-preset', 'slow', '-crf', '20', '-pix_fmt', 'yuv420p'];
   const args = MUSIC
     ? ['-y', '-v', 'error', '-ss', String(start), '-i', webm, '-i', MUSIC, '-t', String(LIMIT),
