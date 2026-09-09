@@ -326,3 +326,18 @@ export function catSprite(app: Application, cat: Cat, targetH: number): Sprite {
   sp.scale.set((targetH / tex.height) * catSizeFactor(cat)); // самцы и крупные породы по +10%
   return sp;
 }
+
+/**
+ * Выбросить всё, что посчитал сам рендерер: ореолы редкости и процедурных котов
+ * (фолбэк без арта). Их содержимое жило только в видеопамяти — после потери
+ * WebGL-контекста такие текстуры остаются пустыми навсегда, перезалить их не из
+ * чего (в отличие от загруженных файлов, которые Pixi поднимает сам). Зовётся
+ * при восстановлении контекста (см. ui/game.ts): следующий запрос посчитает их
+ * заново.
+ */
+export function dropRenderedTextures(): void {
+  for (const t of glowCache.values()) { try { t.destroy(true); } catch { /* контекст уже потерян */ } }
+  glowCache.clear();
+  for (const t of cache.values()) { try { t.destroy(true); } catch { /* контекст уже потерян */ } }
+  cache.clear();
+}

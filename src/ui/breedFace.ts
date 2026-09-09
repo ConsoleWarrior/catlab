@@ -84,3 +84,12 @@ export function breedFaceTexture(app: Application, breedKey: string): Texture | 
   faceCache.set(breedKey, out);
   return out;
 }
+
+/**
+ * Выбросить готовые мордочки: они нарисованы рендерером в текстуру и после
+ * потери WebGL-контекста пусты (см. dropRenderedTextures в catTextures.ts).
+ */
+export function dropFaceTextures(): void {
+  for (const t of faceCache.values()) { try { t?.destroy(true); } catch { /* контекст уже потерян */ } }
+  faceCache.clear();
+}

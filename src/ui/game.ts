@@ -34,7 +34,9 @@ import { Button, COLORS, fmt, label, setUiBlocked } from './theme.js';
 import {
   catTexture, aiHeldSpriteFor, rarityGlow, GLOW_OUT,
   registerBreedArt, ensureBreedArt, preloadRestBreedArt, setArtArrivedHandler,
+  dropRenderedTextures,
 } from './catTextures.js';
+import { dropFaceTextures } from './breedFace.js';
 import { loadEyeData } from './eyeBlink.js';
 import { initSfx, sfxEvent, sfxMeow, sfxMusic, sfxPause, sfxPurrSync } from './sound.js';
 import { setRoomBg } from './roomArt.js';
@@ -106,12 +108,25 @@ const MAX_ASPECT = IS_TOUCH ? 3.2 : 2;
 // до края, полоса леттербокса выходит в 2-3 физических пикселя — не видно.
 const RELAYOUT_MIN_DIFF = 8; // виртуальных пикселей ширины
 
-// Сколько ждать после снятия паузы, прежде чем подгонять сцену под окно.
-// Показ рекламы и возврат со свёрнутой вкладки дёргают вьюпорт несколько раз
-// подряд (плеер уходит в фуллскрин, адресная строка прячется и возвращается), и
-// каждое такое событие — видимый рывок масштаба. Пережидаем всю серию и
-// пересчитываем один раз; если размер вернулся к прежнему — не делаем ничего.
-const RESIZE_SETTLE_MS = 300;
+// Когда после снятия паузы подгонять сцену под окно. Показ рекламы и возврат со
+// свёрнутой вкладки дёргают вьюпорт несколько раз подряд (плеер уходит в
+// фуллскрин, адресная строка прячется и возвращается), и каждое такое событие —
+// видимый рывок масштаба. Пережидаем серию и пересчитываем один раз; если размер
+// вернулся к прежнему — не делаем ничего.
+// Сроков несколько: Android после возврата из фона и поворота экрана отдаёт
+// окончательные размеры далеко не сразу, и один-единственный пересчёт легко
+// приходится на промежуточное значение.
+const RESIZE_CATCHUP_MS = [300, 800, 1600];
+
+// Причины паузы, на время которых игру физически не видно: ролик поверх экрана,
+// окно площадки, свёрнутая вкладка. Только они замораживают подгонку под окно.
+// 'blur' сюда НЕ входит: он снимается по focus или касанию сцены, а во фрейме
+// площадки фокус может не вернуться вовсе — заморозка висела бы до первого тапа,
+// и после поворота экрана игрок увидел бы сцену, посчитанную под старый размер.
+const FREEZE_PAUSE_REASONS = ['ad', 'platform', 'hidden'];
+
+// Как часто сторож сверяет размер канваса с окном (см. checkSize).
+const SIZE_WATCH_S = 0.5;
 
 // Последний срок, когда лоадер платформы снимается в любом случае (см. start()).
 // Больше обычного старта с запасом: 14.6 МБ ассетов на медленной мобильной сети
@@ -260,7 +275,9 @@ export class Game implements UiContext {
   private resizePending = false; // ресайз пришёл при открытом поле ввода (см. resize)
   // Ресайз заморожен на время паузы (реклама, свёрнутая вкладка) — см. setPause.
   private resizeFrozen = false;
-  private unfreezeTimer: ReturnType<typeof setTimeout> | null = null;
+  private freezeWanted = false; // чего требуют причины паузы (заморозка снимается не сразу)
+  private unfreezeTimers: ReturnType<typeof setTimeout>[] = [];
+  private sizeWatch = 0;        // накопитель для сторожа размера (см. checkSize)
   private wasStarving = false;   // для тоста «корм закончился» ровно при переходе к голоду
   // Отчёт «С возвращением» посчитан при загрузке сейва — но сцены тогда ещё нет,
   // поэтому окно показывается в конце start() (см. applyOffline).
@@ -584,6 +601,19 @@ export class Game implements UiContext {
     window.visualViewport?.addEventListener('resize', onResize);
     window.visualViewport?.addEventListener('scroll', onResize);
 
+    // Слабые устройства при сворачивании игры теряют WebGL-контекст. Сам по себе
+    // он поднимается, и картинки Pixi заливает в видеопамять заново из их
+    // источников — а вот текст туда попадает иначе: он рисуется во временный
+    // canvas, который сразу после загрузки возвращается в пул. Перезаливать
+    // нечего, и после восстановления пропадают ВСЕ надписи разом — плашки на
+    // месте, текста нет. То же и с текстурами, которые считал сам рендерер
+    // (ореолы редкости, мордочки пород). Поэтому восстанавливаемся сами.
+    this.app.canvas.addEventListener('webglcontextrestored', () => {
+      // это же событие слушает сам Pixi (подписался раньше нас) — даём ему
+      // поднять контекст и пересобираем сцену уже следующим тиком
+      setTimeout(() => this.recoverFromContextLoss(), 0);
+    });
+
     if (DEVTOOLS) {
       (window as unknown as { __game: unknown }).__game = {
         app: this.app, state: this.state,
@@ -600,8 +630,10 @@ export class Game implements UiContext {
         buyPack: (id: string) => buyPack(id).then((r) => { this.commit(); return r; }),
         openDev: () => this.openDevMenu(),
         fps: () => this.devFps?.toggle(), // панель FPS из консоли (кнопка 📊 в топбаре)
-        // DEV: пауза как от рекламы — проверка, что сцена не гоняется за вьюпортом
-        pause: (on: boolean) => this.setPause('dev', on),
+        // DEV: пауза как от рекламы («ad»), свёрнутой вкладки («hidden») или
+        // потери фокуса («blur») — проверка, что сцена не гоняется за вьюпортом
+        // под роликом, но и не остаётся под старый экран после возврата
+        pause: (on: boolean, reason = 'ad') => this.setPause(reason, on),
         // окно «С возвращением» без реальной отлучки (по умолчанию — обрезка потолком)
         offlineReport: (r: Partial<OfflineReport> = {}) => {
           this.pendingOffline = {
@@ -980,12 +1012,15 @@ export class Game implements UiContext {
   private setPause(reason: string, on: boolean): void {
     const was = this.pauseReasons.size > 0;
     if (on) this.pauseReasons.add(reason); else this.pauseReasons.delete(reason);
+    // Заморозка ресайза живёт на своём наборе причин, поэтому считается ДО
+    // раннего выхода ниже: смена причины ('ad' ушла, 'blur' осталась) агрегат
+    // паузы не меняет, а вот замораживать после неё уже нечего.
+    this.updateResizeFreeze();
     const now = this.pauseReasons.size > 0;
     if (now === was) return;
     this.adPaused = now;  // update() замирает: доход, таймеры комнат, анимация
     sfxPause(now);        // мяуканье, хор мурлыканья и фоновая музыка
     setUiBlocked(now);    // и кнопки перестают принимать нажатия (п. 4.7)
-    this.freezeResize(now); // и сцена не гоняется за вьюпортом под рекламой
     // GameplayAPI платформы (п. 1.19.3) — ровно здесь и только на смене
     // состояния. Раньше start/stop звались ещё и из обработчика вкладки, и пара
     // «ушёл со вкладки во время рекламы — вернулся» давала платформе start при
@@ -1426,13 +1461,56 @@ export class Game implements UiContext {
    * не сделает ничего — игрок не увидит ни рывка масштаба, ни пересборки.
    */
   private freezeResize(on: boolean): void {
-    if (this.unfreezeTimer) { clearTimeout(this.unfreezeTimer); this.unfreezeTimer = null; }
+    for (const t of this.unfreezeTimers) clearTimeout(t);
+    this.unfreezeTimers = [];
     if (on) { this.resizeFrozen = true; return; }
-    this.unfreezeTimer = setTimeout(() => {
-      this.unfreezeTimer = null;
+    // Не один пересчёт, а серия догонов: первый снимает заморозку, остальные
+    // подхватывают размеры, которые браузер отдал позже (см. RESIZE_CATCHUP_MS).
+    this.unfreezeTimers = RESIZE_CATCHUP_MS.map((ms) => setTimeout(() => {
       this.resizeFrozen = false;
       this.resize();
-    }, RESIZE_SETTLE_MS);
+    }, ms));
+  }
+
+  /**
+   * Пересобрать всё, что не пережило потерю WebGL-контекста (см. подписку в
+   * boot). Порядок важен: сначала выбрасываем посчитанные текстуры, потом
+   * собираем сцену заново — иначе новые спрайты и надписи разберут по кэшам те
+   * же пустые текстуры. Открытую панель пересборка не покрывает, поэтому её
+   * закрываем (без обычной рекламы «на закрытие» — игрок ничего не закрывал).
+   */
+  private recoverFromContextLoss(): void {
+    this.overlayAdOnClose = false;
+    this.closeOverlay();
+    dropRenderedTextures();
+    dropFaceTextures();
+    this.layout();
+    this.fitRoot();
+  }
+
+  /** Заморозку держат только «экранные» причины паузы, см. FREEZE_PAUSE_REASONS. */
+  private updateResizeFreeze(): void {
+    const want = FREEZE_PAUSE_REASONS.some((r) => this.pauseReasons.has(r));
+    if (want === this.freezeWanted) return;
+    this.freezeWanted = want;
+    this.freezeResize(want);
+  }
+
+  /**
+   * Сторож размера: канвас обязан совпадать с реально видимой областью, но
+   * событие об изменении можно и не получить — Android после поворота экрана и
+   * возврата из фона их регулярно проглатывает, и сцена остаётся посчитанной под
+   * прежний экран (обрезанный низ, нижняя навигация за краем). Раз в полсекунды
+   * сверяем сами и чиним. Под замороженным ресайзом (реклама) resize() сам
+   * выйдет, ничего не сделав.
+   */
+  private checkSize(): void {
+    const vv = window.visualViewport;
+    const w = Math.round(vv?.width ?? window.innerWidth);
+    const h = Math.round(vv?.height ?? window.innerHeight);
+    if (Math.abs(this.app.screen.width - w) > 2 || Math.abs(this.app.screen.height - h) > 2) {
+      this.resize();
+    }
   }
 
   /** Подгоняем рендерер под реально видимую область (см. onResize выше). */
@@ -2076,6 +2154,12 @@ export class Game implements UiContext {
   // --- цикл ---
 
   private update(dt: number): void {
+    // Сторож размера — до проверки паузы: канвас обязан совпадать с окном и
+    // когда игра стоит (иначе после возврата из фона сцена так и останется под
+    // старый экран до первого действия игрока). См. checkSize.
+    this.sizeWatch += dt;
+    if (this.sizeWatch >= SIZE_WATCH_S) { this.sizeWatch = 0; this.checkSize(); }
+
     // на время рекламы игра стоит: ни дохода, ни таймеров комнат, ни анимации
     // (требование площадки, п. 4.7 — см. setPause)
     if (this.adPaused) return;

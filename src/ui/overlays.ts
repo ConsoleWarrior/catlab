@@ -2010,8 +2010,13 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
     // «???»). Плашка непрозрачная и рисуется поверх веток — конец провода уходит
     // под неё, поэтому длинные названия не спорят с чертежом. В вертикальной
     // раскладке она под медальоном, в горизонтальной — справа от него.
+    const hasSub = p.isRoot && !!cat.name?.trim();
     const name = hidden ? '???'
       : p.isRoot ? (cat.name?.trim() || breedName(p.node.breed)) : breedName(p.node.breed);
+    // Табличка с породой красится в цвет её тира (как ринг медальона) — кличка
+    // кота (когда она есть отдельной строкой над породой) остаётся чернильной,
+    // это имя, а не порода.
+    const capColor = hidden ? COLORS.inkSoft : hasSub ? COLORS.ink : TIER_COLOR[tier];
     // Длинные породы («Домашняя короткошёрстная») уводило в три строки с разрывом
     // слова, и таблички соседей смыкались — поэтому кегль подбираем под две строки.
     const capW = Math.max(52, capWOf(p));
@@ -2019,12 +2024,11 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
       text: name,
       style: {
         fontFamily: FONT, fontSize: size, fontWeight: p.isRoot ? '800' : '700',
-        fill: hidden ? COLORS.inkSoft : COLORS.ink, wordWrap: true, breakWords: true,
+        fill: capColor, wordWrap: true, breakWords: true,
         wordWrapWidth: capW, lineHeight: size + 1.5, align: capSide === 'right' ? 'left' : 'center',
       },
     });
     const subSize = capSide === 'right' ? 9.5 : 10;
-    const hasSub = p.isRoot && !!cat.name?.trim();
     const capFits = (txt: Text): boolean =>
       txt.height <= (txt.style.lineHeight as number) * 2 + 1
       && txt.height + (hasSub ? subSize + 4 : 0) <= capMaxH;
@@ -2036,7 +2040,7 @@ export function buildPedigreePanel(ctx: UiContext, cat: Cat, close: () => void):
       cap = mkCap(size);
     }
     // у кота с кличкой порода уходит второй строкой — иначе её негде прочитать
-    const sub = hasSub ? label(breedName(p.node.breed), subSize, COLORS.inkSoft, '700') : null;
+    const sub = hasSub ? label(breedName(p.node.breed), subSize, TIER_COLOR[tier], '700') : null;
     const textH = cap.height + (sub ? sub.height + 2 : 0);
     const plate = new Graphics();
     if (capSide === 'below') {
